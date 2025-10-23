@@ -1,0 +1,1234 @@
+# services/optimization_service.py - REFACTORIZADO Y ROBUSTO
+import warnings
+warnings.filterwarnings('ignore')
+
+import pandas as pd
+import numpy as np
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+from sklearn.metrics import mean_squared_error
+from sklearn.preprocessing import StandardScaler
+from scipy import stats
+from itertools import product
+import gc
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import multiprocessing as mp
+from typing import List, Dict, Optional, Tuple, Any
+
+class OptimizationService:
+    """
+    Servicio de optimización de parámetros SARIMAX
+    
+    Funcionalidades:
+    - Evaluación exhaustiva de combinaciones de parámetros
+    - Soporte para múltiples transformaciones de datos
+    - Procesamiento paralelo para eficiencia
+    - Integración con variables exógenas climáticas
+    - Validación consistente con PredictionService
+    """
+    
+    # Transformaciones disponibles para evaluar
+    AVAILABLE_TRANSFORMATIONS = ['original', 'log', 'boxcox', 'standard', 'sqrt']
+    
+    # Máximo de modelos a retornar
+    MAX_TOP_MODELS = 50
+    
+    # Variables exógenas por regional
+    REGIONAL_EXOG_VARS = {
+        'SAIDI_O': {
+            'temp_max': 'Temperatura maxima',
+            'humedad_avg': 'Humedad relativa',
+            'precip_total': 'Precipitacion total'
+        },
+        'SAIDI_C': {
+            'temp_max': 'Temperatura maxima',
+            'humedad_avg': 'Humedad relativa',
+            'precip_total': 'Precipitacion total'
+        },
+        'SAIDI_A': {
+            'temp_max': 'Temperatura maxima',
+            'humedad_avg': 'Humedad relativa',
+            'precip_total': 'Precipitacion total'
+        },
+        'SAIDI_P': {
+            'temp_max': 'Temperatura maxima',
+            'humedad_avg': 'Humedad relativa',
+            'precip_total': 'Precipitacion total'
+        },
+        'SAIDI_T': {
+            'temp_max': 'Temperatura maxima',
+            'humedad_avg': 'Humedad relativa',
+            'precip_total': 'Precipitacion total'
+        },
+    }
+    
+    def __init__(self):
+        """Inicializar servicio de optimización"""
+        # Parámetros por defecto
+        self.default_order = (3, 0, 3)
+        self.default_seasonal_order = (3, 1, 3, 12)
+        
+        # Almacenamiento de resultados
+        self.all_models = []  # Lista simple en lugar de heap
+        self.best_by_transformation = {}  # Mejor modelo por cada transformación
+        
+        # Control de progreso
+        self.total_iterations = 0
+        self.current_iteration = 0
+        
+        # Mejores métricas globales
+        self.best_precision = 0.0
+        self.best_rmse = float('inf')
+        
+        # Transformación y escalado
+        self.scaler = None
+        self.exog_scaler = None
+        self.transformation_params = {}
+        
+        # Estadísticas de transformaciones
+        self.transformation_stats = {}
+        
+        # DEBUG: Contador para verificar modelos procesados
+        self._debug_models_evaluated = 0
+        self._debug_models_added = 0
+    
+    def run_optimization(self, 
+                        file_path: Optional[str] = None,
+                        df_prepared: Optional[pd.DataFrame] = None,
+                        regional_code: Optional[str] = None,
+                        climate_data: Optional[pd.DataFrame] = None,
+                        progress_callback = None,
+                        log_callback = None,
+                        iteration_callback = None,
+                        use_parallel: bool = True,
+                        max_workers: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Ejecutar optimización de parámetros SARIMAX
+        
+        Args:
+            file_path: Ruta del archivo Excel SAIDI (opcional)
+            df_prepared: DataFrame SAIDI preparado (opcional)
+            regional_code: Código de la regional
+            climate_data: DataFrame con datos climáticos mensuales
+            progress_callback: Función callback para actualizar progreso
+            log_callback: Función callback para logging en UI
+            iteration_callback: Función callback para actualizar iteración actual
+            use_parallel: Usar procesamiento paralelo
+            max_workers: Número de workers paralelos (None = automático)
+        
+        Returns:
+            Diccionario con resultados de optimización
+        """
+        try:
+            # Reiniciar estado
+            self._reset_state()
+            
+            # Logging inicial
+            if log_callback:
+                log_callback("=" * 80)
+                log_callback("OPTIMIZACION DE PARAMETROS SARIMAX")
+                log_callback(f"Regional: {regional_code or 'No especificada'}")
+                log_callback(f"CPU Cores disponibles: {mp.cpu_count()}")
+                log_callback("=" * 80)
+            
+            print(f"[DEBUG_OPT] Iniciando optimizacion para regional: {regional_code}")
+            
+            if progress_callback:
+                progress_callback(5, "Cargando datos SAIDI...")
+            
+            # Paso 1: Cargar y validar datos SAIDI
+            df, col_saidi, historico = self._load_and_validate_data(
+                file_path, df_prepared, log_callback
+            )
+            
+            print(f"[DEBUG_OPT] Datos SAIDI cargados: {len(historico)} observaciones")
+            print(f"[DEBUG_OPT] Periodo: {historico.index[0]} a {historico.index[-1]}")
+            
+            if log_callback:
+                log_callback(f"Datos historicos: {len(historico)} observaciones")
+                log_callback(f"Periodo: {historico.index[0].strftime('%Y-%m')} a {historico.index[-1].strftime('%Y-%m')}")
+            
+            if progress_callback:
+                progress_callback(10, "Preparando variables exogenas...")
+            
+            # Paso 2: Preparar variables exógenas (si disponibles)
+            exog_df, exog_info = self._prepare_exogenous_variables(
+                climate_data, df, regional_code, log_callback
+            )
+            
+            if exog_df is not None:
+                print(f"[DEBUG_OPT] Variables exogenas preparadas: {len(exog_df.columns)} variables")
+                if log_callback:
+                    log_callback(f"Variables exogenas disponibles: {len(exog_df.columns)}")
+            else:
+                print("[DEBUG_OPT] Sin variables exogenas")
+                if log_callback:
+                    log_callback("Optimizacion sin variables exogenas")
+            
+            if progress_callback:
+                progress_callback(15, "Configurando espacio de busqueda...")
+            
+            # Paso 3: Configurar rangos de parámetros
+            param_combinations = self._configure_parameter_space(log_callback)
+            
+            # Calcular total de evaluaciones
+            self.total_iterations = len(param_combinations) * len(self.AVAILABLE_TRANSFORMATIONS)
+            
+            print(f"[DEBUG_OPT] Combinaciones de parametros: {len(param_combinations)}")
+            print(f"[DEBUG_OPT] Transformaciones: {len(self.AVAILABLE_TRANSFORMATIONS)}")
+            print(f"[DEBUG_OPT] Total evaluaciones: {self.total_iterations}")
+            
+            if log_callback:
+                log_callback("=" * 80)
+                log_callback(f"Combinaciones de parametros: {len(param_combinations)}")
+                log_callback(f"Transformaciones: {len(self.AVAILABLE_TRANSFORMATIONS)}")
+                log_callback(f"Total evaluaciones: {self.total_iterations}")
+                log_callback(f"Metodo: {'Paralelo' if use_parallel else 'Secuencial'}")
+                log_callback("Validacion: Consistente con PredictionService (20-30% test)")
+                log_callback("=" * 80)
+            
+            if progress_callback:
+                progress_callback(20, f"Iniciando evaluacion de {self.total_iterations} modelos")
+            
+            # Paso 4: Ejecutar evaluación (paralela o secuencial)
+            if use_parallel and len(param_combinations) > 50:
+                print("[DEBUG_OPT] Usando procesamiento PARALELO")
+                self._run_parallel_optimization(
+                    historico[col_saidi], param_combinations, exog_df,
+                    progress_callback, iteration_callback, log_callback, max_workers
+                )
+            else:
+                print("[DEBUG_OPT] Usando procesamiento SECUENCIAL")
+                self._run_sequential_optimization(
+                    historico[col_saidi], param_combinations, exog_df,
+                    progress_callback, iteration_callback, log_callback
+                )
+            
+            print(f"[DEBUG_OPT] Evaluacion completada: {self._debug_models_evaluated} modelos evaluados")
+            print(f"[DEBUG_OPT] Modelos agregados: {self._debug_models_added}")
+            
+            if progress_callback:
+                progress_callback(90, "Seleccionando mejores modelos...")
+            
+            # Paso 5: Seleccionar y clasificar mejores modelos
+            top_models, quality_level, quality_counts = self._select_best_models()
+            
+            print(f"[DEBUG_OPT] Mejores modelos seleccionados: {len(top_models)}")
+            print(f"[DEBUG_OPT] Nivel de calidad: {quality_level}")
+            
+            if log_callback:
+                log_callback("\n" + "=" * 80)
+                log_callback(f"CALIDAD DE MODELOS ENCONTRADOS: {quality_level}")
+                log_callback("=" * 80)
+                log_callback(f"Excelentes (>=60%): {quality_counts['excellent']}")
+                log_callback(f"Buenos (40-59%): {quality_counts['good']}")
+                log_callback(f"Aceptables (20-39%): {quality_counts['acceptable']}")
+                log_callback(f"Limitados (<20%): {quality_counts['poor']}")
+                
+                if quality_counts['excellent'] == 0 and quality_counts['good'] == 0:
+                    log_callback("\nADVERTENCIA: Los datos son muy dificiles de predecir")
+                    log_callback("Recomendacion: Revisar calidad de datos historicos")
+            
+            if progress_callback:
+                progress_callback(100, "Optimizacion completada")
+            
+            # Paso 6: Generar resumen final
+            if log_callback:
+                self._log_final_summary(log_callback, top_models, exog_info)
+            
+            # Preparar resultado
+            best_model = top_models[0] if top_models else None
+            
+            result = {
+                'success': True,
+                'top_models': top_models[:20],  # Limitar a top 20
+                'total_evaluated': self.current_iteration,
+                'best_model': best_model,
+                'total_combinations': self.total_iterations,
+                'transformation': best_model['transformation'] if best_model else None,
+                'regional_code': regional_code,
+                'transformation_stats': self.transformation_stats,
+                'all_transformations_tested': self.AVAILABLE_TRANSFORMATIONS,
+                'with_exogenous': exog_df is not None,
+                'exogenous_vars': exog_info,
+                'validation_method': 'aligned_with_prediction',
+                'optimization_method': 'exhaustive_search',
+                'quality_level': quality_level,
+                'quality_counts': quality_counts
+            }
+            
+            print("[DEBUG_OPT] Optimizacion finalizada exitosamente")
+            
+            return result
+            
+        except Exception as e:
+            error_msg = f"Error durante optimizacion: {str(e)}"
+            print(f"[DEBUG_OPT_ERROR] {error_msg}")
+            if log_callback:
+                log_callback(f"ERROR: {error_msg}")
+            raise Exception(error_msg)
+    
+    def _reset_state(self):
+        """Reiniciar estado interno del servicio"""
+        print("[DEBUG_OPT] Reiniciando estado del servicio")
+        
+        self.all_models = []
+        self.best_by_transformation = {}
+        self.current_iteration = 0
+        self.best_precision = 0.0
+        self.best_rmse = float('inf')
+        self.transformation_params = {}
+        self.scaler = None
+        self.exog_scaler = None
+        
+        # Reiniciar estadísticas de transformaciones
+        self.transformation_stats = {
+            t: {
+                'count': 0,
+                'best_precision': 0.0,
+                'best_stability': 0.0,
+                'best_model': None
+            } 
+            for t in self.AVAILABLE_TRANSFORMATIONS
+        }
+        
+        # DEBUG
+        self._debug_models_evaluated = 0
+        self._debug_models_added = 0
+        
+        # Forzar recolección de basura
+        gc.collect()
+    
+    def _load_and_validate_data(self, 
+                                file_path: Optional[str],
+                                df_prepared: Optional[pd.DataFrame],
+                                log_callback) -> Tuple[pd.DataFrame, str, pd.DataFrame]:
+        """
+        Cargar y validar datos SAIDI
+        
+        Returns:
+            Tuple con (df_completo, nombre_columna_saidi, df_historico)
+        """
+        print("[DEBUG_OPT] Cargando datos SAIDI")
+        
+        # Cargar DataFrame
+        if df_prepared is not None:
+            df = df_prepared.copy()
+            if log_callback:
+                log_callback("Usando datos SAIDI preparados del modelo")
+        elif file_path is not None:
+            df = pd.read_excel(file_path, sheet_name="Hoja1")
+            if log_callback:
+                log_callback("Leyendo Excel SAIDI")
+        else:
+            raise ValueError("Debe proporcionar file_path o df_prepared")
+        
+        # Asegurar índice datetime
+        if not isinstance(df.index, pd.DatetimeIndex):
+            if "Fecha" in df.columns:
+                df["Fecha"] = pd.to_datetime(df["Fecha"])
+                df.set_index("Fecha", inplace=True)
+            else:
+                df.iloc[:, 0] = pd.to_datetime(df.iloc[:, 0])
+                df.set_index(df.columns[0], inplace=True)
+        
+        # Buscar columna SAIDI
+        col_saidi = None
+        if "SAIDI" in df.columns:
+            col_saidi = "SAIDI"
+        elif "SAIDI Historico" in df.columns:
+            col_saidi = "SAIDI Historico"
+        
+        if col_saidi is None:
+            raise ValueError("No se encontro la columna SAIDI en los datos")
+        
+        # Filtrar datos históricos (no nulos)
+        historico = df[df[col_saidi].notna()].copy()
+        
+        if len(historico) < 12:
+            raise ValueError(f"Datos insuficientes: solo {len(historico)} observaciones (minimo 12)")
+        
+        print(f"[DEBUG_OPT] Datos validados: {len(historico)} obs, columna: {col_saidi}")
+        
+        return df, col_saidi, historico
+    
+    def _configure_parameter_space(self, log_callback) -> List[Tuple]:
+        """
+        Configurar espacio de búsqueda de parámetros
+        
+        Returns:
+            Lista de tuplas (p, d, q, P, D, Q, s)
+        """
+        print("[DEBUG_OPT] Configurando espacio de busqueda")
+        
+        # Rangos de parámetros
+        p_range = range(0, 7)  # AR
+        d_range = range(0, 3)  # Diferenciación
+        q_range = range(0, 7)  # MA
+        P_range = range(0, 6)  # AR estacional
+        D_range = range(0, 3)  # Diferenciación estacional
+        Q_range = range(0, 6)  # MA estacional
+        s_range = [12]         # Estacionalidad mensual
+        
+        # Generar todas las combinaciones
+        all_combinations = list(product(
+            p_range, d_range, q_range,
+            P_range, D_range, Q_range,
+            s_range
+        ))
+        
+        print(f"[DEBUG_OPT] Combinaciones iniciales: {len(all_combinations)}")
+        
+        # Filtrar combinaciones inválidas
+        valid_combinations = self._filter_invalid_combinations(all_combinations)
+        
+        print(f"[DEBUG_OPT] Combinaciones validas: {len(valid_combinations)}")
+        
+        if log_callback:
+            log_callback(f"Combinaciones iniciales: {len(all_combinations)}")
+            log_callback(f"Combinaciones validas: {len(valid_combinations)}")
+        
+        return valid_combinations
+    
+    def _filter_invalid_combinations(self, combinations: List[Tuple]) -> List[Tuple]:
+        """
+        Filtrar combinaciones de parámetros inválidas
+        
+        Criterios:
+        - Evitar modelos triviales (todos los parámetros en 0)
+        - Evitar modelos extremadamente complejos
+        - Debe tener al menos un componente AR o MA
+        """
+        valid = []
+        
+        for p, d, q, P, D, Q, s in combinations:
+            # Calcular complejidad total
+            total_params = p + d + q + P + D + Q
+            
+            # Rechazar si es trivial o demasiado complejo
+            if total_params == 0 or total_params > 14:
+                continue
+            
+            # Debe tener al menos un componente AR o MA
+            if p == 0 and q == 0 and P == 0 and Q == 0:
+                continue
+            
+            valid.append((p, d, q, P, D, Q, s))
+        
+        return valid
+    
+    def _run_parallel_optimization(self,
+                                   serie_original: pd.Series,
+                                   param_combinations: List[Tuple],
+                                   exog_df: Optional[pd.DataFrame],
+                                   progress_callback,
+                                   iteration_callback,
+                                   log_callback,
+                                   max_workers: Optional[int]):
+        """Ejecutar optimización en paralelo usando ProcessPoolExecutor"""
+        
+        if max_workers is None:
+            max_workers = max(1, mp.cpu_count() - 1)
+        
+        print(f"[DEBUG_OPT] Iniciando procesamiento paralelo con {max_workers} workers")
+        
+        if log_callback:
+            log_callback(f"Procesamiento paralelo con {max_workers} workers")
+        
+        # Preparar tareas
+        tasks = []
+        for params in param_combinations:
+            p, d, q, P, D, Q, s = params
+            order = (p, d, q)
+            seasonal_order = (P, D, Q, s)
+            
+            for transformation in self.AVAILABLE_TRANSFORMATIONS:
+                tasks.append((serie_original, order, seasonal_order, transformation, exog_df))
+        
+        total_tasks = len(tasks)
+        batch_size = 100  # Procesar en lotes
+        
+        print(f"[DEBUG_OPT] Total tareas: {total_tasks}, batch_size: {batch_size}")
+        
+        # Procesar en lotes
+        with ProcessPoolExecutor(max_workers=max_workers) as executor:
+            for batch_start in range(0, total_tasks, batch_size):
+                batch_end = min(batch_start + batch_size, total_tasks)
+                batch_tasks = tasks[batch_start:batch_end]
+                
+                # Enviar lote al executor
+                futures = {
+                    executor.submit(_evaluate_model_worker, task): task 
+                    for task in batch_tasks
+                }
+                
+                # Procesar resultados a medida que se completan
+                for future in as_completed(futures):
+                    self.current_iteration += 1
+                    self._debug_models_evaluated += 1
+                    
+                    try:
+                        metrics = future.result(timeout=45)
+                        
+                        if metrics and self._is_valid_model(metrics):
+                            task = futures[future]
+                            transformation = task[3]
+                            order = task[1]
+                            seasonal_order = task[2]
+                            
+                            # Agregar métricas adicionales
+                            metrics['transformation'] = transformation
+                            metrics['order'] = order
+                            metrics['seasonal_order'] = seasonal_order
+                            metrics['with_exogenous'] = exog_df is not None
+                            
+                            # Almacenar modelo
+                            self._add_model(metrics)
+                            
+                            # Actualizar estadísticas
+                            self._update_transformation_stats(transformation, metrics)
+                            
+                            # Log de progreso si es relevante
+                            if metrics['precision_final'] > 60:
+                                print(f"[DEBUG_OPT] Modelo relevante encontrado: "
+                                      f"{transformation} - Precision: {metrics['precision_final']:.1f}%")
+                        
+                    except Exception as e:
+                        # Silenciar timeouts y errores menores
+                        if "timeout" not in str(e).lower():
+                            print(f"[DEBUG_OPT_WARN] Error en evaluacion: {type(e).__name__}")
+                    
+                    # Actualizar progreso
+                    if progress_callback:
+                        progress_pct = int((self.current_iteration / total_tasks) * 70 + 20)
+                        progress_callback(progress_pct, 
+                                        f"Evaluando {self.current_iteration}/{total_tasks}")
+                    
+                    # Actualizar iteración actual
+                    if iteration_callback and self.current_iteration % 100 == 0:
+                        self._update_iteration_status(iteration_callback)
+                
+                # Limpiar memoria después de cada lote
+                gc.collect()
+        
+        print(f"[DEBUG_OPT] Procesamiento paralelo completado")
+    
+    def _run_sequential_optimization(self,
+                                    serie_original: pd.Series,
+                                    param_combinations: List[Tuple],
+                                    exog_df: Optional[pd.DataFrame],
+                                    progress_callback,
+                                    iteration_callback,
+                                    log_callback):
+        """Ejecutar optimización secuencialmente (un modelo a la vez)"""
+        
+        print("[DEBUG_OPT] Iniciando procesamiento secuencial")
+        
+        total_tasks = len(param_combinations) * len(self.AVAILABLE_TRANSFORMATIONS)
+        
+        for params in param_combinations:
+            p, d, q, P, D, Q, s = params
+            order = (p, d, q)
+            seasonal_order = (P, D, Q, s)
+            
+            for transformation in self.AVAILABLE_TRANSFORMATIONS:
+                self.current_iteration += 1
+                self._debug_models_evaluated += 1
+                
+                # Evaluar modelo
+                metrics = self._evaluate_single_model(
+                    serie_original, order, seasonal_order, transformation, exog_df
+                )
+                
+                # Validar y almacenar
+                if metrics and self._is_valid_model(metrics):
+                    metrics['transformation'] = transformation
+                    metrics['order'] = order
+                    metrics['seasonal_order'] = seasonal_order
+                    metrics['with_exogenous'] = exog_df is not None
+                    
+                    self._add_model(metrics)
+                    self._update_transformation_stats(transformation, metrics)
+                    
+                    # Log relevante
+                    if metrics['precision_final'] > 60:
+                        print(f"[DEBUG_OPT] Modelo relevante: {transformation} - "
+                              f"Precision: {metrics['precision_final']:.1f}%")
+                
+                # Actualizar progreso
+                if progress_callback:
+                    progress_pct = int((self.current_iteration / total_tasks) * 70 + 20)
+                    progress_callback(progress_pct, 
+                                    f"Evaluando {self.current_iteration}/{total_tasks}")
+                
+                if iteration_callback and self.current_iteration % 100 == 0:
+                    self._update_iteration_status(iteration_callback)
+                
+                # Limpieza periódica
+                if self.current_iteration % 200 == 0:
+                    gc.collect()
+        
+        print("[DEBUG_OPT] Procesamiento secuencial completado")
+    
+    def _evaluate_single_model(self,
+                            serie_original: pd.Series,
+                            order: Tuple[int, int, int],
+                            seasonal_order: Tuple[int, int, int, int],
+                            transformation: str,
+                            exog_df: Optional[pd.DataFrame]) -> Optional[Dict[str, Any]]:
+        try:
+            n_obs = len(serie_original)
+            if n_obs >= 60:
+                pct_validacion = 0.30
+            elif n_obs >= 36:
+                pct_validacion = 0.25
+            else:
+                pct_validacion = 0.20
+            
+            n_test = max(6, int(n_obs * pct_validacion))
+            
+            train_original = serie_original[:-n_test]
+            test_original = serie_original[-n_test:]
+            
+            if len(train_original) < 12:
+                return None
+            
+            # Aplicar transformación
+            self.scaler = None
+            self.transformation_params = {}
+            
+            train_transformed, _ = self._apply_transformation(
+                train_original.values, transformation
+            )
+            train_transformed_series = pd.Series(train_transformed, index=train_original.index)
+            
+            # Preparar exógenas
+            exog_train = None
+            exog_test = None
+            if exog_df is not None:
+                exog_train = exog_df.loc[train_original.index]
+                exog_test = exog_df.loc[test_original.index]
+            
+            # Entrenar modelo
+            model = SARIMAX(
+                train_transformed_series,
+                exog=exog_train,
+                order=order,
+                seasonal_order=seasonal_order,
+                enforce_stationarity=True,
+                enforce_invertibility=True
+            )
+            results = model.fit(disp=False, maxiter=50)
+            
+            # Predecir
+            pred = results.get_forecast(steps=n_test, exog=exog_test)
+            pred_mean_transformed = pred.predicted_mean
+            
+            # Revertir transformación
+            pred_mean_original = self._inverse_transformation(
+                pred_mean_transformed.values, transformation
+            )
+            
+            # ============================================================
+            #  CORRECCIÓN CRÍTICA: Convertir a numpy arrays ANTES
+            # ============================================================
+            test_values = test_original.values  # Series → numpy array
+            pred_values = pred_mean_original     # Ya es numpy array
+            
+            # Ahora TODAS las operaciones usan arrays numpy
+            rmse = np.sqrt(mean_squared_error(test_values, pred_values))
+            mae = np.mean(np.abs(test_values - pred_values))
+            
+            epsilon = 1e-8
+            #  Ambos son arrays → operación correcta elemento por elemento
+            mape = np.mean(np.abs((test_values - pred_values) / 
+                                (test_values + epsilon))) * 100
+            
+            ss_res = np.sum((test_values - pred_values) ** 2)
+            ss_tot = np.sum((test_values - np.mean(test_values)) ** 2)
+            r2_score = 1 - (ss_res / (ss_tot + epsilon))
+            
+            # Precisión final
+            precision_final = max(0.0, min(100.0, (1 - mape/100) * 100))
+            
+            # Validación adicional
+            if np.isnan(precision_final) or np.isinf(precision_final):
+                return None
+            
+            # Penalización por complejidad
+            complexity_penalty = sum(order) + sum(seasonal_order[:3])
+            composite_score = rmse + (complexity_penalty * 0.05)
+            
+            # Estabilidad
+            stability_score = self._calculate_stability_numpy(
+                test_values, pred_values, precision_final, mape
+            )
+            
+            return {
+                'rmse': rmse,
+                'mae': mae,
+                'mape': mape,
+                'r2_score': r2_score,
+                'precision_final': precision_final,
+                'aic': results.aic,
+                'bic': results.bic,
+                'composite_score': composite_score,
+                'n_params': complexity_penalty,
+                'n_test': n_test,
+                'stability_score': stability_score,
+                'validation_pct': pct_validacion * 100
+            }
+            
+        except Exception as e:
+            return None
+
+    def _calculate_stability_numpy(self, 
+                                actual_values: np.ndarray,  # Ya es array
+                                predicted_values: np.ndarray,  # Ya es array
+                                precision: float,
+                                mape: float) -> float:
+        
+        try:
+            errors = actual_values - predicted_values
+            
+            mean_abs_error = np.mean(np.abs(errors))
+            std_error = np.std(errors)
+            
+            if mean_abs_error > 1e-8:
+                cv_error = std_error / mean_abs_error
+                stability_cv = max(0, 100 * (1 - min(cv_error, 1)))
+            else:
+                stability_cv = 50.0
+            
+            # Penalización por MAPE alto
+            if mape > 50:
+                mape_penalty = 0.5
+            elif mape > 30:
+                mape_penalty = 0.7
+            else:
+                mape_penalty = 1.0
+            
+            stability_cv = stability_cv * mape_penalty
+            
+            # Combinar con precisión
+            stability = (stability_cv * 0.6) + (precision * 0.4)
+            
+            return min(100.0, max(0.0, stability))
+            
+        except Exception:
+            return 0.0
+
+    
+    def _calculate_stability(self, 
+                            actual: pd.Series, 
+                            predicted: np.ndarray,
+                            precision: float,
+                            mape: float) -> float:
+        """
+        Calcular score de estabilidad del modelo
+        
+        Basado en:
+        - Variabilidad de errores
+        - Consistencia de predicciones
+        - Penalización por MAPE alto
+        """
+        try:
+            errors = actual.values - predicted
+            
+            # Coeficiente de variación de errores
+            mean_abs_error = np.mean(np.abs(errors))
+            std_error = np.std(errors)
+            
+            if mean_abs_error > 1e-8:
+                cv_error = std_error / mean_abs_error
+                stability_cv = max(0, 100 * (1 - min(cv_error, 1)))
+            else:
+                stability_cv = 50.0
+            
+            # Penalización por MAPE alto
+            if mape > 50:
+                mape_penalty = 0.5
+            elif mape > 30:
+                mape_penalty = 0.7
+            else:
+                mape_penalty = 1.0
+            
+            stability_cv = stability_cv * mape_penalty
+            
+            # Combinar con precisión
+            stability = (stability_cv * 0.6) + (precision * 0.4)
+            
+            return min(100.0, max(0.0, stability))
+            
+        except Exception:
+            return 0.0
+    
+    def _is_valid_model(self, metrics: Dict[str, Any]) -> bool:
+        """
+        Verificar si un modelo es válido para consideración
+        
+        Criterio: Debe tener métricas computables (no infinitas)
+        """
+        if metrics is None:
+            return False
+        
+        # Verificar que las métricas críticas sean válidas
+        if metrics['rmse'] == float('inf'):
+            return False
+        
+        if metrics['precision_final'] < 0:
+            return False
+        
+        return True
+    
+    def _add_model(self, metrics: Dict[str, Any]):
+        """
+        Agregar modelo a la colección de resultados
+        
+        También actualiza el mejor modelo por transformación
+        """
+        self.all_models.append(metrics)
+        self._debug_models_added += 1
+        
+        transformation = metrics['transformation']
+        
+        # Actualizar mejor modelo de esta transformación
+        if transformation not in self.best_by_transformation:
+            self.best_by_transformation[transformation] = metrics
+        else:
+            current_best = self.best_by_transformation[transformation]
+            if metrics['precision_final'] > current_best['precision_final']:
+                self.best_by_transformation[transformation] = metrics
+        
+        # Actualizar mejores globales
+        if metrics['precision_final'] > self.best_precision:
+            self.best_precision = metrics['precision_final']
+        
+        if metrics['rmse'] < self.best_rmse:
+            self.best_rmse = metrics['rmse']
+    
+    def _update_transformation_stats(self, transformation: str, metrics: Dict[str, Any]):
+        """Actualizar estadísticas de una transformación específica"""
+        stats = self.transformation_stats[transformation]
+        
+        stats['count'] += 1
+        
+        precision = metrics['precision_final']
+        stability = metrics.get('stability_score', 0.0)
+        
+        # Actualizar mejor precisión
+        if precision > stats['best_precision']:
+            stats['best_precision'] = precision
+            stats['best_model'] = metrics
+        
+        # Actualizar mejor estabilidad
+        if stability > stats['best_stability']:
+            stats['best_stability'] = stability
+    
+    def _update_iteration_status(self, iteration_callback):
+        """Actualizar callback de iteración con información del mejor modelo actual"""
+        if not self.all_models:
+            return
+        
+        # Obtener mejor modelo actual
+        best_current = max(self.all_models, key=lambda m: m['precision_final'])
+        
+        transformation = best_current['transformation']
+        precision = best_current['precision_final']
+        exog_mark = " [+EXOG]" if best_current.get('with_exogenous') else ""
+        stability = best_current.get('stability_score', 0)
+        
+        status_msg = (f"Evaluadas {self.current_iteration}/{self.total_iterations} | "
+                     f"Mejor: {transformation} - {precision:.1f}%{exog_mark}")
+        
+        if stability > 0:
+            status_msg += f" (Stability: {stability:.0f})"
+        
+        iteration_callback(status_msg)
+    
+    def _select_best_models(self) -> Tuple[List[Dict], str, Dict[str, int]]:
+        """
+        Seleccionar y clasificar los mejores modelos encontrados
+        
+        Sistema de fallback adaptativo:
+        1. Prioridad: modelos 'excellent' y 'good'
+        2. Fallback: modelos 'acceptable'
+        3. Último recurso: mejores de 'poor'
+        
+        Returns:
+            Tuple con (lista_modelos, nivel_calidad, conteos_calidad)
+        """
+        print(f"[DEBUG_OPT] Seleccionando mejores modelos de {len(self.all_models)} evaluados")
+        
+        if not self.all_models:
+            print("[DEBUG_OPT_WARN] No hay modelos para seleccionar")
+            return [], "SIN_MODELOS", {
+                'excellent': 0, 'good': 0, 'acceptable': 0, 'poor': 0
+            }
+        
+        # Ordenar todos los modelos por precisión (descendente)
+        sorted_models = sorted(
+            self.all_models, 
+            key=lambda m: m['precision_final'], 
+            reverse=True
+        )
+        
+        # Clasificar por calidad
+        excellent = []
+        good = []
+        acceptable = []
+        poor = []
+        
+        for model in sorted_models:
+            precision = model['precision_final']
+            
+            if precision >= 60:
+                model['quality'] = 'excellent'
+                excellent.append(model)
+            elif precision >= 40:
+                model['quality'] = 'good'
+                good.append(model)
+            elif precision >= 20:
+                model['quality'] = 'acceptable'
+                acceptable.append(model)
+            else:
+                model['quality'] = 'poor'
+                poor.append(model)
+        
+        quality_counts = {
+            'excellent': len(excellent),
+            'good': len(good),
+            'acceptable': len(acceptable),
+            'poor': len(poor)
+        }
+        
+        print(f"[DEBUG_OPT] Clasificacion: Excellent={len(excellent)}, Good={len(good)}, "
+              f"Acceptable={len(acceptable)}, Poor={len(poor)}")
+        
+        # Estrategia de selección adaptativa
+        if len(excellent) >= 5:
+            selected = excellent[:self.MAX_TOP_MODELS]
+            quality_level = "EXCELENTE"
+        elif len(excellent) + len(good) >= 5:
+            selected = (excellent + good)[:self.MAX_TOP_MODELS]
+            quality_level = "BUENO"
+        elif len(excellent) + len(good) + len(acceptable) >= 5:
+            selected = (excellent + good + acceptable)[:self.MAX_TOP_MODELS]
+            quality_level = "ACEPTABLE"
+        else:
+            selected = sorted_models[:self.MAX_TOP_MODELS]
+            quality_level = "LIMITADO"
+        
+        print(f"[DEBUG_OPT] Modelos seleccionados: {len(selected)}, Nivel: {quality_level}")
+        
+        return selected, quality_level, quality_counts
+    
+    def _prepare_exogenous_variables(self,
+                                     climate_data: Optional[pd.DataFrame],
+                                     df_saidi: pd.DataFrame,
+                                     regional_code: Optional[str],
+                                     log_callback) -> Tuple[Optional[pd.DataFrame], Optional[Dict]]:
+        """
+        Preparar variables exógenas climáticas
+        
+        Returns:
+            Tuple con (DataFrame escalado, información de variables)
+        """
+        try:
+            if climate_data is None or climate_data.empty:
+                print("[DEBUG_OPT] Sin datos climaticos")
+                return None, None
+            
+            if not regional_code or regional_code not in self.REGIONAL_EXOG_VARS:
+                print(f"[DEBUG_OPT] Regional {regional_code} sin variables exogenas definidas")
+                if log_callback:
+                    log_callback(f"Regional {regional_code} no tiene variables exogenas definidas")
+                return None, None
+            
+            print(f"[DEBUG_OPT] Preparando variables exogenas para {regional_code}")
+            
+            exog_vars_config = self.REGIONAL_EXOG_VARS[regional_code]
+            
+            # Mapeo de columnas climáticas
+            climate_column_mapping = {
+                'temp_max': 'temp_max',
+                'humedad_avg': 'humedad_avg',
+                'precip_total': 'precip_total'
+            }
+            
+            exog_df = pd.DataFrame(index=df_saidi.index)
+            exog_info = {}
+            
+            for var_code, var_nombre in exog_vars_config.items():
+                climate_col = climate_column_mapping.get(var_code)
+                
+                if climate_col and climate_col in climate_data.columns:
+                    var_series = climate_data[[climate_col]].copy()
+                    var_series.columns = [var_code]
+                    
+                    # Alinear con índice SAIDI
+                    exog_values = self._align_exog_to_saidi(
+                        var_series, df_saidi, var_code, log_callback
+                    )
+                    
+                    if exog_values is not None:
+                        exog_df[var_code] = exog_values
+                        exog_info[var_code] = {
+                            'nombre': var_nombre,
+                            'columna_clima': climate_col
+                        }
+                        print(f"[DEBUG_OPT] Variable {var_code} preparada")
+                else:
+                    print(f"[DEBUG_OPT] Variable {var_code} no encontrada en datos climaticos")
+            
+            if exog_df.empty or exog_df.shape[1] == 0:
+                print("[DEBUG_OPT] No se pudieron preparar variables exogenas")
+                return None, None
+            
+            # Eliminar filas donde todas las variables son NaN
+            exog_df = exog_df.dropna(how='all')
+            
+            # Interpolar valores faltantes
+            exog_df = exog_df.interpolate(method='linear', limit_direction='both')
+            
+            # Escalar variables
+            self.exog_scaler = StandardScaler()
+            exog_df_scaled = pd.DataFrame(
+                self.exog_scaler.fit_transform(exog_df),
+                index=exog_df.index,
+                columns=exog_df.columns
+            )
+            
+            print(f"[DEBUG_OPT] Variables exogenas preparadas: {len(exog_df_scaled.columns)} variables")
+            
+            return exog_df_scaled, exog_info if exog_info else None
+            
+        except Exception as e:
+            print(f"[DEBUG_OPT_ERROR] Error preparando variables exogenas: {e}")
+            if log_callback:
+                log_callback(f"Error preparando variables exogenas: {str(e)}")
+            return None, None
+    
+    def _align_exog_to_saidi(self,
+                            exog_series: pd.DataFrame,
+                            df_saidi: pd.DataFrame,
+                            var_code: str,
+                            log_callback) -> Optional[pd.Series]:
+        """Alinear datos exógenos al índice temporal de SAIDI"""
+        try:
+            climate_dates = exog_series.index
+            saidi_dates = df_saidi.index
+            
+            # Asegurar DatetimeIndex
+            if not isinstance(climate_dates, pd.DatetimeIndex):
+                climate_dates = pd.to_datetime(climate_dates)
+            if not isinstance(saidi_dates, pd.DatetimeIndex):
+                saidi_dates = pd.to_datetime(saidi_dates)
+            
+            # Crear serie resultado
+            result = pd.Series(index=saidi_dates, dtype=float)
+            
+            # Llenar con valores disponibles
+            for date in saidi_dates:
+                if date in climate_dates:
+                    result[date] = exog_series.loc[date].iloc[0]
+            
+            # Forward fill para fechas futuras
+            max_climate_date = climate_dates.max()
+            future_indices = saidi_dates > max_climate_date
+            
+            if future_indices.any():
+                last_known_value = exog_series.iloc[-1].iloc[0]
+                result.loc[future_indices] = last_known_value
+            
+            # Backward fill para fechas pasadas
+            min_climate_date = climate_dates.min()
+            past_indices = saidi_dates < min_climate_date
+            
+            if past_indices.any():
+                first_known_value = exog_series.iloc[0].iloc[0]
+                result.loc[past_indices] = first_known_value
+            
+            return result
+            
+        except Exception as e:
+            print(f"[DEBUG_OPT_ERROR] Error alineando {var_code}: {e}")
+            return None
+    
+    def _apply_transformation(self, 
+                             data: np.ndarray, 
+                             transformation_type: str) -> Tuple[np.ndarray, str]:
+        """Aplicar transformación a los datos"""
+        if transformation_type == 'original':
+            return data, "Sin transformacion"
+        
+        elif transformation_type == 'standard':
+            self.scaler = StandardScaler()
+            transformed = self.scaler.fit_transform(data.reshape(-1, 1)).flatten()
+            return transformed, "StandardScaler"
+        
+        elif transformation_type == 'log':
+            data_positive = np.maximum(data, 1e-10)
+            transformed = np.log(data_positive)
+            self.transformation_params['log_applied'] = True
+            return transformed, "Log"
+        
+        elif transformation_type == 'sqrt':
+            data_positive = np.maximum(data, 0)
+            transformed = np.sqrt(data_positive)
+            self.transformation_params['sqrt_applied'] = True
+            return transformed, "Sqrt"
+        
+        elif transformation_type == 'boxcox':
+            data_positive = np.maximum(data, 1e-10)
+            transformed, lambda_param = stats.boxcox(data_positive)
+            self.transformation_params['boxcox_lambda'] = lambda_param
+            return transformed, f"Box-Cox (lambda={lambda_param:.4f})"
+        
+        else:
+            return data, "Sin transformacion"
+    
+    def _inverse_transformation(self, 
+                               data: np.ndarray, 
+                               transformation_type: str) -> np.ndarray:
+        """Revertir transformación a escala original"""
+        if transformation_type == 'original':
+            return data
+        
+        elif transformation_type == 'standard':
+            if self.scaler is not None:
+                return self.scaler.inverse_transform(data.reshape(-1, 1)).flatten()
+            return data
+        
+        elif transformation_type == 'log':
+            return np.exp(data)
+        
+        elif transformation_type == 'sqrt':
+            return np.power(data, 2)
+        
+        elif transformation_type == 'boxcox':
+            lambda_param = self.transformation_params.get('boxcox_lambda', 0)
+            if lambda_param == 0:
+                return np.exp(data)
+            else:
+                return np.power(data * lambda_param + 1, 1 / lambda_param)
+        
+        else:
+            return data
+    
+    def _log_final_summary(self, 
+                          log_callback, 
+                          top_models: List[Dict],
+                          exog_info: Optional[Dict]):
+        """Generar resumen final de optimización"""
+        log_callback("=" * 80)
+        log_callback("RESUMEN FINAL - OPTIMIZACION COMPLETADA")
+        if exog_info:
+            log_callback("Con variables exogenas climaticas")
+        log_callback("Validacion alineada con PredictionService (20-30% test)")
+        log_callback("=" * 80)
+        
+        # Estadísticas por transformación
+        log_callback("\nESTADISTICAS POR TRANSFORMACION:")
+        log_callback("-" * 80)
+        for transform in self.AVAILABLE_TRANSFORMATIONS:
+            stats = self.transformation_stats[transform]
+            log_callback(f"{transform.upper():12s} | Modelos: {stats['count']:4d} | "
+                        f"Mejor precision: {stats['best_precision']:.1f}% | "
+                        f"Mejor stability: {stats['best_stability']:.0f}")
+        
+        # Top 10 mejores modelos
+        log_callback("\nTOP 10 MEJORES MODELOS:")
+        log_callback("-" * 80)
+        
+        for i, modelo in enumerate(top_models[:10], 1):
+            medal = "Puesto 1" if i == 1 else "Puesto 2" if i == 2 else "Puesto 3" if i == 3 else f"Puesto {i}"
+            exog_mark = " [+EXOG]" if modelo.get('with_exogenous') else ""
+            
+            quality = modelo.get('quality', 'poor')
+            quality_symbol = {
+                'excellent': '[EXCELENTE]',
+                'good': '[BUENO]',
+                'acceptable': '[ACEPTABLE]',
+                'poor': '[LIMITADO]'
+            }.get(quality, '[?]')
+            
+            stability_str = f" | Stability: {modelo.get('stability_score', 0):.0f}" if modelo.get('stability_score') else ""
+            val_pct = modelo.get('validation_pct', 0)
+            
+            log_callback(f"\n{medal} {quality_symbol}:")
+            log_callback(f"   Transformacion: {modelo['transformation'].upper()}{exog_mark}")
+            log_callback(f"   Parametros: order={modelo['order']}, seasonal={modelo['seasonal_order']}")
+            log_callback(f"   Precision: {modelo['precision_final']:.1f}%{stability_str}")
+            log_callback(f"   RMSE: {modelo['rmse']:.4f} | R2: {modelo['r2_score']:.3f}")
+            log_callback(f"   Validacion: {val_pct:.0f}% de datos como test ({modelo.get('n_test', 0)} meses)")
+        
+        # Variables exógenas utilizadas
+        if exog_info:
+            log_callback("\nVARIABLES EXOGENAS UTILIZADAS:")
+            log_callback("-" * 80)
+            for var_code, var_data in exog_info.items():
+                log_callback(f"   {var_data['nombre']} ({var_data['columna_clima']})")
+        
+        # Modelo óptimo seleccionado
+        if top_models:
+            best_model = top_models[0]
+            precision = best_model['precision_final']
+            quality = best_model.get('quality', 'poor')
+            
+            log_callback("\n" + "=" * 80)
+            log_callback("MODELO OPTIMO SELECCIONADO:")
+            log_callback("=" * 80)
+            log_callback(f"Transformacion: {best_model['transformation'].upper()}")
+            log_callback(f"Parametros: order={best_model['order']}, seasonal={best_model['seasonal_order']}")
+            log_callback(f"Precision: {precision:.1f}%")
+            log_callback(f"Calidad del modelo: {quality.upper()}")
+            log_callback(f"Metodo de validacion: {best_model.get('validation_pct', 0):.0f}% test")
+            
+            if best_model.get('with_exogenous'):
+                log_callback("Modelo incluye variables exogenas climaticas")
+            
+            stability = best_model.get('stability_score', 0)
+            if stability:
+                log_callback(f"Stability Score: {stability:.1f}/100")
+            
+            # Interpretación
+            if quality == 'excellent':
+                interpretacion = "EXCELENTE - Predicciones muy confiables"
+            elif quality == 'good':
+                interpretacion = "BUENO - Predicciones confiables"
+            elif quality == 'acceptable':
+                interpretacion = "ACEPTABLE - Usar con precaucion"
+            else:
+                interpretacion = "LIMITADO - Datos dificiles de predecir"
+                log_callback("\nNOTA: Precision baja sugiere que los datos historicos")
+                log_callback("tienen alta variabilidad o patrones irregulares.")
+            
+            log_callback(f"Interpretacion: {interpretacion}")
+            log_callback("Optimizacion: Sistema adaptativo con fallback inteligente")
+        
+        log_callback("=" * 80)
+
+
+# FUNCIÓN WORKER PARA PROCESAMIENTO PARALELO
+def _evaluate_model_worker(task: Tuple) -> Optional[Dict[str, Any]]:
+    """
+    Worker function para evaluación paralela de modelos
+    
+    Esta función se ejecuta en un proceso separado
+    """
+    serie_original, order, seasonal_order, transformation, exog_df = task
+    
+    try:
+        # Crear instancia temporal del servicio
+        temp_service = OptimizationService()
+        
+        # Evaluar modelo
+        metrics = temp_service._evaluate_single_model(
+            serie_original, order, seasonal_order, transformation, exog_df
+        )
+        
+        return metrics
+        
+    except Exception:
+        # No propagar excepciones en workers paralelos
+        return None
