@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# main.py - Aplicación Principal MVC con PyQt6 + Climate Data + Export
+# main.py - Aplicación Principal MVC - CORREGIDO
 import sys
 import os
 from PyQt6.QtWidgets import QApplication
@@ -11,7 +11,7 @@ sys.path.insert(0, current_dir)
 from view.main_window import MainWindow
 from controller.app_controller import AppController
 from model.excel_model import ExcelModel
-from model.climate_model import ClimateModel  
+from model.climate_model import ClimateModel
 
 
 def clean_pycache(root_dir=None):
@@ -52,7 +52,7 @@ class SAIDIApplication:
         """Configurar arquitectura MVC"""
         # Modelos
         self.excel_model = ExcelModel()
-        self.climate_model = ClimateModel() 
+        self.climate_model = ClimateModel()
         
         # Vista
         self.main_window = MainWindow()
@@ -69,39 +69,103 @@ class SAIDIApplication:
     def connect_signals(self):
         """Conectar señales entre vista y controlador"""
         try:
-            # Botones principales
+            # ========== BOTONES PRINCIPALES ==========
+            
+            # Carga de Excel
             if hasattr(self.main_window, 'load_excel_button'):
                 self.main_window.load_excel_button.clicked.connect(self.controller.load_excel_file)
+                print("✓ Botón 'Cargar Excel' conectado")
             
+            # Predicción
             if hasattr(self.main_window, 'predict_button'):
                 self.main_window.predict_button.clicked.connect(self.controller.run_prediction)
+                print("✓ Botón 'Predicción' conectado")
             
+            # Optimización
             if hasattr(self.main_window, 'optimize_button'):
-                if getattr(self.controller, 'run_optimization', None):
+                if hasattr(self.controller, 'run_optimization'):
                     self.main_window.optimize_button.clicked.connect(self.controller.run_optimization)
+                    print("✓ Botón 'Optimización' conectado")
             
-            # Selector de regional
-            self.main_window.regional_selected.connect(self.controller.on_regional_selected)
+            # VALIDACIÓN - ESTA ES LA CONEXIÓN QUE FALTABA
+            if hasattr(self.main_window, 'validate_button'):
+                if hasattr(self.controller, 'run_validation'):
+                    self.main_window.validate_button.clicked.connect(self.controller.run_validation)
+                    print("✓ Botón 'Validación' conectado")
+                else:
+                    print("⚠ Controlador no tiene método 'run_validation'")
+            else:
+                print("⚠ Vista no tiene 'validate_button'")
             
-            # Carga de datos climáticos desde botones
-            self.main_window.climate_load_requested.connect(self.controller.load_climate_file)
+            # Detección de Overfitting
+            if hasattr(self.main_window, 'overfitting_button'):
+                if hasattr(self.controller, 'run_overfitting_detection'):
+                    self.main_window.overfitting_button.clicked.connect(self.controller.run_overfitting_detection)
+                    print("✓ Botón 'Overfitting' conectado")
             
-            # ✅ CONEXIÓN CRÍTICA: Exportar a Excel
+            # ========== BOTONES DE MEJORAS ANTI-OVERFITTING ==========
+            
+            # Cross-Validation
+            if hasattr(self.main_window, 'cv_button'):
+                if hasattr(self.controller, 'run_cross_validation'):
+                    self.main_window.cv_button.clicked.connect(self.controller.run_cross_validation)
+                    print("✓ Botón 'Cross-Validation' conectado")
+            
+            # Buscar Modelo Simple
+            if hasattr(self.main_window, 'simple_model_button'):
+                if hasattr(self.controller, 'run_find_best_simple_model'):
+                    self.main_window.simple_model_button.clicked.connect(self.controller.run_find_best_simple_model)
+                    print("✓ Botón 'Modelo Simple' conectado")
+            
+            # Comparar Transformaciones
+            if hasattr(self.main_window, 'transformation_button'):
+                if hasattr(self.controller, 'run_compare_transformations'):
+                    self.main_window.transformation_button.clicked.connect(self.controller.run_compare_transformations)
+                    print("✓ Botón 'Transformaciones' conectado")
+            
+            # ========== SELECTOR DE REGIONAL ==========
+            
+            if hasattr(self.main_window, 'regional_selected'):
+                self.main_window.regional_selected.connect(self.controller.on_regional_selected)
+                print("✓ Selector de regional conectado")
+            
+            # ========== CARGA DE DATOS CLIMÁTICOS ==========
+            
+            if hasattr(self.main_window, 'climate_load_requested'):
+                self.main_window.climate_load_requested.connect(self.controller.load_climate_file)
+                print("✓ Carga de datos climáticos conectada")
+            
+            # ========== EXPORTACIÓN A EXCEL ==========
+            
             if hasattr(self.main_window, 'export_requested'):
-                self.main_window.export_requested.connect(self.controller.export_predictions_to_excel)
-                print("✓ Señal de exportación conectada correctamente")
+                if hasattr(self.controller, 'export_predictions_to_excel'):
+                    self.main_window.export_requested.connect(self.controller.export_predictions_to_excel)
+                    print("✓ Señal de exportación conectada")
+                else:
+                    print("⚠ Controlador no tiene método 'export_predictions_to_excel'")
             
-            # Señales del modelo -> vista
-            if getattr(self.excel_model, 'data_loaded', None):
+            # ========== SEÑALES DEL MODELO -> VISTA ==========
+            
+            # Excel Model
+            if hasattr(self.excel_model, 'data_loaded'):
                 self.excel_model.data_loaded.connect(self.main_window.on_excel_loaded)
+                print("✓ Modelo Excel -> Vista conectado")
             
-            if getattr(self.climate_model, 'climate_data_loaded', None):
+            # Climate Model
+            if hasattr(self.climate_model, 'climate_data_loaded'):
                 self.climate_model.climate_data_loaded.connect(self.controller.on_climate_data_loaded)
-            if getattr(self.climate_model, 'all_climate_loaded', None):
+                print("✓ Modelo Clima -> Controlador conectado (data_loaded)")
+            
+            if hasattr(self.climate_model, 'all_climate_loaded'):
                 self.climate_model.all_climate_loaded.connect(self.controller.on_all_climate_loaded)
+                print("✓ Modelo Clima -> Controlador conectado (all_loaded)")
+            
+            print("\n✓ Todas las conexiones MVC establecidas correctamente\n")
         
         except Exception as e:
-            print(f"[WARN] Error conectando señales: {e}")
+            print(f"\n✗ ERROR conectando señales: {e}\n")
+            import traceback
+            traceback.print_exc()
     
     def run(self):
         """Mostrar la ventana principal y ejecutar la app"""
@@ -110,8 +174,18 @@ class SAIDIApplication:
 
 
 if __name__ == '__main__':
+    print("=" * 60)
+    print("SAIDI Analysis Tool - Iniciando aplicación")
+    print("=" * 60)
+    
     # Limpiar carpetas __pycache__ antes de iniciar
     clean_pycache()
     
+    print("\nConfigurando arquitectura MVC...")
     app = SAIDIApplication()
+    
+    print("\n✓ Aplicación lista para usar")
+    print("=" * 60)
+    print()
+    
     sys.exit(app.run())

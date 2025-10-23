@@ -21,11 +21,11 @@ from view.climate_simulation_dialog import ClimateSimulationDialog
 class AppController(QObject):
     """Controlador principal de la aplicación"""
     
-    def __init__(self, view, model, climate_model):  # ← MODIFICADO: agregado climate_model
+    def __init__(self, view, model, climate_model): 
         super().__init__()
         self.view = view
         self.model = model
-        self.climate_model = climate_model  # ← NUEVO
+        self.climate_model = climate_model  
         
         # Servicios de backend
         self.prediction_service = PredictionService()
@@ -44,9 +44,8 @@ class AppController(QObject):
         
         # Configurar conexiones de modelo
         self.setup_model_connections()
-        self.setup_climate_connections()  # ← NUEVO
+        self.setup_climate_connections() 
 
-    # ========== NUEVOS MÉTODOS PARA DATOS CLIMÁTICOS ==========
     
     def setup_climate_connections(self):
         """Configurar conexiones del modelo climático"""
@@ -144,8 +143,6 @@ class AppController(QObject):
     def are_climate_data_available(self, regional_code: str) -> bool:
         """Verificar si hay datos climáticos disponibles para una regional"""
         return self.climate_model.is_regional_loaded(regional_code)
-
-    # ========== MÉTODOS EXISTENTES (TODOS PRESERVADOS) ==========
 
     def run_regularized_prediction(self):
         """Ejecutar predicción con regularización"""
@@ -1015,7 +1012,7 @@ class AppController(QObject):
             self.view.show_progress(False)
     
     def run_validation(self):
-        """Ejecutar validación del modelo CON VARIABLES EXÓGENAS"""
+        """Ejecutar validación del modelo CON VARIABLES EXÓGENAS E INTERVALOS DE CONFIANZA"""
         if not self.model.is_excel_loaded():
             self.show_warning("Debe cargar un archivo Excel primero")
             return
@@ -1035,18 +1032,18 @@ class AppController(QObject):
                 regional_code, 'original'
             )
             
-            self.view.log_message(f"Ejecutando validación para: {regional_nombre}")
-            self.view.log_message(f"Transformación asignada: {transformation.upper()}")
+            self.view.log_message(f"Ejecutando validacion para: {regional_nombre}")
+            self.view.log_message(f"Transformacion asignada: {transformation.upper()}")
             
-            # NUEVO: Obtener datos climáticos si están disponibles
+            # Obtener datos climáticos si están disponibles
             if self.are_climate_data_available(regional_code):
                 climate_data = self.get_climate_data_for_regional(regional_code)
-                self.view.log_message(f"✓ Datos climáticos disponibles - Se incluirán en la validación")
+                self.view.log_message(f"Datos climaticos disponibles para {regional_nombre}")
             else:
-                self.view.log_message(f" Sin datos climáticos - Validación sin variables exógenas")
+                self.view.log_message(f"Sin datos climaticos para {regional_nombre}")
         
         try:
-            self.view.log_message("Iniciando validación del modelo...")
+            self.view.log_message("Iniciando validacion del modelo...")
             self.view.set_buttons_enabled(False)
             self.view.update_status("Validando modelo SARIMAX...")
             
@@ -1057,12 +1054,12 @@ class AppController(QObject):
                 self.view.set_buttons_enabled(True)
                 return
             
-            # MODIFICADO: Pasar climate_data al thread
+            # Pasar climate_data al thread
             self.validation_thread = ValidationThread(
                 df_prepared=df_prepared,
                 validation_service=self.validation_service,
                 regional_code=regional_code,
-                climate_data=climate_data  # NUEVO
+                climate_data=climate_data
             )
             self.validation_thread.progress_updated.connect(self.view.update_progress)
             self.validation_thread.message_logged.connect(self.view.log_message)
@@ -1073,7 +1070,7 @@ class AppController(QObject):
             self.validation_thread.start()
             
         except Exception as e:
-            self.view.log_error(f"Error iniciando validación: {str(e)}")
+            self.view.log_error(f"Error iniciando validacion: {str(e)}")
             self.view.set_buttons_enabled(True)
             self.view.show_progress(False)
 
@@ -1105,7 +1102,7 @@ class AppController(QObject):
             # NUEVO: Obtener datos climáticos si están disponibles
             if self.are_climate_data_available(regional_code):
                 climate_data = self.get_climate_data_for_regional(regional_code)
-                self.view.log_message(f"✓ Datos climáticos disponibles - Se incluirán en el análisis")
+                self.view.log_message(f" Datos climáticos disponibles - Se incluirán en el análisis")
             else:
                 self.view.log_message(f" Sin datos climáticos - Análisis sin variables exógenas")
         
@@ -1127,7 +1124,7 @@ class AppController(QObject):
                 overfitting_service=self.overfitting_service,
                 df_prepared=df_prepared,
                 regional_code=regional_code,
-                climate_data=climate_data  # NUEVO
+                climate_data=climate_data  
             )
             self.overfitting_thread.progress_updated.connect(self.view.update_progress)
             self.overfitting_thread.message_logged.connect(self.view.log_message)
@@ -1267,13 +1264,13 @@ class AppController(QObject):
                 self.view.log_message(f"  Parámetros: order={best['order']}, seasonal={best['seasonal_order']}")
                 
                 if precision >= 90:
-                    interpretacion = "EXCELENTE - Predicciones muy confiables ✓✓✓"
+                    interpretacion = "EXCELENTE - Predicciones muy confiables "
                 elif precision >= 80:
-                    interpretacion = "BUENO - Predicciones confiables ✓✓"
+                    interpretacion = "BUENO - Predicciones confiables "
                 elif precision >= 70:
-                    interpretacion = "ACEPTABLE - Predicciones moderadamente confiables ✓"
+                    interpretacion = "ACEPTABLE - Predicciones moderadamente confiables "
                 else:
-                    interpretacion = "REGULAR - Usar con precaución ⚠"
+                    interpretacion = "REGULAR - Usar con precaución "
                 
                 self.view.log_message(f"  Interpretación: {interpretacion}")
                 self.view.log_message("  Métricas calculadas en escala original")
@@ -1292,22 +1289,95 @@ class AppController(QObject):
                         break
     
     def on_validation_finished(self, result):
-        """Callback cuando termina la validación"""
+        """Callback cuando termina la validacion - ACTUALIZADO SIN MARGENES DE ERROR"""
         self.view.set_buttons_enabled(True)
         self.view.show_progress(False)
-        self.view.update_status("Validación completada")
-        self.view.log_success("Validación del modelo completada")
+        self.view.update_status("Validacion completada")
+        self.view.log_success("Validacion del modelo completada")
         
         if result and 'metrics' in result:
             metrics = result['metrics']
-            self.view.log_message("Métricas de validación:")
-            self.view.log_message(f"  • Precisión Final: {metrics.get('precision_final', 0):.1f}%")
-            self.view.log_message(f"  • RMSE: {metrics.get('rmse', 0):.4f}")
-            self.view.log_message(f"  • MAPE: {metrics.get('mape', 0):.1f}%")
-            self.view.log_message(f"  • R²: {metrics.get('r2_score', 0):.3f}")
+            model_params = result.get('model_params', {})
+            
+            self.view.log_message("=" * 60)
+            self.view.log_message("RESULTADOS DE VALIDACION")
+            self.view.log_message("=" * 60)
+            
+            # Informacion del modelo
+            self.view.log_message(f"Transformacion: {model_params.get('transformation', 'N/A').upper()}")
+            self.view.log_message(f"Parametros: order={model_params.get('order')}, seasonal={model_params.get('seasonal_order')}")
+            
+            if model_params.get('with_exogenous'):
+                exog_info = result.get('exogenous_vars', {})
+                self.view.log_message(f"Variables exogenas: {len(exog_info)}")
+                for var_code, var_data in exog_info.items():
+                    self.view.log_message(f"  - {var_data['nombre']}")
+            
+            self.view.log_message("")
+            self.view.log_message("Metricas de validacion (escala original):")
+            self.view.log_message(f"  - Precision Final: {metrics.get('precision_final', 0):.1f}%")
+            self.view.log_message(f"  - RMSE: {metrics.get('rmse', 0):.4f} minutos")
+            self.view.log_message(f"  - MAE: {metrics.get('mae', 0):.4f} minutos")
+            self.view.log_message(f"  - MAPE: {metrics.get('mape', 0):.1f}%")
+            self.view.log_message(f"  - R2: {metrics.get('r2_score', 0):.3f}")
+            
+            # Informacion de validacion
+            self.view.log_message("")
+            self.view.log_message(f"Datos de entrenamiento: {result.get('training_count', 0)} observaciones")
+            self.view.log_message(f"Datos de validacion: {result.get('validation_count', 0)} observaciones")
+            self.view.log_message(f"Porcentaje validacion: {result.get('validation_percentage', 0):.0f}%")
+            
+            # Predicciones con intervalos (SOLO para referencia visual)
+            if 'predictions' in result:
+                predictions = result['predictions']
+                mean_preds = predictions.get('mean', {})
+                lower_bounds = predictions.get('lower_bound', {})
+                upper_bounds = predictions.get('upper_bound', {})
+                
+                if mean_preds and lower_bounds and upper_bounds:
+                    self.view.log_message("")
+                    self.view.log_message("Predicciones de validacion:")
+                    self.view.log_message("(Intervalos de confianza 95% solo en grafica)")
+                    
+                    for fecha in sorted(mean_preds.keys()):
+                        mean_val = mean_preds[fecha]
+                        lower_val = lower_bounds.get(fecha, mean_val)
+                        upper_val = upper_bounds.get(fecha, mean_val)
+                        
+                        # Mostrar valor predicho y rango del intervalo (sin margenes individuales)
+                        ancho_intervalo = upper_val - lower_val
+                        
+                        self.view.log_message(
+                            f"  - {fecha}: {mean_val:.2f} min "
+                            f"[IC: {lower_val:.2f} - {upper_val:.2f}]"
+                        )
+            
+            # Interpretacion de calidad basada en PRECISION
+            precision = metrics.get('precision_final', 0)
+            self.view.log_message("")
+            if precision >= 90:
+                self.view.log_success("Calidad: EXCELENTE - Predicciones muy confiables")
+            elif precision >= 80:
+                self.view.log_success("Calidad: BUENO - Predicciones confiables")
+            elif precision >= 70:
+                self.view.log_message("Calidad: ACEPTABLE - Predicciones moderadamente confiables")
+            elif precision >= 60:
+                self.view.log_message("Calidad: REGULAR - Usar con precaucion")
+            else:
+                self.view.log_error("Calidad: BAJO - Modelo poco confiable")
+            
+            # Nota sobre intervalos (solo para referencia)
+            if model_params.get('confidence_level'):
+                conf_level = model_params['confidence_level'] * 100
+                self.view.log_message(f"")
+                self.view.log_message(f"Nota: Intervalos de confianza al {conf_level:.0f}% disponibles en grafica")
+                self.view.log_message(f"      (solo para referencia visual, no afectan la precision del modelo)")
+            
+            self.view.log_message("=" * 60)
         
+        # Mostrar grafica
         if result and 'plot_file' in result and result['plot_file']:
-            self.show_plot(result['plot_file'], "Validación del Modelo SAIDI")
+            self.show_plot(result['plot_file'], "Validacion del Modelo SAIDI")
     
     def on_overfitting_finished(self, result):
         """Callback cuando termina detección de overfitting"""
@@ -1349,9 +1419,9 @@ class AppController(QObject):
         """Callback cuando hay error en validación"""
         self.view.set_buttons_enabled(True)
         self.view.show_progress(False)
-        self.view.update_status("Error en validación")
-        self.view.log_error(f"Error en validación: {error_msg}")
-        self.show_error(f"Error durante la validación: {error_msg}")
+        self.view.update_status("Error en validacion")
+        self.view.log_error(f"Error en validacion: {error_msg}")
+        self.show_error(f"Error durante la validacion: {error_msg}")
     
     def on_overfitting_error(self, error_msg):
         """Callback cuando hay error en detección de overfitting"""
@@ -1373,8 +1443,6 @@ class AppController(QObject):
         """Mostrar mensaje informativo"""
         QMessageBox.information(self.view, "Información", message)
 
-
-# ========== THREADS (TODOS PRESERVADOS) ==========
 
 class TransformationThread(QThread):
     """Hilo para comparar transformaciones en background"""
@@ -1568,13 +1636,13 @@ class OptimizationThread(QThread):
     error_occurred = pyqtSignal(str)
     
     def __init__(self, optimization_service, file_path=None, df_prepared=None, 
-                 regional_code=None, climate_data=None):  # NUEVO: climate_data
+                 regional_code=None, climate_data=None):  
         super().__init__()
         self.optimization_service = optimization_service
         self.file_path = file_path
         self.df_prepared = df_prepared
         self.regional_code = regional_code
-        self.climate_data = climate_data  # NUEVO
+        self.climate_data = climate_data  
     
     def run(self):
         try:
@@ -1583,7 +1651,7 @@ class OptimizationThread(QThread):
                 file_path=self.file_path,
                 df_prepared=self.df_prepared,
                 regional_code=self.regional_code,
-                climate_data=self.climate_data,  # NUEVO
+                climate_data=self.climate_data, 
                 progress_callback=self.progress_updated.emit,
                 log_callback=self.message_logged.emit,
                 iteration_callback=self.iteration_logged.emit
@@ -1602,14 +1670,14 @@ class ValidationThread(QThread):
     error_occurred = pyqtSignal(str)
     
     def __init__(self, validation_service, file_path=None, df_prepared=None, 
-                 regional_code=None, climate_data=None):  # NUEVO: climate_data
+                 regional_code=None, climate_data=None):  
         super().__init__()
         self.validation_service = validation_service
         self.file_path = file_path
         self.df_prepared = df_prepared
         self.regional_code = regional_code
-        self.climate_data = climate_data  # NUEVO
-    
+        self.climate_data = climate_data 
+
     def run(self):
         try:
             self.message_logged.emit("Ejecutando validación del modelo...")
@@ -1617,7 +1685,7 @@ class ValidationThread(QThread):
                 file_path=self.file_path,
                 df_prepared=self.df_prepared,
                 regional_code=self.regional_code,
-                climate_data=self.climate_data,  # NUEVO
+                climate_data=self.climate_data,  
                 progress_callback=self.progress_updated.emit,
                 log_callback=self.message_logged.emit
             )
@@ -1635,13 +1703,13 @@ class OverfittingThread(QThread):
     error_occurred = pyqtSignal(str)
     
     def __init__(self, overfitting_service, file_path=None, df_prepared=None, 
-                 regional_code=None, climate_data=None):  # NUEVO: climate_data
+                 regional_code=None, climate_data=None):  
         super().__init__()
         self.overfitting_service = overfitting_service
         self.file_path = file_path
         self.df_prepared = df_prepared
         self.regional_code = regional_code
-        self.climate_data = climate_data  # NUEVO
+        self.climate_data = climate_data 
     
     def run(self):
         try:
@@ -1650,7 +1718,7 @@ class OverfittingThread(QThread):
                 file_path=self.file_path,
                 df_prepared=self.df_prepared,
                 regional_code=self.regional_code,
-                climate_data=self.climate_data,  # NUEVO
+                climate_data=self.climate_data, 
                 progress_callback=self.progress_updated.emit,
                 log_callback=self.message_logged.emit
             )

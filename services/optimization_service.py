@@ -150,7 +150,7 @@ class OptimizationService:
             if progress_callback:
                 progress_callback(10, "Preparando variables exogenas...")
             
-            # Paso 2: Preparar variables exógenas (si disponibles)
+            # Paso 2: Preparar variables exógenas (si estan disponibles)
             exog_df, exog_info = self._prepare_exogenous_variables(
                 climate_data, df, regional_code, log_callback
             )
@@ -628,11 +628,8 @@ class OptimizationService:
                 pred_mean_transformed.values, transformation
             )
             
-            # ============================================================
-            #  CORRECCIÓN CRÍTICA: Convertir a numpy arrays ANTES
-            # ============================================================
-            test_values = test_original.values  # Series → numpy array
-            pred_values = pred_mean_original     # Ya es numpy array
+            test_values = test_original.values  
+            pred_values = pred_mean_original     
             
             # Ahora TODAS las operaciones usan arrays numpy
             rmse = np.sqrt(mean_squared_error(test_values, pred_values))
@@ -682,8 +679,8 @@ class OptimizationService:
             return None
 
     def _calculate_stability_numpy(self, 
-                                actual_values: np.ndarray,  # Ya es array
-                                predicted_values: np.ndarray,  # Ya es array
+                                actual_values: np.ndarray,  
+                                predicted_values: np.ndarray,  
                                 precision: float,
                                 mape: float) -> float:
         

@@ -329,7 +329,7 @@ class PredictionService:
             try:
                 # Preparar variables exogenas para prediccion
                 exog_forecast = None
-                exog_forecast_original = None  # NUEVO: guardar version sin escalar
+                exog_forecast_original = None  # Guardar version sin escalar
                 
                 if exog_df is not None:
                     # SIEMPRE extender SIN ESCALAR primero
