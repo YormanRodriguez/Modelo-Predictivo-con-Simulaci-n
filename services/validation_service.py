@@ -78,7 +78,7 @@ class ValidationService:
         self.scaler = None
         self.exog_scaler = None
         self.transformation_params = {}
-        self.simulation_service = ClimateSimulationService()  # NUEVO
+        self.simulation_service = ClimateSimulationService() 
     
     def run_validation(self, 
                       file_path: Optional[str] = None, 

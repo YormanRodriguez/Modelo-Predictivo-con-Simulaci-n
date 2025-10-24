@@ -693,7 +693,6 @@ class AppController(QObject):
                                     if self.model.get_excel_data_for_analysis() is not None else 1,
                     regional_code=regional_code,
                     regional_nombre=regional_nombre,
-                    mode='prediction', 
                     parent=self.view
                 )
                 dialog.simulation_accepted.connect(lambda cfg: self._on_simulation_configured(cfg, regional_code, climate_data))
@@ -1052,17 +1051,16 @@ class AppController(QObject):
                     else:
                         ultimo_mes = datetime.now().month
                     
-                    self.view.log_message(" Simulación climática habilitada para validación")
+                    self.view.log_message("🌦️ Simulación climática habilitada para validación")
                     self.view.log_message("   Abriendo configurador de escenarios...")
                     
                     # Abrir diálogo de configuración
                     dialog = ClimateSimulationDialog(
-                    climate_data=climate_data,
-                    mes_prediccion=ultimo_mes,
-                    regional_code=regional_code,
-                    regional_nombre=regional_nombre,
-                    mode='validation',  
-                    parent=self.view
+                        climate_data=climate_data,
+                        mes_prediccion=ultimo_mes,
+                        regional_code=regional_code,
+                        regional_nombre=regional_nombre,
+                        parent=self.view
                     )
                     
                     # Conectar señales
@@ -1132,7 +1130,7 @@ class AppController(QObject):
             self.view.show_progress(False)
     
     def run_overfitting_detection(self):
-        """Ejecutar detección de overfitting CON VARIABLES EXÓGENAS"""
+        """Ejecutar detección de overfitting CON VARIABLES EXÓGENAS (sin simulación)"""
         if not self.model.is_excel_loaded():
             self.show_warning("Debe cargar un archivo Excel primero")
             return
@@ -1158,9 +1156,9 @@ class AppController(QObject):
             # NUEVO: Obtener datos climáticos si están disponibles
             if self.are_climate_data_available(regional_code):
                 climate_data = self.get_climate_data_for_regional(regional_code)
-                self.view.log_message(f" Datos climáticos disponibles - Se incluirán en el análisis")
+                self.view.log_message(f"✓ Datos climáticos disponibles - Se incluirán en el análisis")
             else:
-                self.view.log_message(f" Sin datos climáticos - Análisis sin variables exógenas")
+                self.view.log_message(f"⚠ Sin datos climáticos - Análisis sin variables exógenas")
         
         try:
             self.view.log_message("Iniciando detección de overfitting...")
@@ -1180,7 +1178,7 @@ class AppController(QObject):
                 overfitting_service=self.overfitting_service,
                 df_prepared=df_prepared,
                 regional_code=regional_code,
-                climate_data=climate_data  
+                climate_data=climate_data  # NUEVO PARÁMETRO
             )
             self.overfitting_thread.progress_updated.connect(self.view.update_progress)
             self.overfitting_thread.message_logged.connect(self.view.log_message)
@@ -1345,58 +1343,19 @@ class AppController(QObject):
                         break
     
     def on_validation_finished(self, result):
-        """Callback cuando termina la validación"""
+        """Callback cuando termina la validacion"""
         self.view.set_buttons_enabled(True)
         self.view.show_progress(False)
-        self.view.update_status("Validación completada")
+        self.view.update_status("Validacion completada")
         
         # NUEVO: Detectar si hubo simulación
-        model_params = result.get('model_params', {})
+        model_params = result.get('model_params', {}) if result else {}
         simulation_applied = model_params.get('with_simulation', False)
         
         if simulation_applied:
             self.view.log_success("=" * 60)
             self.view.log_success("VALIDACIÓN CON SIMULACIÓN CLIMÁTICA COMPLETADA")
             self.view.log_success("=" * 60)
-            
-            # Mostrar resumen de simulación
-            sim_config = result.get('simulation_config', {})
-            if sim_config:
-                summary = sim_config.get('summary', {})
-                self.view.log_message(f" Escenario simulado: {summary.get('escenario', 'N/A')}")
-                self.view.log_message(f"Alcance: {summary.get('alcance_meses', 'N/A')} meses")
-                self.view.log_message(f" Días simulados: {summary.get('dias_simulados', 'N/A')}")
-                
-                # Mostrar cambios en variables
-                changes = summary.get('percentage_changes', {})
-                if changes:
-                    self.view.log_message("\n Cambios aplicados a variables:")
-                    var_names = {
-                        'temp_max': 'Temperatura máxima',
-                        'humedad_avg': 'Humedad relativa',
-                        'precip_total': 'Precipitación total'
-                    }
-                    for var, change_pct in changes.items():
-                        var_name = var_names.get(var, var)
-                        arrow = "↑" if change_pct > 0 else "↓" if change_pct < 0 else "→"
-                        self.view.log_message(f"   {arrow} {var_name}: {change_pct:+.1f}%")
-                
-                self.view.log_message("")
-                self.view.log_message("⚠️  IMPORTANTE:")
-                self.view.log_message("   Las métricas reflejan el desempeño del modelo bajo condiciones")
-                self.view.log_message("   climáticas HIPOTÉTICAS del escenario simulado.")
-                self.view.log_message("   Los resultados reales dependerán de las condiciones climáticas efectivas.")
-                self.view.log_message("")
-        else:
-            self.view.log_success("Validación del modelo completada")
-        
-        if result and 'metrics' in result:
-            metrics = result['metrics']
-            model_params = result.get('model_params', {})
-            
-            self.view.log_message("=" * 60)
-            self.view.log_message("RESULTADOS DE VALIDACIÓN")
-            self.view.log_message("=" * 60)
             
             # Mostrar resumen de simulación
             sim_config = result.get('simulation_config', {}) if result else {}
@@ -1514,7 +1473,7 @@ class AppController(QObject):
             self.show_plot(result['plot_file'], "Validacion del Modelo SAIDI")
     
     def on_overfitting_finished(self, result):
-        """Callback cuando termina detección de overfitting"""
+        """Callback cuando termina detección de overfitting - MODERNIZADO"""
         self.view.set_buttons_enabled(True)
         self.view.show_progress(False)
         self.view.update_status("Análisis de overfitting completado")
@@ -1522,14 +1481,59 @@ class AppController(QObject):
         
         if result and 'overfitting_analysis' in result:
             analysis = result['overfitting_analysis']
+            model_params = result.get('model_params', {})
+            
+            self.view.log_message("=" * 60)
+            self.view.log_message("ANÁLISIS DE OVERFITTING")
+            self.view.log_message("=" * 60)
+            
+            # Información del modelo
+            self.view.log_message(f"Transformación: {model_params.get('transformation', 'N/A').upper()}")
+            self.view.log_message(f"Parámetros: order={model_params.get('order')}, seasonal={model_params.get('seasonal_order')}")
+            
+            if model_params.get('with_exogenous'):
+                exog_info = result.get('exogenous_vars', {})
+                self.view.log_message(f"Variables exógenas: {len(exog_info)}")
+                for var_code, var_data in exog_info.items():
+                    self.view.log_message(f"  • {var_data['nombre']}")
+            
+            self.view.log_message("")
             self.view.log_message(f"Estado: {analysis['status']}")
             self.view.log_message(f"Nivel de Overfitting: {analysis['overfitting_level']}")
             self.view.log_message(f"Score: {analysis['overfitting_score']:.2f}/100")
             
+            # Mostrar degradaciones
+            self.view.log_message("")
+            self.view.log_message("DEGRADACIONES Train→Test:")
+            self.view.log_message(f"  • Precisión: {analysis['precision_degradation']:.1f}%")
+            self.view.log_message(f"  • R²: {analysis['r2_degradation']:.1f}%")
+            self.view.log_message(f"  • RMSE: {analysis['rmse_increase']:.1f}%")
+            
+            # Métricas por conjunto
+            metrics = result.get('metrics', {})
+            self.view.log_message("")
+            self.view.log_message("MÉTRICAS POR CONJUNTO:")
+            
+            for set_name, set_label in [('train', 'TRAINING'), ('validation', 'VALIDATION'), ('test', 'TEST')]:
+                if set_name in metrics:
+                    m = metrics[set_name]
+                    self.view.log_message(f"\n{set_label}:")
+                    self.view.log_message(f"  • Precisión: {m['precision_final']:.1f}%")
+                    self.view.log_message(f"  • RMSE: {m['rmse']:.4f} min")
+                    self.view.log_message(f"  • R²: {m['r2']:.4f}")
+            
+            self.view.log_message("")
+            
             if analysis.get('has_overfitting', False):
-                self.view.log_message(" Se detectó overfitting en el modelo")
+                self.view.log_message("⚠️ OVERFITTING DETECTADO")
+                self.view.log_message("Recomendaciones:")
+                for rec in analysis['recommendations']:
+                    self.view.log_message(f"  • {rec}")
             else:
-                self.view.log_success(" El modelo NO presenta overfitting significativo")
+                self.view.log_success("✅ NO SE DETECTÓ OVERFITTING SIGNIFICATIVO")
+                self.view.log_success("El modelo generaliza adecuadamente")
+            
+            self.view.log_message("=" * 60)
         
         if result and 'plot_file' in result and result['plot_file']:
             self.show_plot(result['plot_file'], "Análisis de Overfitting")
@@ -1804,14 +1808,14 @@ class ValidationThread(QThread):
     error_occurred = pyqtSignal(str)
     
     def __init__(self, validation_service, file_path=None, df_prepared=None, 
-                 regional_code=None, climate_data=None, simulation_config=None):  # NUEVO
+                 regional_code=None, climate_data=None, simulation_config=None): 
         super().__init__()
         self.validation_service = validation_service
         self.file_path = file_path
         self.df_prepared = df_prepared
         self.regional_code = regional_code
         self.climate_data = climate_data
-        self.simulation_config = simulation_config  # NUEVO
+        self.simulation_config = simulation_config 
 
     def run(self):
         try:
@@ -1821,7 +1825,7 @@ class ValidationThread(QThread):
                 df_prepared=self.df_prepared,
                 regional_code=self.regional_code,
                 climate_data=self.climate_data,
-                simulation_config=self.simulation_config,  # NUEVO
+                simulation_config=self.simulation_config,  
                 progress_callback=self.progress_updated.emit,
                 log_callback=self.message_logged.emit
             )

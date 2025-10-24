@@ -184,7 +184,7 @@ if __name__ == '__main__':
     print("\nConfigurando arquitectura MVC...")
     app = SAIDIApplication()
     
-    print("\n✓ Aplicación lista para usar")
+    print("\nAplicación lista para usar")
     print("=" * 60)
     print()
     
