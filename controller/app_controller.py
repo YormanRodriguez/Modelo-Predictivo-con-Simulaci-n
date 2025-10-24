@@ -693,6 +693,7 @@ class AppController(QObject):
                                     if self.model.get_excel_data_for_analysis() is not None else 1,
                     regional_code=regional_code,
                     regional_nombre=regional_nombre,
+                    mode='prediction', 
                     parent=self.view
                 )
                 dialog.simulation_accepted.connect(lambda cfg: self._on_simulation_configured(cfg, regional_code, climate_data))
@@ -1012,7 +1013,7 @@ class AppController(QObject):
             self.view.show_progress(False)
     
     def run_validation(self):
-        """Ejecutar validación del modelo CON VARIABLES EXÓGENAS E INTERVALOS DE CONFIANZA"""
+        """Ejecutar validación del modelo CON VARIABLES EXÓGENAS, SIMULACIÓN E INTERVALOS"""
         if not self.model.is_excel_loaded():
             self.show_warning("Debe cargar un archivo Excel primero")
             return
@@ -1032,18 +1033,60 @@ class AppController(QObject):
                 regional_code, 'original'
             )
             
-            self.view.log_message(f"Ejecutando validacion para: {regional_nombre}")
-            self.view.log_message(f"Transformacion asignada: {transformation.upper()}")
+            self.view.log_message(f"Ejecutando validación para: {regional_nombre}")
+            self.view.log_message(f"Transformación asignada: {transformation.upper()}")
             
             # Obtener datos climáticos si están disponibles
             if self.are_climate_data_available(regional_code):
                 climate_data = self.get_climate_data_for_regional(regional_code)
-                self.view.log_message(f"Datos climaticos disponibles para {regional_nombre}")
+                self.view.log_message(f"✓ Datos climáticos disponibles para {regional_nombre}")
+                
+                # NUEVO: Si la simulación está habilitada, abrir diálogo
+                if getattr(self.view, 'enable_simulation_checkbox', None) and \
+                self.view.enable_simulation_checkbox.isChecked():
+                    
+                    # Obtener mes de validación (último mes histórico)
+                    df_prepared = self.model.get_excel_data_for_analysis()
+                    if df_prepared is not None and 'Fecha' in df_prepared.columns:
+                        ultimo_mes = pd.to_datetime(df_prepared['Fecha'].iloc[-1]).month
+                    else:
+                        ultimo_mes = datetime.now().month
+                    
+                    self.view.log_message(" Simulación climática habilitada para validación")
+                    self.view.log_message("   Abriendo configurador de escenarios...")
+                    
+                    # Abrir diálogo de configuración
+                    dialog = ClimateSimulationDialog(
+                    climate_data=climate_data,
+                    mes_prediccion=ultimo_mes,
+                    regional_code=regional_code,
+                    regional_nombre=regional_nombre,
+                    mode='validation',  
+                    parent=self.view
+                    )
+                    
+                    # Conectar señales
+                    dialog.simulation_accepted.connect(
+                        lambda cfg: self._execute_validation(regional_code, climate_data, cfg)
+                    )
+                    dialog.simulation_cancelled.connect(
+                        lambda: self._execute_validation(regional_code, climate_data, {'enabled': False})
+                    )
+                    
+                    dialog.exec()
+                    return
             else:
-                self.view.log_message(f"Sin datos climaticos para {regional_nombre}")
+                self.view.log_message(f"⚠ Sin datos climáticos para {regional_nombre}")
         
+        # Si llegamos aquí, ejecutar validación normal (sin simulación)
+        self._execute_validation(regional_code, climate_data, None)
+
+    def _execute_validation(self, regional_code, climate_data, simulation_config):
+        """
+        Ejecutar validación con o sin simulación
+        NUEVO MÉTODO - Agregar después de run_validation()
+        """
         try:
-            self.view.log_message("Iniciando validacion del modelo...")
             self.view.set_buttons_enabled(False)
             self.view.update_status("Validando modelo SARIMAX...")
             
@@ -1054,13 +1097,27 @@ class AppController(QObject):
                 self.view.set_buttons_enabled(True)
                 return
             
-            # Pasar climate_data al thread
+            # Log según tipo de validación
+            if simulation_config and simulation_config.get('enabled', False):
+                summary = simulation_config.get('summary', {})
+                self.view.log_message("=" * 60)
+                self.view.log_message("VALIDACIÓN CON SIMULACIÓN CLIMÁTICA")
+                self.view.log_message("=" * 60)
+                self.view.log_message(f"Escenario: {summary.get('escenario', 'N/A')}")
+                self.view.log_message(f"Días simulados: {summary.get('dias_simulados', 'N/A')}")
+                self.view.log_message(f"Alcance: {summary.get('alcance_meses', 'N/A')} meses")
+            else:
+                self.view.log_message("Iniciando validación estándar...")
+            
+            # Crear y ejecutar thread
             self.validation_thread = ValidationThread(
                 df_prepared=df_prepared,
                 validation_service=self.validation_service,
                 regional_code=regional_code,
-                climate_data=climate_data
+                climate_data=climate_data,
+                simulation_config=simulation_config  # NUEVO PARÁMETRO
             )
+            
             self.validation_thread.progress_updated.connect(self.view.update_progress)
             self.validation_thread.message_logged.connect(self.view.log_message)
             self.validation_thread.finished.connect(self.on_validation_finished)
@@ -1070,10 +1127,9 @@ class AppController(QObject):
             self.validation_thread.start()
             
         except Exception as e:
-            self.view.log_error(f"Error iniciando validacion: {str(e)}")
+            self.view.log_error(f"Error ejecutando validación: {str(e)}")
             self.view.set_buttons_enabled(True)
             self.view.show_progress(False)
-
     
     def run_overfitting_detection(self):
         """Ejecutar detección de overfitting CON VARIABLES EXÓGENAS"""
@@ -1289,11 +1345,89 @@ class AppController(QObject):
                         break
     
     def on_validation_finished(self, result):
-        """Callback cuando termina la validacion - ACTUALIZADO SIN MARGENES DE ERROR"""
+        """Callback cuando termina la validación"""
         self.view.set_buttons_enabled(True)
         self.view.show_progress(False)
-        self.view.update_status("Validacion completada")
-        self.view.log_success("Validacion del modelo completada")
+        self.view.update_status("Validación completada")
+        
+        # NUEVO: Detectar si hubo simulación
+        model_params = result.get('model_params', {})
+        simulation_applied = model_params.get('with_simulation', False)
+        
+        if simulation_applied:
+            self.view.log_success("=" * 60)
+            self.view.log_success("VALIDACIÓN CON SIMULACIÓN CLIMÁTICA COMPLETADA")
+            self.view.log_success("=" * 60)
+            
+            # Mostrar resumen de simulación
+            sim_config = result.get('simulation_config', {})
+            if sim_config:
+                summary = sim_config.get('summary', {})
+                self.view.log_message(f" Escenario simulado: {summary.get('escenario', 'N/A')}")
+                self.view.log_message(f"Alcance: {summary.get('alcance_meses', 'N/A')} meses")
+                self.view.log_message(f" Días simulados: {summary.get('dias_simulados', 'N/A')}")
+                
+                # Mostrar cambios en variables
+                changes = summary.get('percentage_changes', {})
+                if changes:
+                    self.view.log_message("\n Cambios aplicados a variables:")
+                    var_names = {
+                        'temp_max': 'Temperatura máxima',
+                        'humedad_avg': 'Humedad relativa',
+                        'precip_total': 'Precipitación total'
+                    }
+                    for var, change_pct in changes.items():
+                        var_name = var_names.get(var, var)
+                        arrow = "↑" if change_pct > 0 else "↓" if change_pct < 0 else "→"
+                        self.view.log_message(f"   {arrow} {var_name}: {change_pct:+.1f}%")
+                
+                self.view.log_message("")
+                self.view.log_message("⚠️  IMPORTANTE:")
+                self.view.log_message("   Las métricas reflejan el desempeño del modelo bajo condiciones")
+                self.view.log_message("   climáticas HIPOTÉTICAS del escenario simulado.")
+                self.view.log_message("   Los resultados reales dependerán de las condiciones climáticas efectivas.")
+                self.view.log_message("")
+        else:
+            self.view.log_success("Validación del modelo completada")
+        
+        if result and 'metrics' in result:
+            metrics = result['metrics']
+            model_params = result.get('model_params', {})
+            
+            self.view.log_message("=" * 60)
+            self.view.log_message("RESULTADOS DE VALIDACIÓN")
+            self.view.log_message("=" * 60)
+            
+            # Mostrar resumen de simulación
+            sim_config = result.get('simulation_config', {}) if result else {}
+            if sim_config:
+                summary = sim_config.get('summary', {})
+                self.view.log_message(f"📊 Escenario simulado: {summary.get('escenario', 'N/A')}")
+                self.view.log_message(f"📅 Alcance: {summary.get('alcance_meses', 'N/A')} meses")
+                self.view.log_message(f"🌡️ Días simulados: {summary.get('dias_simulados', 'N/A')}")
+                
+                # Mostrar cambios en variables
+                changes = summary.get('percentage_changes', {})
+                if changes:
+                    self.view.log_message("\n🔄 Cambios aplicados a variables:")
+                    var_names = {
+                        'temp_max': 'Temperatura máxima',
+                        'humedad_avg': 'Humedad relativa',
+                        'precip_total': 'Precipitación total'
+                    }
+                    for var, change_pct in changes.items():
+                        var_name = var_names.get(var, var)
+                        arrow = "↑" if change_pct > 0 else "↓" if change_pct < 0 else "→"
+                        self.view.log_message(f"   {arrow} {var_name}: {change_pct:+.1f}%")
+                
+                self.view.log_message("")
+                self.view.log_message("⚠️  IMPORTANTE:")
+                self.view.log_message("   Las métricas reflejan el desempeño del modelo bajo condiciones")
+                self.view.log_message("   climáticas HIPOTÉTICAS del escenario simulado.")
+                self.view.log_message("   Los resultados reales dependerán de las condiciones climáticas efectivas.")
+                self.view.log_message("")
+        else:
+            self.view.log_success("Validación del modelo completada")
         
         if result and 'metrics' in result:
             metrics = result['metrics']
@@ -1362,7 +1496,7 @@ class AppController(QObject):
             elif precision >= 70:
                 self.view.log_message("Calidad: ACEPTABLE - Predicciones moderadamente confiables")
             elif precision >= 60:
-                self.view.log_message("Calidad: REGULAR - Usar con precaucion")
+                self.view.log_message("Calidad: REGULAR - Usar con precaución")
             else:
                 self.view.log_error("Calidad: BAJO - Modelo poco confiable")
             
@@ -1670,13 +1804,14 @@ class ValidationThread(QThread):
     error_occurred = pyqtSignal(str)
     
     def __init__(self, validation_service, file_path=None, df_prepared=None, 
-                 regional_code=None, climate_data=None):  
+                 regional_code=None, climate_data=None, simulation_config=None):  # NUEVO
         super().__init__()
         self.validation_service = validation_service
         self.file_path = file_path
         self.df_prepared = df_prepared
         self.regional_code = regional_code
-        self.climate_data = climate_data 
+        self.climate_data = climate_data
+        self.simulation_config = simulation_config  # NUEVO
 
     def run(self):
         try:
@@ -1685,7 +1820,8 @@ class ValidationThread(QThread):
                 file_path=self.file_path,
                 df_prepared=self.df_prepared,
                 regional_code=self.regional_code,
-                climate_data=self.climate_data,  
+                climate_data=self.climate_data,
+                simulation_config=self.simulation_config,  # NUEVO
                 progress_callback=self.progress_updated.emit,
                 log_callback=self.message_logged.emit
             )
@@ -1700,6 +1836,7 @@ class OverfittingThread(QThread):
     progress_updated = pyqtSignal(int, str)
     message_logged = pyqtSignal(str)
     finished = pyqtSignal(dict)
+   
     error_occurred = pyqtSignal(str)
     
     def __init__(self, overfitting_service, file_path=None, df_prepared=None, 

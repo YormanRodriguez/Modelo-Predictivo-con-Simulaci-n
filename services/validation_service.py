@@ -87,7 +87,7 @@ class ValidationService:
                       seasonal_order: Optional[Tuple] = None,
                       regional_code: Optional[str] = None, 
                       climate_data: Optional[pd.DataFrame] = None,
-                      simulation_config: Optional[Dict] = None,  # NUEVO PARAMETRO
+                      simulation_config: Optional[Dict] = None,  
                       progress_callback = None, 
                       log_callback = None) -> Dict[str, Any]:
         """
@@ -122,12 +122,37 @@ class ValidationService:
             if log_callback:
                 log_callback(f"Iniciando validacion con parametros: order={order}, seasonal_order={seasonal_order}")
                 log_callback(f"Regional: {regional_code} - Transformacion: {transformation.upper()}")
+                
                 if simulation_applied:
                     log_callback("=" * 60)
-                    log_callback("VALIDACION CON SIMULACION CLIMATICA")
+                    log_callback("  VALIDACIÓN CON SIMULACIÓN CLIMÁTICA")
+                    log_callback("=" * 60)
+                    
+                    summary = simulation_config.get('summary', {})
+                    log_callback(f" Escenario: {summary.get('escenario', 'N/A')}")
+                    log_callback(f" Alcance: {summary.get('alcance_meses', 'N/A')} meses")
+                    log_callback(f" Días base: {summary.get('dias_base', 'N/A')}")
+                    log_callback(f" Ajuste: {summary.get('slider_adjustment', 0):+d} días")
+                    log_callback(f" Total días simulados: {summary.get('dias_simulados', 'N/A')}")
+                    
+                    # Mostrar variables que se modificarán
+                    log_callback("\n Variables a modificar:")
+                    changes = summary.get('percentage_changes', {})
+                    var_names = {
+                        'temp_max': 'Temperatura máxima',
+                        'humedad_avg': 'Humedad relativa',
+                        'precip_total': 'Precipitación total'
+                    }
+                    for var, change_pct in changes.items():
+                        var_name = var_names.get(var, var)
+                        arrow = "↑" if change_pct > 0 else "↓" if change_pct < 0 else "→"
+                        log_callback(f"   {arrow} {var_name}: {change_pct:+.1f}%")
+                    
+                    log_callback("")
+                    log_callback("  NOTA: Validación bajo condiciones climáticas HIPOTÉTICAS")
                     log_callback("=" * 60)
                 else:
-                    log_callback("Modo: Validacion estandar")
+                    log_callback("Modo: Validacion estandar (sin simulacion)")
                 
             if progress_callback:
                 progress_callback(10, "Cargando datos...")
@@ -1021,10 +1046,12 @@ class ValidationService:
                 ax.set_xticklabels(labels_mensuales, rotation=45, ha='right', fontsize=9)
             
             # Titulo con info de simulacion
+            # Titulo con info de simulacion
             title_text = f"Validacion Modelo: SARIMAX{order}x{seasonal_order} + {transformation.upper()}"
             if simulation_applied:
                 summary = simulation_config.get('summary', {})
-                title_text += f" [SIMULACION: {summary.get('escenario', 'N/A')}]"
+                escenario_name = summary.get('escenario', 'N/A').upper()
+                title_text += f" [ SIMULACIÓN: {escenario_name}]"
             elif exog_info:
                 title_text += " [+EXOG]"
             
@@ -1041,20 +1068,26 @@ class ValidationService:
             plt.tight_layout()
             plt.subplots_adjust(top=0.93, bottom=0.35, left=0.038, right=0.787)
             
-            # Nota al pie (ACTUALIZADA con info de simulacion)
+            # Nota al pie 
             footer_text = f"Transformacion: {transformation.upper()} - Precision calculada como OptimizationService"
+            footer_color = 'lightyellow'
+            footer_edge_color = 'darkblue'
+            footer_text_color = 'darkblue'
+            
             if simulation_applied:
                 summary = simulation_config.get('summary', {})
-                footer_text += f" - SIMULACION CLIMATICA: {summary.get('escenario', 'N/A')}"
-                footer_text += " (Metricas bajo condiciones hipoteticas)"
+                escenario = summary.get('escenario', 'N/A').upper()
+                dias = summary.get('dias_simulados', 'N/A')
+                
+                footer_text = f"  VALIDACIÓN CON SIMULACIÓN CLIMÁTICA - Escenario: {escenario} ({dias} días)"
+                footer_text += " | Métricas bajo condiciones HIPOTÉTICAS"
+                footer_color = '#FFEBEE'
+                footer_edge_color = '#F44336'
+                footer_text_color = 'darkred'
             elif exog_info:
                 footer_text += f" - Con {len(exog_info)} variables exogenas"
-            footer_text += f" - Validacion: {metricas['validation_pct']:.0f}% test"
             
-            # Color del pie de pagina segun simulacion
-            footer_color = '#FFEBEE' if simulation_applied else 'lightyellow'
-            footer_edge_color = '#F44336' if simulation_applied else 'darkblue'
-            footer_text_color = 'darkred' if simulation_applied else 'darkblue'
+            footer_text += f" - Validacion: {metricas['validation_pct']:.0f}% test"
             
             plt.figtext(0.5, 0.02, footer_text, 
                        ha='center', fontsize=12, style='italic', color=footer_text_color, weight='bold',

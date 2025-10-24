@@ -413,12 +413,77 @@ class MainWindow(QMainWindow):
         layout.addWidget(climate_group)
         
         # Grupo 2.5: Simulación Climática (NUEVO)
-        simulation_group = self.create_styled_group("🌦️ Simulación Climática", "#9C27B0")
+        # Grupo 2.5: Simulación Climática
+        simulation_group = self.create_styled_group(" Simulación Climática", "#9C27B0")
         simulation_layout = QVBoxLayout(simulation_group)
         simulation_layout.setSpacing(10)
         
         # Checkbox para habilitar simulación
-        self.enable_simulation_checkbox = QCheckBox("Habilitar simulación climática antes de predicción")
+        self.enable_simulation_checkbox = QCheckBox("Habilitar simulación climática para predicción y validación")
+        self.enable_simulation_checkbox.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        self.enable_simulation_checkbox.setStyleSheet("""
+            QCheckBox {
+                spacing: 8px;
+                color: #333;
+            }
+            QCheckBox::indicator {
+                width: 20px;
+                height: 20px;
+                border: 2px solid #9C27B0;
+                border-radius: 4px;
+                background-color: white;
+            }
+            QCheckBox::indicator:checked {
+                background-color: #9C27B0;
+                image: url(none);
+            }
+            QCheckBox::indicator:hover {
+                border-color: #7B1FA2;
+            }
+        """)
+        self.enable_simulation_checkbox.stateChanged.connect(self.on_simulation_checkbox_changed)
+        simulation_layout.addWidget(self.enable_simulation_checkbox)
+        
+        # Descripción de la funcionalidad (ACTUALIZADA)
+        simulation_desc = QLabel(
+            "Cuando esté habilitado, podrá configurar escenarios climáticos "
+            "hipotéticos ( soleado,  lluvioso,  tormentoso,  ola de calor) "
+            "antes de ejecutar predicción o validación SAIDI.\n\n"
+            "• Predicción: Afecta las proyecciones futuras\n"
+            "• Validación: Evalúa sensibilidad del modelo a cambios climáticos"
+            )
+        simulation_desc.setWordWrap(True)
+        simulation_desc.setStyleSheet("""
+            QLabel {
+                background-color: #F3E5F5;
+                padding: 10px;
+                border-radius: 6px;
+                border-left: 4px solid #9C27B0;
+                color: #4A148C;
+                font-size: 10px;
+                font-style: italic;
+            }
+        """)
+        simulation_layout.addWidget(simulation_desc)
+        
+        # Indicador de estado
+        self.simulation_status_label = QLabel("")
+        self.simulation_status_label.setWordWrap(True)
+        self.simulation_status_label.setVisible(False)
+        self.simulation_status_label.setStyleSheet("""
+            QLabel {
+                background-color: #E1BEE7;
+                padding: 8px;
+                border-radius: 6px;
+                color: #6A1B9A;
+                font-size: 10px;
+                font-weight: bold;
+            }
+        """)
+        simulation_layout.addWidget(self.simulation_status_label)
+        
+        layout.addWidget(simulation_group)
+
         self.enable_simulation_checkbox.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
         self.enable_simulation_checkbox.setStyleSheet("""
             QCheckBox {
@@ -798,15 +863,18 @@ class MainWindow(QMainWindow):
         """Callback cuando cambia el estado del checkbox de simulación"""
         if state == Qt.CheckState.Checked.value:
             self.simulation_status_label.setText(
-                "✓ Simulación habilitada - Se abrirá configurador antes de predecir"
+                "✓ Simulación habilitada\n"
+                "  • Predicción: Se abrirá configurador antes de predecir\n"
+                "  • Validación: Se abrirá configurador antes de validar"
             )
             self.simulation_status_label.setVisible(True)
-            self.log_message("🌦️ Simulación climática HABILITADA")
-            self.log_message("   Al generar predicción, se abrirá el configurador de escenarios")
+            self.log_message(" Simulación climática HABILITADA")
+            self.log_message("   Disponible para PREDICCIÓN y VALIDACIÓN")
+            self.log_message("   Se abrirá configurador de escenarios antes de ejecutar")
         else:
             self.simulation_status_label.setVisible(False)
-            self.log_message("🌦️ Simulación climática DESHABILITADA")
-            self.log_message("   Las predicciones usarán proyección normal de variables exógenas")
+            self.log_message(" Simulación climática DESHABILITADA")
+            self.log_message("   Predicción y validación usarán datos climáticos reales")
     
     def on_climate_load_clicked(self, regional_code):
         """Callback cuando se hace clic en un botón de carga climática"""

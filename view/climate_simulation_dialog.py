@@ -13,13 +13,15 @@ class ClimateSimulationDialog(QDialog):
     simulation_accepted = pyqtSignal(dict)
     simulation_cancelled = pyqtSignal()
     
-    def __init__(self, climate_data, mes_prediccion, regional_code, regional_nombre, parent=None):
+    def __init__(self, climate_data, mes_prediccion, regional_code, regional_nombre, 
+             mode='prediction', parent=None):  
         super().__init__(parent)
         
         self.climate_data = climate_data
         self.mes_prediccion = mes_prediccion
         self.regional_code = regional_code
         self.regional_nombre = regional_nombre
+        self.mode = mode  
         
         self.simulation_service = ClimateSimulationService()
         
@@ -60,24 +62,43 @@ class ClimateSimulationDialog(QDialog):
         main_layout.setContentsMargins(16, 16, 16, 16)
         
         # Encabezado compacto
-        header = QLabel(f"Simulador Climático\n{self.regional_nombre}")
+        # Encabezado compacto
+        mode_text = "VALIDACIÓN" if self.mode == 'validation' else "PREDICCIÓN"
+        mode_icon = "📊" if self.mode == 'validation' else "🔮"
+        
+        header = QLabel(f"{mode_icon} Simulador Climático\n{mode_text} - {self.regional_nombre}")
         header.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
         header.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        header.setStyleSheet("""
-            QLabel {
-                color: #1976D2;
+        
+        # Color según modo
+        header_color = "#1976D2" if self.mode == 'prediction' else "#FF6F00"
+        gradient_start = "#E3F2FD" if self.mode == 'prediction' else "#FFF3E0"
+        gradient_end = "#BBDEFB" if self.mode == 'prediction' else "#FFE0B2"
+        
+        header.setStyleSheet(f"""
+            QLabel {{
+                color: {header_color};
                 padding: 10px;
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #E3F2FD, stop:1 #BBDEFB);
+                    stop:0 {gradient_start}, stop:1 {gradient_end});
                 border-radius: 6px;
-            }
+            }}
         """)
         main_layout.addWidget(header)
         
-        # Descripción compacta
-        desc = QLabel(
-            "Configure un escenario climático para ajustar la predicción SAIDI."
-        )
+        # Descripción según modo
+        if self.mode == 'validation':
+            desc_text = (
+                "Configure un escenario climático para evaluar la SENSIBILIDAD "
+                "del modelo bajo diferentes condiciones meteorológicas."
+            )
+        else:
+            desc_text = (
+                "Configure un escenario climático para ajustar la predicción SAIDI "
+                "según condiciones meteorológicas esperadas."
+            )
+        
+        desc = QLabel(desc_text)
         desc.setWordWrap(True)
         desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
         desc.setStyleSheet("color: #666; font-size: 10px; padding: 6px;")
@@ -245,25 +266,31 @@ class ClimateSimulationDialog(QDialog):
         """)
         buttons_layout.addWidget(self.no_simulation_button)
         
-        self.simulate_button = QPushButton("Simular Predicción")
+        button_text = "Validar con Simulación" if self.mode == 'validation' else "Simular Predicción"
+        self.simulate_button = QPushButton(button_text)
         self.simulate_button.setMinimumHeight(38)
         self.simulate_button.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
         self.simulate_button.setEnabled(False)
         self.simulate_button.clicked.connect(self.on_simulate)
-        self.simulate_button.setStyleSheet("""
-            QPushButton {
-                background-color: #4CAF50;
+        
+        # Color según modo
+        button_color = "#FF6F00" if self.mode == 'validation' else "#4CAF50"
+        button_hover = "#F57C00" if self.mode == 'validation' else "#45a049"
+        
+        self.simulate_button.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {button_color};
                 color: white;
                 border-radius: 5px;
                 padding: 0 20px;
-            }
-            QPushButton:hover {
-                background-color: #45a049;
-            }
-            QPushButton:disabled {
+            }}
+            QPushButton:hover {{
+                background-color: {button_hover};
+            }}
+            QPushButton:disabled {{
                 background-color: #e0e0e0;
                 color: #9e9e9e;
-            }
+            }}
         """)
         buttons_layout.addWidget(self.simulate_button)
         
@@ -481,6 +508,10 @@ class ClimateSimulationDialog(QDialog):
                 changes.append(f"{var_name}: <b{color}>{arrow}{change_pct:+.1f}%</b>")
             
             preview += " | ".join(changes)
+            
+            # Advertencia según modo
+            if self.mode == 'validation':
+                preview += "<br><b style='color: #F57C00;'>⚠ Validación: Evalúa sensibilidad del modelo</b>"
             
             self.preview_label.setText(preview)
             
