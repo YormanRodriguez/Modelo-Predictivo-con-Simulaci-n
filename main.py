@@ -97,11 +97,15 @@ class SAIDIApplication:
             else:
                 print("⚠ Vista no tiene 'validate_button'")
             
-            # Detección de Overfitting
-            if hasattr(self.main_window, 'overfitting_button'):
-                if hasattr(self.controller, 'run_overfitting_detection'):
-                    self.main_window.overfitting_button.clicked.connect(self.controller.run_overfitting_detection)
-                    print("✓ Botón 'Overfitting' conectado")
+            # Validación Temporal Completa (Rolling Validation)
+            if hasattr(self.main_window, 'rolling_validation_button'):
+                if hasattr(self.controller, 'run_rolling_validation'):
+                    self.main_window.rolling_validation_button.clicked.connect(self.controller.run_rolling_validation)
+                    print("✓ Botón 'Validación Temporal Completa' conectado")
+                else:
+                    print("⚠ Controlador no tiene método 'run_rolling_validation'")
+            else:
+                print("⚠ Vista no tiene 'rolling_validation_button'")
             
             # ========== BOTONES DE MEJORAS ANTI-OVERFITTING ==========
             

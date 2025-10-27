@@ -613,7 +613,7 @@ class PredictionService:
                 'historical_count': len(historico),
                 'prediction_count': len(pred_mean),
                 'plot_file': plot_path,
-                'export_service': self.export_service  # NUEVA LINEA - permite acceso al servicio
+                'export_service': self.export_service  
             }
             
         except Exception as e:

@@ -136,10 +136,10 @@ class MainWindow(QMainWindow):
     prediction_requested = pyqtSignal()
     optimization_requested = pyqtSignal()
     validation_requested = pyqtSignal()
-    overfitting_requested = pyqtSignal()
+    rolling_validation_requested = pyqtSignal()
     regional_selected = pyqtSignal(str)
     climate_load_requested = pyqtSignal(str)
-    export_requested = pyqtSignal()   # Nueva señal para exportar a Excel
+    export_requested = pyqtSignal()   
     
     def __init__(self):
         super().__init__()
@@ -412,7 +412,6 @@ class MainWindow(QMainWindow):
         
         layout.addWidget(climate_group)
         
-        # Grupo 2.5: Simulación Climática (NUEVO)
         # Grupo 2.5: Simulación Climática
         simulation_group = self.create_styled_group(" Simulación Climática", "#9C27B0")
         simulation_layout = QVBoxLayout(simulation_group)
@@ -555,7 +554,7 @@ class MainWindow(QMainWindow):
             (" Generar Predicción", "predict_button", "#2196F3"),
             (" Optimizar Parámetros", "optimize_button", "#9C27B0"),
             (" Validar Modelo", "validate_button", "#00BCD4"),
-            (" Detectar Overfitting", "overfitting_button", "#FF6B6B")
+            (" Validación Temporal Completa", "rolling_validation_button", "#FF6B6B")
         ]
         
         for text, attr_name, color in analysis_buttons:
@@ -1052,7 +1051,7 @@ class MainWindow(QMainWindow):
             self.predict_button.setEnabled(True)
             self.optimize_button.setEnabled(True)
             self.validate_button.setEnabled(True)
-            self.overfitting_button.setEnabled(True)
+            self.rolling_validation_button.setEnabled(True)
             self.cv_button.setEnabled(True)
             self.simple_model_button.setEnabled(True)
             self.transformation_button.setEnabled(True)
@@ -1062,7 +1061,7 @@ class MainWindow(QMainWindow):
             self.predict_button.setEnabled(True)
             self.optimize_button.setEnabled(True)
             self.validate_button.setEnabled(True)
-            self.overfitting_button.setEnabled(True)
+            self.rolling_validation_button.setEnabled(True)
             self.cv_button.setEnabled(True)
             self.simple_model_button.setEnabled(True)
             self.transformation_button.setEnabled(True)
@@ -1130,7 +1129,7 @@ class MainWindow(QMainWindow):
             self.predict_button.setEnabled(enabled)
             self.optimize_button.setEnabled(enabled)
             self.validate_button.setEnabled(enabled)
-            self.overfitting_button.setEnabled(enabled)
+            self.rolling_validation_button.setEnabled(enabled)
             self.cv_button.setEnabled(enabled)
             self.simple_model_button.setEnabled(enabled)
             self.transformation_button.setEnabled(enabled)

@@ -11,7 +11,7 @@ from datetime import datetime
 from services.prediction_service import PredictionService
 from services.optimization_service import OptimizationService
 from services.validation_service import ValidationService
-from services.overfitting_detection_service import OverfittingDetectionService
+from services.rolling_validation_service import RollingValidationService
 from services.improved_model_service import ImprovedModelService
 
 # Importar el visor de gráficas
@@ -31,7 +31,7 @@ class AppController(QObject):
         self.prediction_service = PredictionService()
         self.optimization_service = OptimizationService()
         self.validation_service = ValidationService()
-        self.overfitting_service = OverfittingDetectionService()
+        self.rolling_validation_service = RollingValidationService()
         self.improved_model_service = ImprovedModelService()
         
         # Referencias a diálogos de gráficas para limpieza
@@ -295,7 +295,7 @@ class AppController(QObject):
             )
             
             self.view.log_message(f"Ejecutando CV para: {regional_nombre}")
-            self.view.log_message(f"Transformación asignada: {transformation.UPPER()}")
+            self.view.log_message(f"Transformación asignada: {transformation.upper()}")
             
             # NUEVO: Verificar datos climáticos
             if self.are_climate_data_available(regional_code):
@@ -594,7 +594,7 @@ class AppController(QObject):
             except Exception:
                 pass
             try:
-                self.overfitting_service.cleanup_plot_file()
+                self.rolling_validation_service.cleanup_plot_file()
             except Exception:
                 pass
             gc.collect()
@@ -1129,8 +1129,8 @@ class AppController(QObject):
             self.view.set_buttons_enabled(True)
             self.view.show_progress(False)
     
-    def run_overfitting_detection(self):
-        """Ejecutar detección de overfitting CON VARIABLES EXÓGENAS (sin simulación)"""
+    def run_rolling_validation(self):
+        """Ejecutar validación temporal completa (Rolling Forecast + CV + Parameter Stability + Backtesting)"""
         if not self.model.is_excel_loaded():
             self.show_warning("Debe cargar un archivo Excel primero")
             return
@@ -1146,25 +1146,25 @@ class AppController(QObject):
             regional_code = self.model.get_selected_regional()
             regional_nombre = self.model.REGIONAL_MAPPING.get(regional_code, regional_code)
             
-            transformation = self.overfitting_service.REGIONAL_TRANSFORMATIONS.get(
+            transformation = self.rolling_validation_service.REGIONAL_TRANSFORMATIONS.get(
                 regional_code, 'original'
             )
             
-            self.view.log_message(f"Ejecutando detección de overfitting para: {regional_nombre}")
+            self.view.log_message(f"Ejecutando validación temporal completa para: {regional_nombre}")
             self.view.log_message(f"Transformación asignada: {transformation.upper()}")
-            
-            # NUEVO: Obtener datos climáticos si están disponibles
+
+            # Obtener datos climáticos si están disponibles
             if self.are_climate_data_available(regional_code):
                 climate_data = self.get_climate_data_for_regional(regional_code)
-                self.view.log_message(f"✓ Datos climáticos disponibles - Se incluirán en el análisis")
+                self.view.log_message(f" Datos climáticos disponibles - Se incluirán en el análisis")
             else:
-                self.view.log_message(f"⚠ Sin datos climáticos - Análisis sin variables exógenas")
+                self.view.log_message(f" Sin datos climáticos - Análisis sin variables exógenas")
         
         try:
-            self.view.log_message("Iniciando detección de overfitting...")
-            self.view.log_message("División: 70% Training, 15% Validation, 15% Test")
+            self.view.log_message("Iniciando validación temporal completa...")
+            self.view.log_message("Incluye: Rolling Forecast, CV, Parameter Stability, Backtesting")
             self.view.set_buttons_enabled(False)
-            self.view.update_status("Analizando overfitting del modelo...")
+            self.view.update_status("Ejecutando validación temporal completa...")
             
             df_prepared = self.model.get_excel_data_for_analysis()
             
@@ -1173,23 +1173,23 @@ class AppController(QObject):
                 self.view.set_buttons_enabled(True)
                 return
             
-            # MODIFICADO: Pasar climate_data al thread
-            self.overfitting_thread = OverfittingThread(
-                overfitting_service=self.overfitting_service,
+            # Crear thread con el nuevo servicio
+            self.rolling_validation_thread = RollingValidationThread(
+                rolling_validation_service=self.rolling_validation_service,
                 df_prepared=df_prepared,
                 regional_code=regional_code,
-                climate_data=climate_data  # NUEVO PARÁMETRO
+                climate_data=climate_data
             )
-            self.overfitting_thread.progress_updated.connect(self.view.update_progress)
-            self.overfitting_thread.message_logged.connect(self.view.log_message)
-            self.overfitting_thread.finished.connect(self.on_overfitting_finished)
-            self.overfitting_thread.error_occurred.connect(self.on_overfitting_error)
+            self.rolling_validation_thread.progress_updated.connect(self.view.update_progress)
+            self.rolling_validation_thread.message_logged.connect(self.view.log_message)
+            self.rolling_validation_thread.finished.connect(self.on_rolling_validation_finished)
+            self.rolling_validation_thread.error_occurred.connect(self.on_rolling_validation_error)
             
             self.view.show_progress(True)
-            self.overfitting_thread.start()
+            self.rolling_validation_thread.start()
             
         except Exception as e:
-            self.view.log_error(f"Error iniciando detección de overfitting: {str(e)}")
+            self.view.log_error(f"Error iniciando validación temporal: {str(e)}")
             self.view.set_buttons_enabled(True)
             self.view.show_progress(False)
     
@@ -1472,19 +1472,19 @@ class AppController(QObject):
         if result and 'plot_file' in result and result['plot_file']:
             self.show_plot(result['plot_file'], "Validacion del Modelo SAIDI")
     
-    def on_overfitting_finished(self, result):
-        """Callback cuando termina detección de overfitting - MODERNIZADO"""
+    def on_rolling_validation_finished(self, result):
+        """Callback cuando termina validación temporal completa"""
         self.view.set_buttons_enabled(True)
         self.view.show_progress(False)
-        self.view.update_status("Análisis de overfitting completado")
-        self.view.log_success("Detección de overfitting completada")
+        self.view.update_status("Validación temporal completada")
+        self.view.log_success("Validación temporal completa finalizada")
         
-        if result and 'overfitting_analysis' in result:
-            analysis = result['overfitting_analysis']
+        if result and 'validation_analysis' in result:
+            analysis = result['validation_analysis']
             model_params = result.get('model_params', {})
             
             self.view.log_message("=" * 60)
-            self.view.log_message("ANÁLISIS DE OVERFITTING")
+            self.view.log_message("VALIDACIÓN TEMPORAL COMPLETA")
             self.view.log_message("=" * 60)
             
             # Información del modelo
@@ -1497,46 +1497,79 @@ class AppController(QObject):
                 for var_code, var_data in exog_info.items():
                     self.view.log_message(f"  • {var_data['nombre']}")
             
-            self.view.log_message("")
-            self.view.log_message(f"Estado: {analysis['status']}")
-            self.view.log_message(f"Nivel de Overfitting: {analysis['overfitting_level']}")
-            self.view.log_message(f"Score: {analysis['overfitting_score']:.2f}/100")
-            
-            # Mostrar degradaciones
-            self.view.log_message("")
-            self.view.log_message("DEGRADACIONES Train→Test:")
-            self.view.log_message(f"  • Precisión: {analysis['precision_degradation']:.1f}%")
-            self.view.log_message(f"  • R²: {analysis['r2_degradation']:.1f}%")
-            self.view.log_message(f"  • RMSE: {analysis['rmse_increase']:.1f}%")
-            
-            # Métricas por conjunto
-            metrics = result.get('metrics', {})
-            self.view.log_message("")
-            self.view.log_message("MÉTRICAS POR CONJUNTO:")
-            
-            for set_name, set_label in [('train', 'TRAINING'), ('validation', 'VALIDATION'), ('test', 'TEST')]:
-                if set_name in metrics:
-                    m = metrics[set_name]
-                    self.view.log_message(f"\n{set_label}:")
-                    self.view.log_message(f"  • Precisión: {m['precision_final']:.1f}%")
-                    self.view.log_message(f"  • RMSE: {m['rmse']:.4f} min")
-                    self.view.log_message(f"  • R²: {m['r2']:.4f}")
+            # DIAGNÓSTICO FINAL
+            final_diagnosis = analysis.get('final_diagnosis', {})
             
             self.view.log_message("")
+            self.view.log_message(" DIAGNÓSTICO FINAL:")
+            self.view.log_message(f"  Calidad del Modelo: {final_diagnosis.get('model_quality', 'N/A')}")
+            self.view.log_message(f"  Nivel de Confianza: {final_diagnosis.get('confidence_level', 0):.1f}%")
+            self.view.log_message(f"  Recomendación: {final_diagnosis.get('recommendation', 'N/A')}")
             
-            if analysis.get('has_overfitting', False):
-                self.view.log_message("⚠️ OVERFITTING DETECTADO")
-                self.view.log_message("Recomendaciones:")
-                for rec in analysis['recommendations']:
-                    self.view.log_message(f"  • {rec}")
-            else:
-                self.view.log_success("✅ NO SE DETECTÓ OVERFITTING SIGNIFICATIVO")
-                self.view.log_success("El modelo generaliza adecuadamente")
+            if final_diagnosis.get('limitations'):
+                self.view.log_message("\n  LIMITACIONES IDENTIFICADAS:")
+                for lim in final_diagnosis['limitations']:
+                    self.view.log_message(f"  • {lim}")
+            
+            # ROLLING FORECAST
+            rolling_results = analysis.get('rolling_forecast', {})
+            if rolling_results:
+                self.view.log_message("")
+                self.view.log_message(" ROLLING FORECAST:")
+                self.view.log_message(f"  RMSE: {rolling_results.get('rmse', 0):.2f} min")
+                self.view.log_message(f"  Precisión: {rolling_results.get('precision', 0):.1f}%")
+                self.view.log_message(f"  Calidad: {rolling_results.get('prediction_quality', 'N/A')}")
+            
+            # CROSS-VALIDATION
+            cv_results = analysis.get('cross_validation', {})
+            if cv_results:
+                self.view.log_message("")
+                self.view.log_message(" TIME SERIES CROSS-VALIDATION:")
+                self.view.log_message(f"  Mean RMSE: {cv_results.get('mean_rmse', 0):.4f} ± {cv_results.get('std_rmse', 0):.4f}")
+                self.view.log_message(f"  Stability Score: {cv_results.get('cv_stability_score', 0):.1f}/100")
+            
+            # PARAMETER STABILITY
+            param_stability = analysis.get('parameter_stability', {})
+            if param_stability:
+                self.view.log_message("")
+                self.view.log_message(" ESTABILIDAD DE PARÁMETROS:")
+                self.view.log_message(f"  Overall Stability: {param_stability.get('overall_stability_score', 0):.1f}/100")
+                self.view.log_message(f"  Interpretación: {param_stability.get('interpretation', 'N/A')}")
+                
+                unstable = param_stability.get('unstable_params', [])
+                if unstable:
+                    self.view.log_message(f"  Parámetros inestables: {', '.join(unstable)}")
+            
+            # BACKTESTING
+            backtesting_results = analysis.get('backtesting', {})
+            if backtesting_results:
+                self.view.log_message("")
+                self.view.log_message(" BACKTESTING MULTI-HORIZONTE:")
+                self.view.log_message(f"  Horizonte óptimo: {backtesting_results.get('optimal_horizon', 0)} meses")
+                self.view.log_message(f"  Degradación: {backtesting_results.get('degradation_rate', 0):.2f}% por mes")
+            
+            # SCORES POR COMPONENTE
+            component_scores = final_diagnosis.get('component_scores', {})
+            if component_scores:
+                self.view.log_message("")
+                self.view.log_message(" SCORES POR COMPONENTE:")
+                for component, score in component_scores.items():
+                    marker = "✓" if score >= 80 else "○" if score >= 65 else "✗"
+                    self.view.log_message(f"  {marker} {component}: {score:.1f}/100")
             
             self.view.log_message("=" * 60)
         
+        # Mostrar gráfica
         if result and 'plot_file' in result and result['plot_file']:
-            self.show_plot(result['plot_file'], "Análisis de Overfitting")
+            self.show_plot(result['plot_file'], "Validación Temporal Completa")
+
+    def on_rolling_validation_error(self, error_msg):
+        """Callback cuando hay error en validación temporal"""
+        self.view.set_buttons_enabled(True)
+        self.view.show_progress(False)
+        self.view.update_status("Error en validación temporal")
+        self.view.log_error(f"Error en validación temporal: {error_msg}")
+        self.show_error(f"Error durante la validación temporal: {error_msg}")
     
     def on_prediction_error(self, error_msg):
         self.view.set_buttons_enabled(True)
@@ -1560,14 +1593,6 @@ class AppController(QObject):
         self.view.update_status("Error en validacion")
         self.view.log_error(f"Error en validacion: {error_msg}")
         self.show_error(f"Error durante la validacion: {error_msg}")
-    
-    def on_overfitting_error(self, error_msg):
-        """Callback cuando hay error en detección de overfitting"""
-        self.view.set_buttons_enabled(True)
-        self.view.show_progress(False)
-        self.view.update_status("Error en análisis de overfitting")
-        self.view.log_error(f"Error en overfitting: {error_msg}")
-        self.show_error(f"Error durante la detección de overfitting: {error_msg}")
     
     def show_error(self, message):
         """Mostrar mensaje de error"""
@@ -1834,32 +1859,33 @@ class ValidationThread(QThread):
             self.error_occurred.emit(str(e))
 
 
-class OverfittingThread(QThread):
-    """Hilo para ejecutar detección de overfitting en background"""
+class RollingValidationThread(QThread):
+    """Hilo para ejecutar validación temporal completa en background"""
     
     progress_updated = pyqtSignal(int, str)
     message_logged = pyqtSignal(str)
     finished = pyqtSignal(dict)
-   
     error_occurred = pyqtSignal(str)
     
-    def __init__(self, overfitting_service, file_path=None, df_prepared=None, 
-                 regional_code=None, climate_data=None):  
+    def __init__(self, rolling_validation_service, file_path=None, df_prepared=None, 
+                 regional_code=None, climate_data=None, validation_months=6):  
         super().__init__()
-        self.overfitting_service = overfitting_service
+        self.rolling_validation_service = rolling_validation_service
         self.file_path = file_path
         self.df_prepared = df_prepared
         self.regional_code = regional_code
-        self.climate_data = climate_data 
+        self.climate_data = climate_data
+        self.validation_months = validation_months
     
     def run(self):
         try:
-            self.message_logged.emit("Ejecutando detección de overfitting...")
-            result = self.overfitting_service.run_overfitting_detection(
+            self.message_logged.emit("Ejecutando validación temporal completa...")
+            result = self.rolling_validation_service.run_comprehensive_validation(
                 file_path=self.file_path,
                 df_prepared=self.df_prepared,
                 regional_code=self.regional_code,
-                climate_data=self.climate_data, 
+                climate_data=self.climate_data,
+                validation_months=self.validation_months,
                 progress_callback=self.progress_updated.emit,
                 log_callback=self.message_logged.emit
             )

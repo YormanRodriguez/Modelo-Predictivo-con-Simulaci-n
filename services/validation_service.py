@@ -100,7 +100,7 @@ class ValidationService:
             seasonal_order: Orden estacional
             regional_code: Codigo de la regional (e.g., 'SAIDI_C', 'SAIDI_O')
             climate_data: DataFrame con datos climaticos mensuales
-            simulation_config: Configuracion de simulacion climatica (NUEVO)
+            simulation_config: Configuracion de simulacion climatica
             progress_callback: Funcion para actualizar progreso
             log_callback: Funcion para logging
         
@@ -449,7 +449,7 @@ class ValidationService:
                 pct_validacion, 
                 transformation,
                 exog_info,
-                simulation_config if simulation_applied else None  # NUEVO
+                simulation_config if simulation_applied else None  
             )
             
             if progress_callback:
@@ -464,14 +464,14 @@ class ValidationService:
                     'transformation': transformation,
                     'regional_code': regional_code,
                     'with_exogenous': exog_df is not None,
-                    'with_simulation': simulation_applied,  # NUEVO
+                    'with_simulation': simulation_applied,  
                     'complexity': complexity_penalty
                 },
                 'predictions': {
                     'mean': predicciones_validacion.to_dict()
                 },
                 'exogenous_vars': exog_info,
-                'simulation_config': simulation_config if simulation_applied else None,  # NUEVO
+                'simulation_config': simulation_config if simulation_applied else None,  
                 'training_count': len(datos_entrenamiento_original),
                 'validation_count': len(datos_validacion_original),
                 'validation_percentage': pct_validacion * 100,
@@ -950,7 +950,7 @@ class ValidationService:
                     fontsize=10, verticalalignment='top', 
                     bbox=dict(boxstyle='round,pad=0.5', facecolor='lightblue', alpha=0.9, edgecolor='navy'))
             
-            # Cuadro de estabilidad y complejidad (NUEVO)
+            # Cuadro de estabilidad y complejidad
             stability = metricas.get('stability_score', 0)
             complexity = metricas.get('complexity', 0)
             composite = metricas.get('composite_score', 0)

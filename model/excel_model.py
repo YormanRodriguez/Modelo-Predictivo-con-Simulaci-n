@@ -29,9 +29,9 @@ class ExcelModel(QObject):
         self._file_path = None
         self._validated = False
         self._file_info = {}
-        self._is_regional_format = False  # Nuevo: indica si es formato regional
-        self._available_regionales = []  # Nuevo: lista de regionales disponibles
-        self._selected_regional = None  # Nuevo: regional seleccionada
+        self._is_regional_format = False  #indica si es formato regional
+        self._available_regionales = []  #lista de regionales disponibles
+        self._selected_regional = None  #regional seleccionada
         
     def load_excel_file(self, file_path: str) -> bool:
         """Cargar archivo Excel desde una ruta específica"""
