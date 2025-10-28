@@ -56,8 +56,8 @@ class OptimizationService:
         },
         'SAIDI_T': {
             'temp_max': 'Temperatura maxima',
-            'humedad_avg': 'Humedad relativa',
-            'precip_total': 'Precipitacion total'
+            'uv_index_avg': 'Indice UV promedio',
+            'heat_index_avg': 'Indice de calor'
         },
     }
     
@@ -949,7 +949,9 @@ class OptimizationService:
             climate_column_mapping = {
                 'temp_max': 'temp_max',
                 'humedad_avg': 'humedad_avg',
-                'precip_total': 'precip_total'
+                'precip_total': 'precip_total',
+                'uv_index_avg': 'uv_index_avg',
+                'heat_index_avg': 'heat_index_avg'
             }
             
             exog_df = pd.DataFrame(index=df_saidi.index)
@@ -973,9 +975,11 @@ class OptimizationService:
                             'nombre': var_nombre,
                             'columna_clima': climate_col
                         }
-                        print(f"[DEBUG_OPT] Variable {var_code} preparada")
+                        print(f"[DEBUG_OPT]  Variable {var_code} preparada ({var_nombre})")
                 else:
                     print(f"[DEBUG_OPT] Variable {var_code} no encontrada en datos climaticos")
+                    if log_callback and var_code in ['uv_index_avg', 'heat_index_avg']:
+                        log_callback(f"  Variable crítica para Tibú no encontrada: {var_nombre}")
             
             if exog_df.empty or exog_df.shape[1] == 0:
                 print("[DEBUG_OPT] No se pudieron preparar variables exogenas")

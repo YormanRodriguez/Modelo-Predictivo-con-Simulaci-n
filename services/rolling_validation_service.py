@@ -290,14 +290,14 @@ class RollingValidationService:
                             columns=exog_df.columns
                         )
                         if log_callback and i == 0:
-                            log_callback(f"ℹ️ Usando promedios históricos para variables exógenas futuras")
+                            log_callback(f"i Usando promedios históricos para variables exógenas futuras")
                     else:
                         exog_pred = None
             
             #  VALIDACIÓN: Verificar que no haya NaN en los datos
             if train_data_trans.isna().any() or (exog_train is not None and exog_train.isna().any().any()):
                 if log_callback:
-                    log_callback(f"⚠️ Iteración {i+1} contiene NaN - omitida")
+                    log_callback(f" Iteración {i+1} contiene NaN - omitida")
                 continue
             
             try:
@@ -437,7 +437,7 @@ class RollingValidationService:
             #  SEGURIDAD: Detectar bucle infinito
             if iteration_count > max_iterations:
                 if log_callback:
-                    log_callback(f"⚠️ ALERTA: Detenido por seguridad tras {iteration_count} iteraciones")
+                    log_callback(f" ALERTA: Detenido por seguridad tras {iteration_count} iteraciones")
                     log_callback(f"   Se esperaban {n_splits} splits pero se detectó bucle infinito")
                 break
             
@@ -536,7 +536,7 @@ class RollingValidationService:
         
         # Mostrar resumen de splits fallidos
         if failed_splits > 0 and log_callback:
-            log_callback(f"ℹ Total de splits omitidos: {failed_splits}/{n_splits} ({failed_splits/n_splits*100:.1f}%)")
+            log_callback(f"i Total de splits omitidos: {failed_splits}/{n_splits} ({failed_splits/n_splits*100:.1f}%)")
         
         # Estadísticas
         mean_rmse = np.mean(rmse_scores)
@@ -1199,11 +1199,7 @@ class RollingValidationService:
             
             # Eliminar columnas completamente vacías
             exog_df = exog_df.dropna(how='all', axis=1)
-            
-            # CRÍTICO: Ya NO necesitamos interpolación agresiva aquí
-            # porque _align_exog_to_saidi() ya maneja todos los casos
-            # Solo verificamos que no haya NaN residuales
-            
+
             # Verificación final
             if exog_df.isna().any().any():
                 if log_callback:

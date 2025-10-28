@@ -74,38 +74,38 @@ class SAIDIApplication:
             # Carga de Excel
             if hasattr(self.main_window, 'load_excel_button'):
                 self.main_window.load_excel_button.clicked.connect(self.controller.load_excel_file)
-                print("✓ Botón 'Cargar Excel' conectado")
+                print(" Botón 'Cargar Excel' conectado")
             
             # Predicción
             if hasattr(self.main_window, 'predict_button'):
                 self.main_window.predict_button.clicked.connect(self.controller.run_prediction)
-                print("✓ Botón 'Predicción' conectado")
+                print(" Botón 'Predicción' conectado")
             
             # Optimización
             if hasattr(self.main_window, 'optimize_button'):
                 if hasattr(self.controller, 'run_optimization'):
                     self.main_window.optimize_button.clicked.connect(self.controller.run_optimization)
-                    print("✓ Botón 'Optimización' conectado")
+                    print(" Botón 'Optimización' conectado")
             
             # VALIDACIÓN - ESTA ES LA CONEXIÓN QUE FALTABA
             if hasattr(self.main_window, 'validate_button'):
                 if hasattr(self.controller, 'run_validation'):
                     self.main_window.validate_button.clicked.connect(self.controller.run_validation)
-                    print("✓ Botón 'Validación' conectado")
+                    print(" Botón 'Validación' conectado")
                 else:
-                    print("⚠ Controlador no tiene método 'run_validation'")
+                    print("Controlador no tiene método 'run_validation'")
             else:
-                print("⚠ Vista no tiene 'validate_button'")
+                print(" Vista no tiene 'validate_button'")
             
             # Validación Temporal Completa (Rolling Validation)
             if hasattr(self.main_window, 'rolling_validation_button'):
                 if hasattr(self.controller, 'run_rolling_validation'):
                     self.main_window.rolling_validation_button.clicked.connect(self.controller.run_rolling_validation)
-                    print("✓ Botón 'Validación Temporal Completa' conectado")
+                    print(" Botón 'Validación Temporal Completa' conectado")
                 else:
-                    print("⚠ Controlador no tiene método 'run_rolling_validation'")
+                    print(" Controlador no tiene método 'run_rolling_validation'")
             else:
-                print("⚠ Vista no tiene 'rolling_validation_button'")
+                print(" Vista no tiene 'rolling_validation_button'")
             
             # ========== BOTONES DE MEJORAS ANTI-OVERFITTING ==========
             
@@ -113,61 +113,61 @@ class SAIDIApplication:
             if hasattr(self.main_window, 'cv_button'):
                 if hasattr(self.controller, 'run_cross_validation'):
                     self.main_window.cv_button.clicked.connect(self.controller.run_cross_validation)
-                    print("✓ Botón 'Cross-Validation' conectado")
+                    print(" Botón 'Cross-Validation' conectado")
             
             # Buscar Modelo Simple
             if hasattr(self.main_window, 'simple_model_button'):
                 if hasattr(self.controller, 'run_find_best_simple_model'):
                     self.main_window.simple_model_button.clicked.connect(self.controller.run_find_best_simple_model)
-                    print("✓ Botón 'Modelo Simple' conectado")
+                    print(" Botón 'Modelo Simple' conectado")
             
             # Comparar Transformaciones
             if hasattr(self.main_window, 'transformation_button'):
                 if hasattr(self.controller, 'run_compare_transformations'):
                     self.main_window.transformation_button.clicked.connect(self.controller.run_compare_transformations)
-                    print("✓ Botón 'Transformaciones' conectado")
+                    print(" Botón 'Transformaciones' conectado")
             
             # ========== SELECTOR DE REGIONAL ==========
             
             if hasattr(self.main_window, 'regional_selected'):
                 self.main_window.regional_selected.connect(self.controller.on_regional_selected)
-                print("✓ Selector de regional conectado")
+                print(" Selector de regional conectado")
             
             # ========== CARGA DE DATOS CLIMÁTICOS ==========
             
             if hasattr(self.main_window, 'climate_load_requested'):
                 self.main_window.climate_load_requested.connect(self.controller.load_climate_file)
-                print("✓ Carga de datos climáticos conectada")
+                print(" Carga de datos climáticos conectada")
             
             # ========== EXPORTACIÓN A EXCEL ==========
             
             if hasattr(self.main_window, 'export_requested'):
                 if hasattr(self.controller, 'export_predictions_to_excel'):
                     self.main_window.export_requested.connect(self.controller.export_predictions_to_excel)
-                    print("✓ Señal de exportación conectada")
+                    print(" Señal de exportación conectada")
                 else:
-                    print("⚠ Controlador no tiene método 'export_predictions_to_excel'")
+                    print("Controlador no tiene método 'export_predictions_to_excel'")
             
             # ========== SEÑALES DEL MODELO -> VISTA ==========
             
             # Excel Model
             if hasattr(self.excel_model, 'data_loaded'):
                 self.excel_model.data_loaded.connect(self.main_window.on_excel_loaded)
-                print("✓ Modelo Excel -> Vista conectado")
+                print(" Modelo Excel -> Vista conectado")
             
             # Climate Model
             if hasattr(self.climate_model, 'climate_data_loaded'):
                 self.climate_model.climate_data_loaded.connect(self.controller.on_climate_data_loaded)
-                print("✓ Modelo Clima -> Controlador conectado (data_loaded)")
+                print(" Modelo Clima -> Controlador conectado (data_loaded)")
             
             if hasattr(self.climate_model, 'all_climate_loaded'):
                 self.climate_model.all_climate_loaded.connect(self.controller.on_all_climate_loaded)
-                print("✓ Modelo Clima -> Controlador conectado (all_loaded)")
+                print(" Modelo Clima -> Controlador conectado (all_loaded)")
             
-            print("\n✓ Todas las conexiones MVC establecidas correctamente\n")
+            print("\n Todas las conexiones MVC establecidas correctamente\n")
         
         except Exception as e:
-            print(f"\n✗ ERROR conectando señales: {e}\n")
+            print(f"\n ERROR conectando señales: {e}\n")
             import traceback
             traceback.print_exc()
     

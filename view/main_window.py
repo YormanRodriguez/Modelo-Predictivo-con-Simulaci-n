@@ -1,4 +1,4 @@
-# view/main_window.py - Vista principal mejorada con diseño responsive
+# view/main_window.py 
 from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                             QPushButton, QLabel, QTextEdit, QGroupBox, 
                             QProgressBar, QStatusBar, QSplitter, QScrollArea, QDialog,
@@ -197,7 +197,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(12)
         
-        # Encabezado mejorado
+        # Encabezado
         header_widget = QWidget()
         header_layout = QVBoxLayout(header_widget)
         header_layout.setContentsMargins(12, 16, 12, 16)

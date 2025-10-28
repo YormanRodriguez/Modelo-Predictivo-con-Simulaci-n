@@ -25,51 +25,92 @@ class ClimateModel(QObject):
     
     # Columnas climáticas relevantes (ESTRUCTURA MENSUAL)
     CLIMATE_COLUMNS = {
-        # Identificación temporal
-        'date': 'year_month',  # Columna principal de fecha (YYYY-MM)
-        'year': 'year',
-        'month': 'month',
-        
-        # Temperatura (promedios mensuales)
-        'temperature_avg': 'wswdat_temp_c_monthly_avg',
-        'temperature_min': 'wswdat_temp_c_monthly_min',
-        'temperature_max': 'wswdat_temp_c_monthly_max',
-        
-        # Humedad relativa
-        'humidity_avg': 'wswdat_relative_humidity_monthly_avg',
-        
-        # Precipitación
-        'precipitation_total': 'wswdat_precip_today_mm_monthly_total',
-        'precipitation_avg_daily': 'wswdat_precip_today_mm_monthly_avg_daily',
-        'precipitation_max_daily': 'wswdat_precip_today_mm_max_daily',
-        'days_with_rain': 'wswdat_precip_today_mm_days_with_precip',
-        
-        # Presión atmosférica
-        'pressure_rel_avg': 'wswdat_pressure_rel_hpa_monthly_avg',
-        'pressure_abs_avg': 'wswdat_pressure_abs_hpa_monthly_avg',
-        
-        # Viento
-        'wind_speed_avg': 'wswdat_wind_speed_kmh_monthly_avg',
-        'wind_speed_max': 'wswdat_wind_speed_kmh_monthly_max',
-        'wind_gust_avg': 'wswdat_wind_gust_kmh_monthly_avg',
-        'wind_gust_max': 'wswdat_wind_gust_kmh_monthly_max',
-        
-        # Radiación solar
-        'solar_rad_avg': 'wswdat_solar_rad_wm2_monthly_avg',
-        'solar_rad_max': 'wswdat_solar_rad_wm2_monthly_max',
-        
-        # Índice UV
-        'uv_index_avg': 'wswdat_uv_index_monthly_avg',
-        'uv_index_max': 'wswdat_uv_index_monthly_max',
-        
-        # Punto de rocío
-        'dewpoint_avg': 'wswdat_dewpoint_c_monthly_avg',
-        
-        # Índice de calor
-        'heat_index_avg': 'wswdat_heat_index_c_monthly_avg',
-        
-        # Evapotranspiración
-        'eto_avg': 'wswdat_eto_mm_monthly_avg'
+    # Identificación temporal
+    'date': 'year_month',
+    'year': 'year',
+    'month': 'month',
+    'valid_days': 'valid_days',
+    'total_records': 'total_records',
+    
+    # Temperatura
+    'temperature_avg': 'wswdat_temp_c_monthly_avg',
+    'temperature_min': 'wswdat_temp_c_monthly_min',
+    'temperature_max': 'wswdat_temp_c_monthly_max',
+    'temp_days': 'wswdat_temp_c_days_with_data',
+    
+    # Humedad
+    'humidity_avg': 'wswdat_relative_humidity_monthly_avg',
+    'humidity_days': 'wswdat_relative_humidity_days_with_data',
+    
+    # Punto de rocío
+    'dewpoint_avg': 'wswdat_dewpoint_c_monthly_avg',
+    'dewpoint_min': 'wswdat_dewpoint_c_monthly_min',
+    'dewpoint_max': 'wswdat_dewpoint_c_monthly_max',
+    'dewpoint_days': 'wswdat_dewpoint_c_days_with_data',
+    
+    # Presión atmosférica
+    'pressure_rel_avg': 'wswdat_pressure_rel_hpa_monthly_avg',
+    'pressure_abs_avg': 'wswdat_pressure_abs_hpa_monthly_avg',
+    'pressure_rel_days': 'wswdat_pressure_rel_hpa_days_with_data',
+    'pressure_abs_days': 'wswdat_pressure_abs_hpa_days_with_data',
+    
+    # Precipitación
+    'precipitation_total': 'wswdat_precip_today_mm_monthly_total',
+    'precipitation_avg_daily': 'wswdat_precip_today_mm_monthly_avg_daily',
+    'precipitation_max_daily': 'wswdat_precip_today_mm_max_daily',
+    'days_with_rain': 'wswdat_precip_today_mm_days_with_precip',
+    'precip_total_days': 'wswdat_precip_today_mm_total_days_measured',
+    'precip_rate_avg': 'wswdat_precip_rate_mmh_monthly_avg_rate',
+    'precip_rate_max': 'wswdat_precip_rate_mmh_monthly_max_rate',
+    'precip_rate_total': 'wswdat_precip_rate_mmh_monthly_total_integrated',
+    
+    # Evapotranspiración
+    'eto_avg': 'wswdat_eto_mm_monthly_avg',
+    'eto_days': 'wswdat_eto_mm_days_with_data',
+    
+    # Radiación solar
+    'solar_rad_avg': 'wswdat_solar_rad_wm2_monthly_avg',
+    'solar_rad_max': 'wswdat_solar_rad_wm2_monthly_max',
+    'solar_rad_days': 'wswdat_solar_rad_wm2_days_with_data',
+    
+    # Iluminancia
+    'illuminance_avg': 'wswdat_illuminance_lux_monthly_avg',
+    'illuminance_max': 'wswdat_illuminance_lux_monthly_max',
+    'illuminance_days': 'wswdat_illuminance_lux_days_with_data',
+    
+    # Índice UV
+    'uv_index_avg': 'wswdat_uv_index_monthly_avg',
+    'uv_index_max': 'wswdat_uv_index_monthly_max',
+    'uv_index_days': 'wswdat_uv_index_days_with_data',
+    
+    # Índice de calor
+    'heat_index_avg': 'wswdat_heat_index_c_monthly_avg',
+    'heat_index_min': 'wswdat_heat_index_c_monthly_min',
+    'heat_index_max': 'wswdat_heat_index_c_monthly_max',
+    'heat_index_days': 'wswdat_heat_index_c_days_with_data',
+    
+    # Sensación térmica (por viento)
+    'windchill_avg': 'wswdat_windchill_c_monthly_avg',
+    'windchill_min': 'wswdat_windchill_c_monthly_min',
+    'windchill_max': 'wswdat_windchill_c_monthly_max',
+    'windchill_days': 'wswdat_windchill_c_days_with_data',
+    
+    # Temperatura aparente (RealFeel)
+    'realfeel_avg': 'wswdat_realfeel_c_monthly_avg',
+    'realfeel_min': 'wswdat_realfeel_c_monthly_min',
+    'realfeel_max': 'wswdat_realfeel_c_monthly_max',
+    'realfeel_days': 'wswdat_realfeel_c_days_with_data',
+    
+    # Viento
+    'wind_speed_avg': 'wswdat_wind_speed_kmh_monthly_avg',
+    'wind_speed_max': 'wswdat_wind_speed_kmh_monthly_max',
+    'wind_speed_days': 'wswdat_wind_speed_kmh_days_with_data',
+    'wind_gust_avg': 'wswdat_wind_gust_kmh_monthly_avg',
+    'wind_gust_max': 'wswdat_wind_gust_kmh_monthly_max',
+    'wind_gust_days': 'wswdat_wind_gust_kmh_days_with_data',
+    'wind_dir_avg': 'wswdat_wind_degrees_monthly_avg',
+    'wind_dir_max': 'wswdat_wind_degrees_monthly_max',
+    'wind_dir_days': 'wswdat_wind_degrees_days_with_data',
     }
     
     def __init__(self):
