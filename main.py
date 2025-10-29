@@ -87,45 +87,25 @@ class SAIDIApplication:
                     self.main_window.optimize_button.clicked.connect(self.controller.run_optimization)
                     print(" Botón 'Optimización' conectado")
             
-            # VALIDACIÓN - ESTA ES LA CONEXIÓN QUE FALTABA
+            # Validación
             if hasattr(self.main_window, 'validate_button'):
                 if hasattr(self.controller, 'run_validation'):
                     self.main_window.validate_button.clicked.connect(self.controller.run_validation)
-                    print(" Botón 'Validación' conectado")
+                    print("Botón 'Validación' conectado")
                 else:
                     print("Controlador no tiene método 'run_validation'")
             else:
-                print(" Vista no tiene 'validate_button'")
-            
-            # Validación Temporal Completa (Rolling Validation)
-            if hasattr(self.main_window, 'rolling_validation_button'):
-                if hasattr(self.controller, 'run_rolling_validation'):
-                    self.main_window.rolling_validation_button.clicked.connect(self.controller.run_rolling_validation)
-                    print(" Botón 'Validación Temporal Completa' conectado")
+                print("Vista no tiene 'validate_button'")
+
+            # Generación de Informe (reemplaza Rolling Validation)
+            if hasattr(self.main_window, 'report_button'):
+                if hasattr(self.controller, 'generate_validation_report'):
+                    self.main_window.report_button.clicked.connect(self.controller.generate_validation_report)
+                    print("Botón 'Generar Informe' conectado")
                 else:
-                    print(" Controlador no tiene método 'run_rolling_validation'")
+                    print("Controlador no tiene método 'generate_validation_report'")
             else:
-                print(" Vista no tiene 'rolling_validation_button'")
-            
-            # ========== BOTONES DE MEJORAS ANTI-OVERFITTING ==========
-            
-            # Cross-Validation
-            if hasattr(self.main_window, 'cv_button'):
-                if hasattr(self.controller, 'run_cross_validation'):
-                    self.main_window.cv_button.clicked.connect(self.controller.run_cross_validation)
-                    print(" Botón 'Cross-Validation' conectado")
-            
-            # Buscar Modelo Simple
-            if hasattr(self.main_window, 'simple_model_button'):
-                if hasattr(self.controller, 'run_find_best_simple_model'):
-                    self.main_window.simple_model_button.clicked.connect(self.controller.run_find_best_simple_model)
-                    print(" Botón 'Modelo Simple' conectado")
-            
-            # Comparar Transformaciones
-            if hasattr(self.main_window, 'transformation_button'):
-                if hasattr(self.controller, 'run_compare_transformations'):
-                    self.main_window.transformation_button.clicked.connect(self.controller.run_compare_transformations)
-                    print(" Botón 'Transformaciones' conectado")
+                print("Vista no tiene 'report_button'")
             
             # ========== SELECTOR DE REGIONAL ==========
             

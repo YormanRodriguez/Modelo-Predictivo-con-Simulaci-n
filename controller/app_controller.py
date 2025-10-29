@@ -12,7 +12,7 @@ from services.prediction_service import PredictionService
 from services.optimization_service import OptimizationService
 from services.validation_service import ValidationService
 from services.rolling_validation_service import RollingValidationService
-from services.improved_model_service import ImprovedModelService
+from services.report_generation_service import ValidationReportService
 
 # Importar el visor de gráficas
 from view.main_window import PlotViewerDialog
@@ -32,7 +32,7 @@ class AppController(QObject):
         self.optimization_service = OptimizationService()
         self.validation_service = ValidationService()
         self.rolling_validation_service = RollingValidationService()
-        self.improved_model_service = ImprovedModelService()
+        self.report_service = ValidationReportService()
         
         # Referencias a diálogos de gráficas para limpieza
         self.plot_dialogs = []
@@ -143,443 +143,6 @@ class AppController(QObject):
     def are_climate_data_available(self, regional_code: str) -> bool:
         """Verificar si hay datos climáticos disponibles para una regional"""
         return self.climate_model.is_regional_loaded(regional_code)
-
-    def run_regularized_prediction(self):
-        """Ejecutar predicción con regularización"""
-        if not self.model.is_excel_loaded():
-            self.show_warning("Debe cargar un archivo Excel primero")
-            return
-
-        # Diálogo para seleccionar variables y parámetros
-        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel
-        from PyQt6.QtWidgets import QListWidget, QComboBox, QDoubleSpinBox, QPushButton
-
-        dialog = QDialog(self.view)
-        dialog.setWindowTitle("Configurar Regularización")
-        dialog.resize(500, 400)
-
-        layout = QVBoxLayout(dialog)
-
-        # Selector de variables exógenas
-        layout.addWidget(QLabel("Seleccione variables exógenas:"))
-        var_list = QListWidget()
-        var_list.setSelectionMode(QListWidget.SelectionMode.MultiSelection)
-
-        # Obtener columnas del Excel (excepto Fecha y SAIDI)
-        df = self.model.get_excel_data()
-        available_cols = []
-        if df is not None:
-            available_cols = [col for col in df.columns
-                              if 'SAIDI' not in str(col).upper() and 'FECHA' not in str(col).upper()]
-        var_list.addItems(available_cols)
-        layout.addWidget(var_list)
-
-        # Método de regularización
-        layout.addWidget(QLabel("\nMétodo de regularización:"))
-        method_combo = QComboBox()
-        method_combo.addItems(['elastic', 'lasso', 'ridge'])
-        layout.addWidget(method_combo)
-
-        # Alpha (fuerza)
-        alpha_layout = QHBoxLayout()
-        alpha_layout.addWidget(QLabel("Alpha (fuerza):"))
-        alpha_spin = QDoubleSpinBox()
-        alpha_spin.setRange(0.01, 10.0)
-        alpha_spin.setValue(1.0)
-        alpha_spin.setSingleStep(0.1)
-        alpha_layout.addWidget(alpha_spin)
-        layout.addLayout(alpha_layout)
-
-        # L1 ratio (solo para ElasticNet)
-        l1_layout = QHBoxLayout()
-        l1_layout.addWidget(QLabel("L1 ratio (ElasticNet):"))
-        l1_spin = QDoubleSpinBox()
-        l1_spin.setRange(0.0, 1.0)
-        l1_spin.setValue(0.5)
-        l1_spin.setSingleStep(0.1)
-        l1_layout.addWidget(l1_spin)
-        layout.addLayout(l1_layout)
-
-        # Botones
-        button_layout = QHBoxLayout()
-        ok_button = QPushButton("Ejecutar")
-        cancel_button = QPushButton("Cancelar")
-        ok_button.clicked.connect(dialog.accept)
-        cancel_button.clicked.connect(dialog.reject)
-        button_layout.addWidget(ok_button)
-        button_layout.addWidget(cancel_button)
-        layout.addLayout(button_layout)
-
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            selected_vars = [item.text() for item in var_list.selectedItems()]
-            method = method_combo.currentText()
-            alpha = alpha_spin.value()
-            l1_ratio = l1_spin.value()
-
-            # Ejecutar regularización (sin hilo para simplificar)
-            try:
-                self.view.set_buttons_enabled(False)
-                self.view.show_progress(True)
-                self.view.log_message("Ejecutando regularización...")
-                result = self.improved_model_service.fit_with_regularization(
-                    self.model.get_file_path(),
-                    (1, 1, 2),
-                    (1, 0, 1, 12),
-                    selected_vars,
-                    method,
-                    alpha,
-                    l1_ratio,
-                    progress_callback=self.view.update_progress,
-                    log_callback=self.view.log_message
-                )
-                self.on_regularization_finished(result)
-            except Exception as e:
-                self.on_regularization_error(str(e))
-
-    def on_regularization_finished(self, result):
-        """Callback cuando termina regularización"""
-        self.view.set_buttons_enabled(True)
-        self.view.show_progress(False)
-        self.view.update_status("Regularización completada")
-        
-        if result['regularization_applied']:
-            self.view.log_success("Regularización aplicada exitosamente")
-            self.view.log_message(f"Variables seleccionadas: {result['n_selected']}/{result['n_total']}")
-            
-            for var in result['selected_vars']:
-                self.view.log_message(f"  ✓ {var}")
-            
-            if result.get('eliminated_vars'):
-                self.view.log_message(f"\nVariables eliminadas:")
-                for var in result['eliminated_vars']:
-                    self.view.log_message(f"  ✗ {var}")
-            
-            self.view.log_message(f"\nScore de overfitting ajustado: {result['adjusted_score']:.2f}")
-            self.view.log_message(f"Recomendación: {result['recommendation']}")
-            
-            if result['adjusted_score'] < 15:
-                self.view.log_success(" Modelo bien regularizado - seguro usar")
-            elif result['adjusted_score'] < 25:
-                self.view.log_message(" Regularización aceptable - monitorear")
-            else:
-                self.view.log_error("X Considerar aumentar alpha o reducir variables")
-        
-        if result.get('plot_file'):
-            self.show_plot(result['plot_file'], "Análisis de Regularización")
-
-    def on_regularization_error(self, error_msg):
-        """Callback cuando hay error en regularización"""
-        self.view.set_buttons_enabled(True)
-        self.view.show_progress(False)
-        self.view.update_status("Error en regularización")
-        self.view.log_error(f"Error: {error_msg}")
-        self.show_error(f"Error durante regularización: {error_msg}")
-
-    def run_cross_validation(self, n_splits=5):
-        """Ejecutar cross-validation temporal con transformación por regional"""
-        if not self.model.is_excel_loaded():
-            self.show_warning("Debe cargar un archivo Excel primero")
-            return
-        
-        regional_code = None
-        if self.model.is_regional_format():
-            if not self.model.get_selected_regional():
-                self.show_warning("Debe seleccionar una regional primero")
-                return
-            
-            regional_code = self.model.get_selected_regional()
-            regional_nombre = self.model.REGIONAL_MAPPING.get(regional_code, regional_code)
-            
-            transformation = self.improved_model_service.REGIONAL_TRANSFORMATIONS.get(
-                regional_code, 'original'
-            )
-            
-            self.view.log_message(f"Ejecutando CV para: {regional_nombre}")
-            self.view.log_message(f"Transformación asignada: {transformation.upper()}")
-            
-            # NUEVO: Verificar datos climáticos
-            if self.are_climate_data_available(regional_code):
-                self.view.log_message(f"Datos climáticos disponibles para {regional_nombre}")
-            else:
-                self.view.log_message(f"Sin datos climáticos para {regional_nombre}")
-            
-        try:
-            self.view.log_message(f"Iniciando Cross-Validation con {n_splits} folds...")
-            self.view.set_buttons_enabled(False)
-            self.view.update_status("Ejecutando CV temporal...")
-            
-            df_prepared = self.model.get_excel_data_for_analysis()
-            
-            if df_prepared is None:
-                self.show_error("No se pudieron preparar los datos. Verifique la regional seleccionada.")
-                self.view.set_buttons_enabled(True)
-                return
-            
-            order = (3, 1, 3)
-            seasonal_order = (3, 1, 0, 12)
-            
-            self.cv_thread = CrossValidationThread(
-                df_prepared=df_prepared,
-                improved_service=self.improved_model_service, 
-                order=order, 
-                seasonal_order=seasonal_order, 
-                n_splits=n_splits,
-                regional_code=regional_code
-            )
-            self.cv_thread.progress_updated.connect(self.view.update_progress)
-            self.cv_thread.message_logged.connect(self.view.log_message)
-            self.cv_thread.finished.connect(self.on_cv_finished)
-            self.cv_thread.error_occurred.connect(self.on_cv_error)
-            
-            self.view.show_progress(True)
-            self.cv_thread.start()
-            
-        except Exception as e:
-            self.view.log_error(f"Error iniciando CV: {str(e)}")
-            self.view.set_buttons_enabled(True)
-            self.view.show_progress(False)
-    
-    def run_find_best_simple_model(self):
-        """Buscar modelo simple con mejor balance (con transformación por regional)"""
-        if not self.model.is_excel_loaded():
-            self.show_warning("Debe cargar un archivo Excel primero")
-            return
-        
-        regional_code = None
-        if self.model.is_regional_format():
-            if not self.model.get_selected_regional():
-                self.show_warning("Debe seleccionar una regional primero")
-                return
-            
-            regional_code = self.model.get_selected_regional()
-            regional_nombre = self.model.REGIONAL_MAPPING.get(regional_code, regional_code)
-            
-            transformation = self.improved_model_service.REGIONAL_TRANSFORMATIONS.get(
-                regional_code, 'original'
-            )
-            
-            self.view.log_message(f"Ejecutando búsqueda para: {regional_nombre}")
-            self.view.log_message(f"Transformación asignada: {transformation.upper()}")
-            
-        try:
-            self.view.log_message("Iniciando búsqueda de modelo simple óptimo...")
-            self.view.log_message("Buscando mejor balance: AIC/BIC, complejidad y overfitting")
-            self.view.set_buttons_enabled(False)
-            self.view.update_status("Buscando modelo simple...")
-            
-            df_prepared = self.model.get_excel_data_for_analysis()
-            
-            if df_prepared is None:
-                self.show_error("No se pudieron preparar los datos. Verifique la regional seleccionada.")
-                self.view.set_buttons_enabled(True)
-                return
-            
-            self.simple_model_thread = SimpleModelThread(
-                df_prepared=df_prepared,
-                improved_service=self.improved_model_service,
-                regional_code=regional_code
-            )
-            self.simple_model_thread.progress_updated.connect(self.view.update_progress)
-            self.simple_model_thread.message_logged.connect(self.view.log_message)
-            self.simple_model_thread.finished.connect(self.on_simple_model_finished)
-            self.simple_model_thread.error_occurred.connect(self.on_simple_model_error)
-            
-            self.view.show_progress(True)
-            self.simple_model_thread.start()
-            
-        except Exception as e:
-            self.view.log_error(f"Error iniciando búsqueda: {str(e)}")
-            self.view.set_buttons_enabled(True)
-            self.view.show_progress(False)
-     
-    def run_compare_transformations(self):
-        """Comparar transformaciones de datos con transformación por regional"""
-        if not self.model.is_excel_loaded():
-            self.show_warning("Debe cargar un archivo Excel primero")
-            return
-        
-        regional_code = None
-        if self.model.is_regional_format():
-            if not self.model.get_selected_regional():
-                self.show_warning("Debe seleccionar una regional primero")
-                return
-            
-            regional_code = self.model.get_selected_regional()
-            regional_nombre = self.model.REGIONAL_MAPPING.get(regional_code, regional_code)
-            
-            transformation = self.improved_model_service.REGIONAL_TRANSFORMATIONS.get(
-                regional_code, 'original'
-            )
-            
-            self.view.log_message(f"Ejecutando comparación para: {regional_nombre}")
-            self.view.log_message(f"Transformación asignada actual: {transformation.upper()}")
-            
-        try:
-            self.view.log_message("Iniciando comparación de transformaciones...")
-            self.view.log_message("Evaluando: Original, StandardScaler, Log, Box-Cox")
-            self.view.set_buttons_enabled(False)
-            self.view.update_status("Comparando transformaciones...")
-            
-            df_prepared = self.model.get_excel_data_for_analysis()
-            
-            if df_prepared is None:
-                self.show_error("No se pudieron preparar los datos. Verifique la regional seleccionada.")
-                self.view.set_buttons_enabled(True)
-                return
-            
-            order = (3, 1, 3)
-            seasonal_order = (3, 1, 0, 12)
-            
-            self.transformation_thread = TransformationThread(
-                df_prepared=df_prepared,
-                improved_service=self.improved_model_service, 
-                order=order, 
-                seasonal_order=seasonal_order,
-                regional_code=regional_code
-            )
-            self.transformation_thread.progress_updated.connect(self.view.update_progress)
-            self.transformation_thread.message_logged.connect(self.view.log_message)
-            self.transformation_thread.finished.connect(self.on_transformation_finished)
-            self.transformation_thread.error_occurred.connect(self.on_transformation_error)
-            
-            self.view.show_progress(True)
-            self.transformation_thread.start()
-            
-        except Exception as e:
-            self.view.log_error(f"Error iniciando comparación: {str(e)}")
-            self.view.set_buttons_enabled(True)
-            self.view.show_progress(False)
-      
-    def on_cv_finished(self, result):
-        """Callback cuando termina CV (con información de transformación)"""
-        self.view.set_buttons_enabled(True)
-        self.view.show_progress(False)
-        self.view.update_status("Cross-validation completada")
-        self.view.log_success("Cross-validation temporal completada")
-        
-        if result and 'cv_results' in result:
-            cv = result['cv_results']
-            self.view.log_message(f"Folds completados: {len(cv['fold_scores'])}")
-            self.view.log_message(f"RMSE promedio: {cv['mean_rmse']:.4f} ± {cv['std_rmse']:.4f} min")
-            self.view.log_message(f"Score de estabilidad: {cv['stability_score']:.2f}/100")
-            
-            if cv.get('transformation'):
-                self.view.log_message(f"Transformación: {cv['transformation'].upper()}")
-            
-            if cv['stability_score'] >= 80:
-                self.view.log_success(" Modelo MUY ESTABLE")
-            elif cv['stability_score'] >= 60:
-                self.view.log_success(" Modelo ESTABLE")
-            else:
-                self.view.log_message(" Modelo con estabilidad limitada")
-        
-        if result and 'plot_files' in result and result['plot_files'].get('cv_plot'):
-            self.show_plot(result['plot_files']['cv_plot'], "Cross-Validation Temporal")
-
-    def on_cv_error(self, error_msg):
-        """Callback cuando hay error en CV"""
-        self.view.set_buttons_enabled(True)
-        self.view.show_progress(False)
-        self.view.update_status("Error en CV")
-        self.view.log_error(f"Error en CV: {error_msg}")
-        self.show_error(f"Error durante cross-validation: {error_msg}")
-    
-    def on_simple_model_finished(self, result):
-        """Callback cuando termina búsqueda de modelo simple"""
-        self.view.set_buttons_enabled(True)
-        self.view.show_progress(False)
-        self.view.update_status("Búsqueda completada")
-        self.view.log_success("Búsqueda de modelo simple completada")
-        
-        if result and 'best_model' in result:
-            best = result['best_model']
-            self.view.log_message("=" * 60)
-            self.view.log_message("MEJOR MODELO SIMPLE ENCONTRADO:")
-            self.view.log_message(f"  order={best['order']}, seasonal={best['seasonal_order']}")
-            self.view.log_message(f"  Complejidad: {best['complexity']} parámetros")
-            self.view.log_message(f"  AIC: {best['aic']:.1f} | BIC: {best['bic']:.1f}")
-            self.view.log_message(f"  Overfitting Score: {best['overfitting_score']:.2f}/100")
-            self.view.log_message(f"  R² Train: {best['r2_train']:.3f} | Test: {best['r2_test']:.3f}")
-            
-            if result.get('transformation'):
-                self.view.log_message(f"  Transformación: {result['transformation'].upper()}")
-            
-            self.view.log_message("=" * 60)
-            
-            if best['overfitting_score'] < 10:
-                self.view.log_success(" Excelente balance - Sin overfitting")
-            elif best['overfitting_score'] < 20:
-                self.view.log_success(" Buen balance - Overfitting mínimo")
-            
-            if 'top_models' in result:
-                self.view.log_message("\nTop 3 alternativas:")
-                for i, m in enumerate(result['top_models'][:3], 1):
-                    self.view.log_message(f"  {i}. order={m['order']}, seasonal={m['seasonal_order']} "
-                                        f"| Overfitting: {m['overfitting_score']:.2f}")
-        
-        if result and 'plot_files' in result and result['plot_files'].get('model_comparison_plot'):
-            self.show_plot(result['plot_files']['model_comparison_plot'], 
-                        "Comparación de Modelos Simples")
-    
-    def on_simple_model_error(self, error_msg):
-        """Callback cuando hay error en búsqueda"""
-        self.view.set_buttons_enabled(True)
-        self.view.show_progress(False)
-        self.view.update_status("Error en búsqueda")
-        self.view.log_error(f"Error en búsqueda: {error_msg}")
-        self.show_error(f"Error durante búsqueda de modelo: {error_msg}")
-    
-    def on_transformation_finished(self, result):
-        """Callback cuando termina comparación de transformaciones"""
-        self.view.set_buttons_enabled(True)
-        self.view.show_progress(False)
-        self.view.update_status("Comparación completada")
-        self.view.log_success("Comparación de transformaciones completada")
-        
-        if result and 'best_transformation' in result:
-            best = result['best_transformation']
-            assigned = result.get('assigned_transformation', 'unknown')
-            
-            self.view.log_message("=" * 60)
-            self.view.log_message("RESULTADOS DE COMPARACIÓN:")
-            self.view.log_message(f"  Transformación asignada: {assigned.upper()}")
-            self.view.log_message(f"  Mejor encontrada: {best['method'].upper()}")
-            self.view.log_message(f"  Overfitting Score: {best['final_overfitting_score']:.2f}/100")
-            self.view.log_message(f"  Mejora: {best['overfitting_improvement']:+.1f}%")
-            self.view.log_message(f"  R² Train: {best['r2_train']:.3f} | Test: {best['r2_test']:.3f}")
-            self.view.log_message("=" * 60)
-            
-            if best['method'] != assigned:
-                self.view.log_message(f" La transformación óptima ({best['method'].upper()}) difiere de la asignada ({assigned.upper()})")
-                self.view.log_message(f"   Considere actualizar REGIONAL_TRANSFORMATIONS en los servicios")
-            else:
-                self.view.log_success(f" La transformación asignada ({assigned.upper()}) es óptima")
-            
-            if best['overfitting_improvement'] > 10:
-                self.view.log_success(f" Mejora significativa de {best['overfitting_improvement']:.1f}%")
-            elif best['overfitting_improvement'] > 0:
-                self.view.log_message(f"Mejora moderada de {best['overfitting_improvement']:.1f}%")
-            else:
-                self.view.log_message("Los datos originales son la mejor opción")
-            
-            if 'all_transformations' in result:
-                self.view.log_message("\nTodas las transformaciones evaluadas:")
-                for method, trans in result['all_transformations'].items():
-                    marker = "★" if method == best['method'] else "✓" if method == assigned else "○"
-                    self.view.log_message(f"  {marker} {method.upper()}: "
-                                        f"Overfitting={trans['overfitting_score']:.2f}")
-        
-        if result and 'plot_files' in result and result['plot_files'].get('transformation_plot'):
-            self.show_plot(result['plot_files']['transformation_plot'], 
-                        "Comparación de Transformaciones")
-    
-    def on_transformation_error(self, error_msg):
-        """Callback cuando hay error en transformaciones"""
-        self.view.set_buttons_enabled(True)
-        self.view.show_progress(False)
-        self.view.update_status("Error en transformaciones")
-        self.view.log_error(f"Error en transformaciones: {error_msg}")
-        self.show_error(f"Error durante comparación de transformaciones: {error_msg}")
 
     def cleanup_temp_files(self):
         """Limpiar archivos temporales de gráficas"""
@@ -1129,8 +692,8 @@ class AppController(QObject):
             self.view.set_buttons_enabled(True)
             self.view.show_progress(False)
     
-    def run_rolling_validation(self):
-        """Ejecutar validación temporal completa (Rolling Forecast + CV + Parameter Stability + Backtesting)"""
+    def generate_validation_report(self):
+        """Generar informe PDF completo de validación temporal"""
         if not self.model.is_excel_loaded():
             self.show_warning("Debe cargar un archivo Excel primero")
             return
@@ -1150,19 +713,20 @@ class AppController(QObject):
                 regional_code, 'original'
             )
             
-            self.view.log_message(f"Ejecutando validación temporal completa para: {regional_nombre}")
-            self.view.log_message(f"Transformación asignada: {transformation.upper()}")
+            self.view.log_message("=" * 60)
+            self.view.log_message("GENERANDO INFORME DE VALIDACIÓN DEL MODELO")
+            self.view.log_message("=" * 60)
+            self.view.log_message(f"Regional: {regional_nombre}")
+            self.view.log_message(f"Transformación: {transformation.upper()}")
 
             # Obtener datos climáticos si están disponibles
             if self.are_climate_data_available(regional_code):
                 climate_data = self.get_climate_data_for_regional(regional_code)
-                self.view.log_message(f" Datos climáticos disponibles - Se incluirán en el análisis")
+                self.view.log_message(f"✓ Datos climáticos incluidos en el análisis")
             else:
-                self.view.log_message(f" Sin datos climáticos - Análisis sin variables exógenas")
+                self.view.log_message(f"⚠ Sin datos climáticos - Análisis básico")
         
         try:
-            self.view.log_message("Iniciando validación temporal completa...")
-            self.view.log_message("Incluye: Rolling Forecast, CV, Parameter Stability, Backtesting")
             self.view.set_buttons_enabled(False)
             self.view.update_status("Ejecutando validación temporal completa...")
             
@@ -1173,7 +737,7 @@ class AppController(QObject):
                 self.view.set_buttons_enabled(True)
                 return
             
-            # Crear thread con el nuevo servicio
+            # Crear thread de validación (mismo que antes)
             self.rolling_validation_thread = RollingValidationThread(
                 rolling_validation_service=self.rolling_validation_service,
                 df_prepared=df_prepared,
@@ -1182,17 +746,17 @@ class AppController(QObject):
             )
             self.rolling_validation_thread.progress_updated.connect(self.view.update_progress)
             self.rolling_validation_thread.message_logged.connect(self.view.log_message)
-            self.rolling_validation_thread.finished.connect(self.on_rolling_validation_finished)
-            self.rolling_validation_thread.error_occurred.connect(self.on_rolling_validation_error)
+            self.rolling_validation_thread.finished.connect(self.on_report_validation_finished)
+            self.rolling_validation_thread.error_occurred.connect(self.on_report_validation_error)
             
             self.view.show_progress(True)
             self.rolling_validation_thread.start()
             
         except Exception as e:
-            self.view.log_error(f"Error iniciando validación temporal: {str(e)}")
+            self.view.log_error(f"Error iniciando generación de informe: {str(e)}")
             self.view.set_buttons_enabled(True)
             self.view.show_progress(False)
-    
+            
     def on_prediction_finished(self, result):
         """Callback cuando termina la predicción - ACTUALIZADO CON EXPORTACIÓN"""
         
@@ -1472,104 +1036,80 @@ class AppController(QObject):
         if result and 'plot_file' in result and result['plot_file']:
             self.show_plot(result['plot_file'], "Validacion del Modelo SAIDI")
     
-    def on_rolling_validation_finished(self, result):
-        """Callback cuando termina validación temporal completa"""
-        self.view.set_buttons_enabled(True)
-        self.view.show_progress(False)
-        self.view.update_status("Validación temporal completada")
-        self.view.log_success("Validación temporal completa finalizada")
-        
-        if result and 'validation_analysis' in result:
-            analysis = result['validation_analysis']
-            model_params = result.get('model_params', {})
-            
+    def on_report_validation_finished(self, result):
+        """Callback cuando termina validación - Genera PDF"""
+        try:
+            self.view.update_progress(95, "Generando informe PDF...")
             self.view.log_message("=" * 60)
-            self.view.log_message("VALIDACIÓN TEMPORAL COMPLETA")
+            self.view.log_message("GENERANDO INFORME PDF PROFESIONAL")
             self.view.log_message("=" * 60)
             
-            # Información del modelo
-            self.view.log_message(f"Transformación: {model_params.get('transformation', 'N/A').upper()}")
-            self.view.log_message(f"Parámetros: order={model_params.get('order')}, seasonal={model_params.get('seasonal_order')}")
+            # Generar informe PDF
+            pdf_path = self.report_service.generate_validation_report(
+                result=result,
+                log_callback=self.view.log_message
+            )
             
-            if model_params.get('with_exogenous'):
-                exog_info = result.get('exogenous_vars', {})
-                self.view.log_message(f"Variables exógenas: {len(exog_info)}")
-                for var_code, var_data in exog_info.items():
-                    self.view.log_message(f"  • {var_data['nombre']}")
+            self.view.set_buttons_enabled(True)
+            self.view.show_progress(False)
+            self.view.update_status("Informe de validación generado")
             
-            # DIAGNÓSTICO FINAL
-            final_diagnosis = analysis.get('final_diagnosis', {})
+            # Log resumen rápido
+            final_diagnosis = result.get('validation_analysis', {}).get('final_diagnosis', {})
+            quality = final_diagnosis.get('model_quality', 'N/A')
+            confidence = final_diagnosis.get('confidence_level', 0)
             
+            self.view.log_success("=" * 60)
+            self.view.log_success("INFORME PDF GENERADO EXITOSAMENTE")
+            self.view.log_success("=" * 60)
+            self.view.log_message(f" Calidad del Modelo: {quality}")
+            self.view.log_message(f" Nivel de Confianza: {confidence:.1f}%")
+            self.view.log_message(f" Ubicación: {pdf_path}")
             self.view.log_message("")
-            self.view.log_message(" DIAGNÓSTICO FINAL:")
-            self.view.log_message(f"  Calidad del Modelo: {final_diagnosis.get('model_quality', 'N/A')}")
-            self.view.log_message(f"  Nivel de Confianza: {final_diagnosis.get('confidence_level', 0):.1f}%")
-            self.view.log_message(f"  Recomendación: {final_diagnosis.get('recommendation', 'N/A')}")
-            
-            if final_diagnosis.get('limitations'):
-                self.view.log_message("\n  LIMITACIONES IDENTIFICADAS:")
-                for lim in final_diagnosis['limitations']:
-                    self.view.log_message(f"  • {lim}")
-            
-            # ROLLING FORECAST
-            rolling_results = analysis.get('rolling_forecast', {})
-            if rolling_results:
-                self.view.log_message("")
-                self.view.log_message(" ROLLING FORECAST:")
-                self.view.log_message(f"  RMSE: {rolling_results.get('rmse', 0):.2f} min")
-                self.view.log_message(f"  Precisión: {rolling_results.get('precision', 0):.1f}%")
-                self.view.log_message(f"  Calidad: {rolling_results.get('prediction_quality', 'N/A')}")
-            
-            # CROSS-VALIDATION
-            cv_results = analysis.get('cross_validation', {})
-            if cv_results:
-                self.view.log_message("")
-                self.view.log_message(" TIME SERIES CROSS-VALIDATION:")
-                self.view.log_message(f"  Mean RMSE: {cv_results.get('mean_rmse', 0):.4f} ± {cv_results.get('std_rmse', 0):.4f}")
-                self.view.log_message(f"  Stability Score: {cv_results.get('cv_stability_score', 0):.1f}/100")
-            
-            # PARAMETER STABILITY
-            param_stability = analysis.get('parameter_stability', {})
-            if param_stability:
-                self.view.log_message("")
-                self.view.log_message(" ESTABILIDAD DE PARÁMETROS:")
-                self.view.log_message(f"  Overall Stability: {param_stability.get('overall_stability_score', 0):.1f}/100")
-                self.view.log_message(f"  Interpretación: {param_stability.get('interpretation', 'N/A')}")
-                
-                unstable = param_stability.get('unstable_params', [])
-                if unstable:
-                    self.view.log_message(f"  Parámetros inestables: {', '.join(unstable)}")
-            
-            # BACKTESTING
-            backtesting_results = analysis.get('backtesting', {})
-            if backtesting_results:
-                self.view.log_message("")
-                self.view.log_message(" BACKTESTING MULTI-HORIZONTE:")
-                self.view.log_message(f"  Horizonte óptimo: {backtesting_results.get('optimal_horizon', 0)} meses")
-                self.view.log_message(f"  Degradación: {backtesting_results.get('degradation_rate', 0):.2f}% por mes")
-            
-            # SCORES POR COMPONENTE
-            component_scores = final_diagnosis.get('component_scores', {})
-            if component_scores:
-                self.view.log_message("")
-                self.view.log_message(" SCORES POR COMPONENTE:")
-                for component, score in component_scores.items():
-                    marker = "✓" if score >= 80 else "○" if score >= 65 else "✗"
-                    self.view.log_message(f"  {marker} {component}: {score:.1f}/100")
-            
+            self.view.log_message("El informe incluye:")
+            self.view.log_message("  1. Rolling Forecast - Walk-Forward Validation")
+            self.view.log_message("  2. Time Series Cross-Validation")
+            self.view.log_message("  3. Análisis de Estabilidad de Parámetros")
+            self.view.log_message("  4. Backtesting Multi-Horizonte")
+            self.view.log_message("  5. Diagnóstico Final Integrado")
+            self.view.log_message("  6. Visualización Integrada de Resultados")
             self.view.log_message("=" * 60)
-        
-        # Mostrar gráfica
-        if result and 'plot_file' in result and result['plot_file']:
-            self.show_plot(result['plot_file'], "Validación Temporal Completa")
+            
+            # Ofrecer abrir PDF
+            from PyQt6.QtWidgets import QMessageBox
+            msg = QMessageBox(self.view)
+            msg.setIcon(QMessageBox.Icon.Information)
+            msg.setWindowTitle("Informe Generado")
+            msg.setText("El informe de validación se ha generado correctamente")
+            msg.setInformativeText(f"Archivo: {os.path.basename(pdf_path)}")
+            
+            open_btn = msg.addButton("Abrir PDF", QMessageBox.ButtonRole.AcceptRole)
+            open_folder_btn = msg.addButton("Abrir Carpeta", QMessageBox.ButtonRole.ActionRole)
+            close_btn = msg.addButton("Cerrar", QMessageBox.ButtonRole.RejectRole)
+            
+            msg.exec()
+            
+            clicked_button = msg.clickedButton()
+            if clicked_button == open_btn:
+                self._open_file(pdf_path)
+            elif clicked_button == open_folder_btn:
+                self._open_folder(os.path.dirname(pdf_path))
+            
+        except Exception as e:
+            self.view.set_buttons_enabled(True)
+            self.view.show_progress(False)
+            self.view.log_error(f"Error generando informe PDF: {str(e)}")
+            import traceback
+            self.view.log_error(traceback.format_exc())
+            self.show_error(f"Error al generar informe PDF:\n\n{str(e)}")
 
-    def on_rolling_validation_error(self, error_msg):
-        """Callback cuando hay error en validación temporal"""
+    def on_report_validation_error(self, error_msg):
+        """Callback cuando hay error en generación de informe"""
         self.view.set_buttons_enabled(True)
         self.view.show_progress(False)
-        self.view.update_status("Error en validación temporal")
-        self.view.log_error(f"Error en validación temporal: {error_msg}")
-        self.show_error(f"Error durante la validación temporal: {error_msg}")
+        self.view.update_status("Error en generación de informe")
+        self.view.log_error(f"Error: {error_msg}")
+        self.show_error(f"Error durante la generación del informe: {error_msg}")
     
     def on_prediction_error(self, error_msg):
         self.view.set_buttons_enabled(True)
@@ -1605,154 +1145,6 @@ class AppController(QObject):
     def show_info(self, message):
         """Mostrar mensaje informativo"""
         QMessageBox.information(self.view, "Información", message)
-
-
-class TransformationThread(QThread):
-    """Hilo para comparar transformaciones en background"""
-    
-    progress_updated = pyqtSignal(int, str)
-    message_logged = pyqtSignal(str)
-    finished = pyqtSignal(dict)
-    error_occurred = pyqtSignal(str)
-    
-    def __init__(self, improved_service, order, seasonal_order, 
-                 file_path=None, df_prepared=None, regional_code=None):
-        super().__init__()
-        self.improved_service = improved_service
-        self.order = order if order else (3, 1, 3)
-        self.seasonal_order = seasonal_order if seasonal_order else (3, 1, 3, 12)
-        self.file_path = file_path
-        self.df_prepared = df_prepared
-        self.regional_code = regional_code
-    
-    def run(self):
-        try:
-            self.message_logged.emit("Comparando transformaciones de datos...")
-            result = self.improved_service.compare_transformations(
-                file_path=self.file_path,
-                df_prepared=self.df_prepared,
-                order=self.order,
-                seasonal_order=self.seasonal_order,
-                regional_code=self.regional_code,
-                progress_callback=self.progress_updated.emit,
-                log_callback=self.message_logged.emit
-            )
-            
-            if result:
-                self.message_logged.emit("Comparación de transformaciones completada")
-                self.finished.emit(result)
-            else:
-                raise Exception("No se obtuvieron resultados de la comparación")
-                
-        except Exception as e:
-            self.error_occurred.emit(str(e))
-
-
-class SimpleModelThread(QThread):
-    """Hilo para buscar modelo simple óptimo en background"""
-    
-    progress_updated = pyqtSignal(int, str)
-    message_logged = pyqtSignal(str)
-    finished = pyqtSignal(dict)
-    error_occurred = pyqtSignal(str)
-    
-    def __init__(self, improved_service, file_path=None, df_prepared=None, regional_code=None):
-        super().__init__()
-        self.improved_service = improved_service
-        self.file_path = file_path
-        self.df_prepared = df_prepared
-        self.regional_code = regional_code
-    
-    def run(self):
-        try:
-            self.message_logged.emit("Buscando modelo simple óptimo...")
-            result = self.improved_service.find_best_simple_model(
-                file_path=self.file_path,
-                df_prepared=self.df_prepared,
-                regional_code=self.regional_code,
-                progress_callback=self.progress_updated.emit,
-                log_callback=self.message_logged.emit
-            )
-            self.finished.emit(result)
-        except Exception as e:
-            self.error_occurred.emit(str(e))
-
-
-class RegularizationThread(QThread):
-    """Hilo para ejecutar regularización en background"""
-    
-    progress_updated = pyqtSignal(int, str)
-    message_logged = pyqtSignal(str)
-    finished = pyqtSignal(dict)
-    error_occurred = pyqtSignal(str)
-    
-    def __init__(self, file_path, service, order, seasonal_order, 
-                 exog_columns, method, alpha, l1_ratio):
-        super().__init__()
-        self.file_path = file_path
-        self.service = service
-        self.order = order
-        self.seasonal_order = seasonal_order
-        self.exog_columns = exog_columns
-        self.method = method
-        self.alpha = alpha
-        self.l1_ratio = l1_ratio
-    
-    def run(self):
-        try:
-            self.message_logged.emit("Ejecutando regularización...")
-            result = self.service.fit_with_regularization(
-                self.file_path,
-                self.order,
-                self.seasonal_order,
-                self.exog_columns,
-                self.method,
-                self.alpha,
-                self.l1_ratio,
-                progress_callback=self.progress_updated.emit,
-                log_callback=self.message_logged.emit
-            )
-            self.finished.emit(result)
-        except Exception as e:
-            self.error_occurred.emit(str(e))
-
-
-class CrossValidationThread(QThread):
-    """Hilo para ejecutar cross-validation en background"""
-    
-    progress_updated = pyqtSignal(int, str)
-    message_logged = pyqtSignal(str)
-    finished = pyqtSignal(dict)
-    error_occurred = pyqtSignal(str)
-    
-    def __init__(self, improved_service, order, seasonal_order, n_splits, 
-                 file_path=None, df_prepared=None, regional_code=None):
-        super().__init__()
-        self.improved_service = improved_service
-        self.order = order
-        self.seasonal_order = seasonal_order
-        self.n_splits = n_splits
-        self.file_path = file_path
-        self.df_prepared = df_prepared
-        self.regional_code = regional_code
-    
-    def run(self):
-        try:
-            self.message_logged.emit("Ejecutando cross-validation temporal...")
-            result = self.improved_service.run_cross_validation(
-                file_path=self.file_path,
-                df_prepared=self.df_prepared,
-                order=self.order,
-                seasonal_order=self.seasonal_order,
-                n_splits=self.n_splits,
-                regional_code=self.regional_code,
-                progress_callback=self.progress_updated.emit,
-                log_callback=self.message_logged.emit
-            )
-            self.finished.emit(result)
-        except Exception as e:
-            self.error_occurred.emit(str(e))
-
 
 class PredictionThread(QThread):
     """Hilo para ejecutar predicción en background"""

@@ -136,11 +136,11 @@ class MainWindow(QMainWindow):
     prediction_requested = pyqtSignal()
     optimization_requested = pyqtSignal()
     validation_requested = pyqtSignal()
-    rolling_validation_requested = pyqtSignal()
+    report_generation_requested = pyqtSignal()  
     regional_selected = pyqtSignal(str)
     climate_load_requested = pyqtSignal(str)
-    export_requested = pyqtSignal()   
-    
+    export_requested = pyqtSignal()
+
     def __init__(self):
         super().__init__()
         self.climate_load_buttons = {}
@@ -510,7 +510,7 @@ class MainWindow(QMainWindow):
         # Descripción de la funcionalidad
         simulation_desc = QLabel(
             "Cuando esté habilitado, podrá configurar escenarios climáticos "
-            "hipotéticos (☀️ soleado, 🌧️ lluvioso, ⛈️ tormentoso, 🌡️ ola de calor) "
+            "hipotéticos ( soleado,  lluvioso,  tormentoso,  ola de calor) "
             "antes de generar la predicción SAIDI."
         )
         simulation_desc.setWordWrap(True)
@@ -549,14 +549,14 @@ class MainWindow(QMainWindow):
         analysis_group = self.create_styled_group("3. Análisis SAIDI", "#2196F3")
         analysis_layout = QVBoxLayout(analysis_group)
         analysis_layout.setSpacing(8)
-        
+
         analysis_buttons = [
             (" Generar Predicción", "predict_button", "#2196F3"),
             (" Optimizar Parámetros", "optimize_button", "#9C27B0"),
             (" Validar Modelo", "validate_button", "#00BCD4"),
-            (" Validación Temporal Completa", "rolling_validation_button", "#FF6B6B")
+            (" Generar Informe de Validación", "report_button", "#FF6B6B")  # ← CAMBIADO
         ]
-        
+
         for text, attr_name, color in analysis_buttons:
             btn = QPushButton(text)
             btn.setMinimumHeight(44)
@@ -579,16 +579,15 @@ class MainWindow(QMainWindow):
             """)
             analysis_layout.addWidget(btn)
             setattr(self, attr_name, btn)
-        
+
         layout.addWidget(analysis_group)
         
-        # Botón para exportar predicciones a Excel (será conectado al controlador si está disponible)
+        # Botón para exportar predicciones a Excel
         self.export_excel_button = QPushButton("Exportar a Excel")
         self.export_excel_button.setMinimumHeight(45)
         self.export_excel_button.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
         self.export_excel_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.export_excel_button.setEnabled(False)  # se habilita cuando haya predicciones/generación disponible
-        # Estilo parecido a otros botones
+        self.export_excel_button.setEnabled(False)
         self.export_excel_button.setStyleSheet("""
             QPushButton {
                 background-color: #607D8B;
@@ -599,64 +598,14 @@ class MainWindow(QMainWindow):
             QPushButton:hover {
                 background-color: #546E7A;
             }
-        """)
-        # Conectar a la señal interna; el controlador debe conectarse a export_requested desde main.py
-        self.export_excel_button.clicked.connect(lambda: self.export_requested.emit())
-
-        # Añadir el botón al panel de controles (debajo de los grupos principales)
-        layout.addWidget(self.export_excel_button)
-        
-        # Grupo 4: Mejoras anti-overfitting
-        improvements_group = self.create_styled_group("4. Mejoras Anti-Overfitting", "#FF5722")
-        improvements_layout = QVBoxLayout(improvements_group)
-        improvements_layout.setSpacing(8)
-        
-        improvement_buttons = [
-            (" Cross-Validation Temporal", "cv_button", "#00BCD4"),
-            (" Buscar Modelo Simple", "simple_model_button", "#8BC34A"),
-            (" Comparar Transformaciones", "transformation_button", "#FF9800")
-        ]
-        
-        for text, attr_name, color in improvement_buttons:
-            btn = QPushButton(text)
-            btn.setMinimumHeight(44)
-            btn.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
-            btn.setEnabled(False)
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setStyleSheet(f"""
-                QPushButton {{
-                    background-color: {color};
-                    border-radius: 6px;
-                }}
-                QPushButton:hover {{
-                    background-color: {color};
-                    filter: brightness(110%);
-                }}
-                QPushButton:disabled {{
-                    background-color: #e0e0e0;
-                    color: #9e9e9e;
-                }}
-            """)
-            improvements_layout.addWidget(btn)
-            setattr(self, attr_name, btn)
-        
-        info_label = QLabel("💡 Usar estas herramientas para reducir overfitting")
-        info_label.setWordWrap(True)
-        info_label.setStyleSheet("""
-            QLabel {
-                background-color: #FFF3E0;
-                padding: 10px;
-                border-radius: 6px;
-                border-left: 4px solid #FF9800;
-                color: #E65100;
-                font-size: 10px;
-                font-style: italic;
+            QPushButton:disabled {
+                background-color: #BDBDBD;
+                color: #757575;
             }
         """)
-        improvements_layout.addWidget(info_label)
-        
-        layout.addWidget(improvements_group)
-        
+        self.export_excel_button.clicked.connect(lambda: self.export_requested.emit())
+        layout.addWidget(self.export_excel_button)
+
         # Progreso
         progress_group = self.create_styled_group("Progreso", "#757575")
         progress_layout = QVBoxLayout(progress_group)
@@ -1051,20 +1000,14 @@ class MainWindow(QMainWindow):
             self.predict_button.setEnabled(True)
             self.optimize_button.setEnabled(True)
             self.validate_button.setEnabled(True)
-            self.rolling_validation_button.setEnabled(True)
-            self.cv_button.setEnabled(True)
-            self.simple_model_button.setEnabled(True)
-            self.transformation_button.setEnabled(True)
+            self.report_button.setEnabled(True)  
         else:
             self.hide_regional_selector()
             
             self.predict_button.setEnabled(True)
             self.optimize_button.setEnabled(True)
             self.validate_button.setEnabled(True)
-            self.rolling_validation_button.setEnabled(True)
-            self.cv_button.setEnabled(True)
-            self.simple_model_button.setEnabled(True)
-            self.transformation_button.setEnabled(True)
+            self.report_button.setEnabled(True)
             
             self.log_success("Formato TRADICIONAL detectado")
 
@@ -1129,10 +1072,7 @@ class MainWindow(QMainWindow):
             self.predict_button.setEnabled(enabled)
             self.optimize_button.setEnabled(enabled)
             self.validate_button.setEnabled(enabled)
-            self.rolling_validation_button.setEnabled(enabled)
-            self.cv_button.setEnabled(enabled)
-            self.simple_model_button.setEnabled(enabled)
-            self.transformation_button.setEnabled(enabled)
+            self.report_button.setEnabled(enabled)  
             
             if hasattr(self, 'regional_combo'):
                 self.regional_combo.setEnabled(enabled)
