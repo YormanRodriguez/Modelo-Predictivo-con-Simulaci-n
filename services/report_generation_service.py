@@ -204,7 +204,7 @@ class ValidationReportService:
         transformation = model_params.get('transformation', 'N/A')
         
         model_info = [
-            ['<b>Configuración del Modelo</b>', ''],
+            ['Configuración del Modelo', 'Parámetros'],
             ['Orden ARIMA:', f'{order}'],
             ['Orden Estacional:', f'{seasonal_order}'],
             ['Transformación:', f'{transformation.upper()}'],
@@ -263,7 +263,7 @@ class ValidationReportService:
         cv_results = result.get('validation_analysis', {}).get('cross_validation', {})
         
         metrics_data = [
-            ['<b>Métrica</b>', '<b>Valor</b>'],
+            ['Métrica', 'Valor'],
             ['Rolling Forecast RMSE', f"{rolling_results.get('rmse', 0):.2f} min"],
             ['Precisión Rolling', f"{rolling_results.get('precision', 0):.1f}%"],
             ['CV Stability Score', f"{cv_results.get('cv_stability_score', 0):.1f}/100"],
@@ -364,6 +364,25 @@ class ValidationReportService:
             """
         
         elements.append(Paragraph(results_text + interpretation, self.styles['JustifiedBody']))
+        elements.append(Spacer(1, 0.2*inch))
+        
+        # NUEVA: Insertar gráfica de Rolling Forecast
+        plot_file = result.get('plot_file')
+        if plot_file and os.path.exists(plot_file):
+            try:
+                # Extraer solo la sección de Rolling Forecast (cuadrante superior izquierdo)
+                rolling_plot = self._extract_plot_section(plot_file, 'rolling_forecast')
+                if rolling_plot:
+                    img = Image(rolling_plot, width=5*inch, height=3.5*inch)
+                    elements.append(img)
+                    elements.append(Spacer(1, 0.1*inch))
+                    caption = Paragraph(
+                        "<i>Figura 1.1: Predicciones vs. valores reales en validación walk-forward</i>",
+                        self.styles['Normal']
+                    )
+                    elements.append(caption)
+            except Exception as e:
+                pass  # Si falla, continuar sin gráfica
         
         return elements
     
@@ -441,6 +460,24 @@ class ValidationReportService:
             """
         
         elements.append(Paragraph(results_text + interpretation, self.styles['JustifiedBody']))
+        elements.append(Spacer(1, 0.2*inch))
+        
+        # NUEVA: Insertar gráfica de Cross-Validation
+        plot_file = result.get('plot_file')
+        if plot_file and os.path.exists(plot_file):
+            try:
+                cv_plot = self._extract_plot_section(plot_file, 'cv_stability')
+                if cv_plot:
+                    img = Image(cv_plot, width=5*inch, height=3.5*inch)
+                    elements.append(img)
+                    elements.append(Spacer(1, 0.1*inch))
+                    caption = Paragraph(
+                        "<i>Figura 2.1: Distribución de métricas en splits temporales</i>",
+                        self.styles['Normal']
+                    )
+                    elements.append(caption)
+            except Exception as e:
+                pass
         
         return elements
     
@@ -530,6 +567,24 @@ class ValidationReportService:
             """
         
         elements.append(Paragraph(results_text + interpretation, self.styles['JustifiedBody']))
+        elements.append(Spacer(1, 0.2*inch))
+        
+        # NUEVA: Insertar gráfica de Parameter Stability
+        plot_file = result.get('plot_file')
+        if plot_file and os.path.exists(plot_file):
+            try:
+                param_plot = self._extract_plot_section(plot_file, 'parameter_stability')
+                if param_plot:
+                    img = Image(param_plot, width=5*inch, height=3.5*inch)
+                    elements.append(img)
+                    elements.append(Spacer(1, 0.1*inch))
+                    caption = Paragraph(
+                        "<i>Figura 3.1: Evolución de coeficientes SARIMAX según tamaño de muestra</i>",
+                        self.styles['Normal']
+                    )
+                    elements.append(caption)
+            except Exception as e:
+                pass
         
         return elements
     
@@ -607,8 +662,76 @@ class ValidationReportService:
             """
         
         elements.append(Paragraph(results_text + interpretation, self.styles['JustifiedBody']))
+        elements.append(Spacer(1, 0.2*inch))
+        
+        # NUEVA: Insertar gráfica de Backtesting
+        plot_file = result.get('plot_file')
+        if plot_file and os.path.exists(plot_file):
+            try:
+                backtesting_plot = self._extract_plot_section(plot_file, 'backtesting')
+                if backtesting_plot:
+                    img = Image(backtesting_plot, width=5*inch, height=3.5*inch)
+                    elements.append(img)
+                    elements.append(Spacer(1, 0.1*inch))
+                    caption = Paragraph(
+                        "<i>Figura 4.1: Degradación de precisión según horizonte de predicción</i>",
+                        self.styles['Normal']
+                    )
+                    elements.append(caption)
+            except Exception as e:
+                pass
         
         return elements
+    
+    def _extract_plot_section(self, plot_file: str, section: str) -> Optional[str]:
+        """
+        Extraer una sección específica de la imagen completa
+        
+        Args:
+            plot_file: Ruta de la imagen completa
+            section: Nombre de la sección ('rolling_forecast', 'cv_stability', 
+                    'parameter_stability', 'backtesting', 'diagnosis', 'scores')
+        
+        Returns:
+            Ruta del archivo temporal con la sección extraída
+        """
+        try:
+            from PIL import Image as PILImage
+            
+            # Abrir imagen completa
+            img = PILImage.open(plot_file)
+            width, height = img.size
+            
+            # Definir coordenadas de recorte según sección (basado en tu layout 2x3)
+            # La imagen parece tener 3 columnas y 2 filas
+            col_width = width // 3
+            row_height = height // 2
+            
+            crop_coords = {
+                'rolling_forecast': (0, 0, col_width, row_height),  # Superior izquierda
+                'cv_stability': (col_width, 0, 2*col_width, row_height),  # Superior centro
+                'parameter_stability': (2*col_width, 0, width, row_height),  # Superior derecha
+                'backtesting': (0, row_height, col_width, height),  # Inferior izquierda
+                'diagnosis': (col_width, row_height, 2*col_width, height),  # Inferior centro
+                'scores': (2*col_width, row_height, width, height),  # Inferior derecha
+            }
+            
+            if section not in crop_coords:
+                return None
+            
+            # Recortar sección
+            cropped = img.crop(crop_coords[section])
+            
+            # Guardar en archivo temporal
+            temp_dir = tempfile.gettempdir()
+            temp_file = os.path.join(temp_dir, f'section_{section}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.png')
+            cropped.save(temp_file, 'PNG')
+            
+            return temp_file
+            
+        except Exception as e:
+            print(f"Error extrayendo sección {section}: {e}")
+            return None
     
     def _create_final_diagnosis_section(self, result: Dict) -> list:
         """Sección 5: Diagnóstico Final Integrado"""
@@ -639,7 +762,7 @@ class ValidationReportService:
         component_scores = final_diagnosis.get('component_scores', {})
         
         # Tabla de scores
-        scores_data = [['<b>Componente</b>', '<b>Score</b>', '<b>Estado</b>']]
+        scores_data = [['Componente', 'Score', 'Estado']]
         
         for component, score in component_scores.items():
             component_name = self._get_component_display_name(component)

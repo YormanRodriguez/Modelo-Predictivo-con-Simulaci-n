@@ -1039,14 +1039,41 @@ class AppController(QObject):
     def on_report_validation_finished(self, result):
         """Callback cuando termina validación - Genera PDF"""
         try:
+            # Preguntar al usuario dónde guardar el PDF
+            from PyQt6.QtWidgets import QFileDialog
+            
+            model_params = result.get('model_params', {})
+            regional_code = model_params.get('regional_code', 'SAIDI')
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            
+            default_name = f"Informe_Validacion_{regional_code}_{timestamp}.pdf"
+            default_path = os.path.join(os.path.expanduser("~/Desktop"), default_name)
+            
+            filepath, _ = QFileDialog.getSaveFileName(
+                self.view,
+                "Guardar Informe de Validación SAIDI",
+                default_path,
+                "Archivos PDF (*.pdf);;Todos los archivos (*.*)"
+            )
+            
+            if not filepath:
+                self.view.set_buttons_enabled(True)
+                self.view.show_progress(False)
+                self.view.log_message("Generación de informe cancelada por el usuario")
+                return
+            
+            if not filepath.endswith('.pdf'):
+                filepath += '.pdf'
+            
             self.view.update_progress(95, "Generando informe PDF...")
             self.view.log_message("=" * 60)
             self.view.log_message("GENERANDO INFORME PDF PROFESIONAL")
             self.view.log_message("=" * 60)
             
-            # Generar informe PDF
+            # Generar informe PDF en la ubicación elegida
             pdf_path = self.report_service.generate_validation_report(
                 result=result,
+                output_path=filepath,
                 log_callback=self.view.log_message
             )
             
