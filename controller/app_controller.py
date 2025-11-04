@@ -533,12 +533,23 @@ class AppController(QObject):
             self.view.log_message(f"Se evaluarán TODAS las transformaciones disponibles")
             self.view.log_message(f"Transformaciones: {', '.join(self.optimization_service.AVAILABLE_TRANSFORMATIONS)}")
             
-            # NUEVO: Obtener datos climáticos si están disponibles
+            # CRÍTICO: Obtener datos climáticos
             if self.are_climate_data_available(regional_code):
                 climate_data = self.get_climate_data_for_regional(regional_code)
-                self.view.log_message(f"✓ Datos climáticos disponibles - Se incluirán en la optimización")
+                
+                # VERIFICAR QUE SE OBTUVIERON CORRECTAMENTE
+                if climate_data is not None and not climate_data.empty:
+                    self.view.log_message(f"✓ Datos climáticos disponibles: {len(climate_data)} registros")
+                    self.view.log_message(f"   Periodo: {climate_data.index[0]} a {climate_data.index[-1]}")
+                    self.view.log_message(f"   Columnas: {len(climate_data.columns)}")
+                    
+                    # DEBUG: Mostrar primeras columnas
+                    self.view.log_message(f"   Primeras 5 columnas: {list(climate_data.columns[:5])}")
+                else:
+                    self.view.log_message("⚠ Datos climáticos vacíos o inválidos")
+                    climate_data = None
             else:
-                self.view.log_message(f" Sin datos climáticos - Optimización sin variables exógenas")
+                self.view.log_message(f"ℹ Sin datos climáticos - Optimización sin variables exógenas")
         
         try:
             self.view.log_message("Iniciando optimización de parámetros...")
@@ -553,13 +564,15 @@ class AppController(QObject):
                 self.view.set_buttons_enabled(True)
                 return
             
-            # MODIFICADO: Pasar climate_data al thread
+            #  CREAR THREAD CON climate_data
             self.optimization_thread = OptimizationThread(
                 optimization_service=self.optimization_service,
                 df_prepared=df_prepared,
                 regional_code=regional_code,
-                climate_data=climate_data  # NUEVO
+                climate_data=climate_data  #  PASAR climate_data AL THREAD
             )
+            
+            # Conectar señales
             self.optimization_thread.progress_updated.connect(self.view.update_progress)
             self.optimization_thread.message_logged.connect(self.view.log_message)
             self.optimization_thread.iteration_logged.connect(self.view.log_message)
@@ -1209,7 +1222,7 @@ class PredictionThread(QThread):
 
 
 class OptimizationThread(QThread):
-    """Hilo para ejecutar optimización en background"""
+    """Hilo para ejecutar optimización en background CON CLIMA"""
     
     progress_updated = pyqtSignal(int, str)
     message_logged = pyqtSignal(str)
@@ -1218,28 +1231,38 @@ class OptimizationThread(QThread):
     error_occurred = pyqtSignal(str)
     
     def __init__(self, optimization_service, file_path=None, df_prepared=None, 
-                 regional_code=None, climate_data=None):  
+                 regional_code=None, climate_data=None):
         super().__init__()
         self.optimization_service = optimization_service
         self.file_path = file_path
         self.df_prepared = df_prepared
         self.regional_code = regional_code
-        self.climate_data = climate_data  
+        self.climate_data = climate_data  # ASEGURAR QUE SE GUARDA
     
     def run(self):
         try:
             self.message_logged.emit("Ejecutando optimización de parámetros...")
+            
+            # VERIFICAR QUE climate_data SE PASA CORRECTAMENTE
+            if self.climate_data is not None:
+                self.message_logged.emit(f"✓ Climate data disponible: {len(self.climate_data)} registros")
+            else:
+                self.message_logged.emit("⚠ Sin climate data - Optimización sin exógenas")
+            
             result = self.optimization_service.run_optimization(
                 file_path=self.file_path,
                 df_prepared=self.df_prepared,
                 regional_code=self.regional_code,
-                climate_data=self.climate_data, 
+                climate_data=self.climate_data,  # CRÍTICO: Pasar climate_data
                 progress_callback=self.progress_updated.emit,
                 log_callback=self.message_logged.emit,
                 iteration_callback=self.iteration_logged.emit
             )
             self.finished.emit(result)
         except Exception as e:
+            import traceback
+            error_detail = traceback.format_exc()
+            self.message_logged.emit(f"Error detallado:\n{error_detail}")
             self.error_occurred.emit(str(e))
 
 

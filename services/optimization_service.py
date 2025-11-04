@@ -1,4 +1,4 @@
-# services/optimization_service.py - REFACTORIZADO Y ROBUSTO
+# services/optimization_service.py - Milo
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -34,30 +34,50 @@ class OptimizationService:
     
     # Variables exógenas por regional
     REGIONAL_EXOG_VARS = {
-        'SAIDI_O': {
-            'temp_max': 'Temperatura maxima',
-            'humedad_avg': 'Humedad relativa',
-            'precip_total': 'Precipitacion total'
+        'SAIDI_O': {  # Ocaña - 10 correlaciones fuertes
+            # Top 5 correlaciones más fuertes (r >= 0.45)
+            'realfeel_min': 'Temperatura aparente mínima',           # r=0.689 
+            'windchill_avg': 'Sensación térmica promedio',          # r=0.520 
+            'dewpoint_avg': 'Punto de rocío promedio',              # r=0.470 
+            'windchill_max': 'Sensación térmica máxima',            # r=0.464 
+            'dewpoint_min': 'Punto de rocío mínimo',                # r=0.456 
+            # Adicionales relevantes
+            'precipitation_max_daily': 'Precipitación máxima diaria', # r=0.452
+            'precipitation_avg_daily': 'Precipitación promedio diaria', # r=0.438
         },
-        'SAIDI_C': {
-            'temp_max': 'Temperatura maxima',
-            'humedad_avg': 'Humedad relativa',
-            'precip_total': 'Precipitacion total'
+        
+        'SAIDI_C': {  # Cúcuta - 4 correlaciones fuertes
+            # Todas las correlaciones fuertes disponibles
+            'realfeel_avg': 'Temperatura aparente promedio',        # r=0.573 
+            'pressure_rel_avg': 'Presión relativa promedio',        # r=-0.358 (negativa)
+            'wind_speed_max': 'Velocidad máxima del viento',        # r=0.356
+            'pressure_abs_avg': 'Presión absoluta promedio',        # r=-0.356 (negativa)
         },
-        'SAIDI_A': {
-            'temp_max': 'Temperatura maxima',
-            'humedad_avg': 'Humedad relativa',
-            'precip_total': 'Precipitacion total'
+        
+        'SAIDI_T': {  # Tibú - 10 correlaciones fuertes
+            # Top 7 correlaciones más fuertes
+            'realfeel_avg': 'Temperatura aparente promedio',        # r=0.906 
+            'wind_dir_avg': 'Dirección promedio del viento',        # r=-0.400 (negativa)
+            'uv_index_avg': 'Índice UV promedio',                   # r=0.385 
+            'heat_index_avg': 'Índice de calor promedio',           # r=0.363 
+            'temperature_min': 'Temperatura mínima',                # r=0.352
+            'windchill_min': 'Sensación térmica mínima',            # r=0.340
+            'temperature_avg': 'Temperatura promedio',              # r=0.338
+            # Adicionales
+            'pressure_rel_avg': 'Presión relativa promedio',        # r=-0.330 (negativa)
         },
-        'SAIDI_P': {
-            'temp_max': 'Temperatura maxima',
-            'humedad_avg': 'Humedad relativa',
-            'precip_total': 'Precipitacion total'
+        
+        'SAIDI_A': {  # Aguachica - 2 correlaciones fuertes
+            # Todas las correlaciones fuertes disponibles
+            'uv_index_max': 'Índice UV máximo',                     # r=0.664 
+            'days_with_rain': 'Días con lluvia',                    # r=0.535 
         },
-        'SAIDI_T': {
-            'temp_max': 'Temperatura maxima',
-            'uv_index_avg': 'Indice UV promedio',
-            'heat_index_avg': 'Indice de calor'
+        
+        'SAIDI_P': {  # Pamplona - 3 correlaciones fuertes
+            # Todas las correlaciones fuertes disponibles
+            'precipitation_total': 'Precipitación total',           # r=0.577 
+            'precipitation_avg_daily': 'Precipitación promedio diaria', # r=0.552 
+            'realfeel_min': 'Temperatura aparente mínima',          # r=0.344 (moderada-fuerte)
         },
     }
     
@@ -150,17 +170,32 @@ class OptimizationService:
             if progress_callback:
                 progress_callback(10, "Preparando variables exogenas...")
             
-            # Paso 2: Preparar variables exógenas (si estan disponibles)
-            exog_df, exog_info = self._prepare_exogenous_variables(
-                climate_data, df, regional_code, log_callback
+            # Paso 2: Preparar variables exógenas (si están disponibles)
+            exog_df, exog_info, coverage_report = self._prepare_exogenous_adaptive(
+                climate_data, df, regional_code, historico, log_callback
             )
             
+            # Diagnóstico: Validar cobertura ANTES de continuar
             if exog_df is not None:
-                print(f"[DEBUG_OPT] Variables exogenas preparadas: {len(exog_df.columns)} variables")
+                print("[DEBUG_OPT] Ejecutando diagnóstico de cobertura exógena...")
+                
+                if not self.diagnose_exog_coverage(historico[col_saidi], exog_df, log_callback):
+                    print("[DEBUG_OPT] ⚠ Cobertura exógena insuficiente - Desactivando variables")
+                    if log_callback:
+                        log_callback("ADVERTENCIA: Variables exógenas desactivadas por cobertura insuficiente")
+                        log_callback("La optimización continuará SIN variables climáticas")
+                    exog_df = None
+                    exog_info = None
+                else:
+                    print("[DEBUG_OPT] ✓ Diagnóstico de cobertura exógena OK")
+            
+            # Log final del estado de exógenas
+            if exog_df is not None:
+                print(f"[DEBUG_OPT] ✓ Variables exógenas activas: {len(exog_df.columns)} variables")
                 if log_callback:
                     log_callback(f"Variables exogenas disponibles: {len(exog_df.columns)}")
             else:
-                print("[DEBUG_OPT] Sin variables exogenas")
+                print("[DEBUG_OPT] Optimización SIN variables exógenas")
                 if log_callback:
                     log_callback("Optimizacion sin variables exogenas")
             
@@ -297,11 +332,12 @@ class OptimizationService:
         
         # Forzar recolección de basura
         gc.collect()
+
     
     def _load_and_validate_data(self, 
-                                file_path: Optional[str],
-                                df_prepared: Optional[pd.DataFrame],
-                                log_callback) -> Tuple[pd.DataFrame, str, pd.DataFrame]:
+                            file_path: Optional[str],
+                            df_prepared: Optional[pd.DataFrame],
+                            log_callback) -> Tuple[pd.DataFrame, str, pd.DataFrame]:
         """
         Cargar y validar datos SAIDI
         
@@ -417,13 +453,13 @@ class OptimizationService:
         return valid
     
     def _run_parallel_optimization(self,
-                                   serie_original: pd.Series,
-                                   param_combinations: List[Tuple],
-                                   exog_df: Optional[pd.DataFrame],
-                                   progress_callback,
-                                   iteration_callback,
-                                   log_callback,
-                                   max_workers: Optional[int]):
+                               serie_original: pd.Series,
+                               param_combinations: List[Tuple],
+                               exog_df: Optional[pd.DataFrame],
+                               progress_callback,
+                               iteration_callback,
+                               log_callback,
+                               max_workers: Optional[int]):
         """Ejecutar optimización en paralelo usando ProcessPoolExecutor"""
         
         if max_workers is None:
@@ -490,7 +526,7 @@ class OptimizationService:
                             # Log de progreso si es relevante
                             if metrics['precision_final'] > 60:
                                 print(f"[DEBUG_OPT] Modelo relevante encontrado: "
-                                      f"{transformation} - Precision: {metrics['precision_final']:.1f}%")
+                                    f"{transformation} - Precision: {metrics['precision_final']:.1f}%")
                         
                     except Exception as e:
                         # Silenciar timeouts y errores menores
@@ -513,12 +549,12 @@ class OptimizationService:
         print(f"[DEBUG_OPT] Procesamiento paralelo completado")
     
     def _run_sequential_optimization(self,
-                                    serie_original: pd.Series,
-                                    param_combinations: List[Tuple],
-                                    exog_df: Optional[pd.DataFrame],
-                                    progress_callback,
-                                    iteration_callback,
-                                    log_callback):
+                                serie_original: pd.Series,
+                                param_combinations: List[Tuple],
+                                exog_df: Optional[pd.DataFrame],
+                                progress_callback,
+                                iteration_callback,
+                                log_callback):
         """Ejecutar optimización secuencialmente (un modelo a la vez)"""
         
         print("[DEBUG_OPT] Iniciando procesamiento secuencial")
@@ -552,7 +588,7 @@ class OptimizationService:
                     # Log relevante
                     if metrics['precision_final'] > 60:
                         print(f"[DEBUG_OPT] Modelo relevante: {transformation} - "
-                              f"Precision: {metrics['precision_final']:.1f}%")
+                            f"Precision: {metrics['precision_final']:.1f}%")
                 
                 # Actualizar progreso
                 if progress_callback:
@@ -568,14 +604,95 @@ class OptimizationService:
                     gc.collect()
         
         print("[DEBUG_OPT] Procesamiento secuencial completado")
+
+    def diagnose_exog_coverage(self, 
+                          serie_saidi: pd.Series, 
+                          exog_df: pd.DataFrame,
+                          log_callback) -> bool:
+        """
+        Diagnosticar cobertura temporal de variables exógenas
+        """
+        try:
+            saidi_start = serie_saidi.index[0]
+            saidi_end = serie_saidi.index[-1]
+            exog_start = exog_df.index[0]
+            exog_end = exog_df.index[-1]
+            
+            print(f"[DIAGNOSTICO] SAIDI: {saidi_start} a {saidi_end} ({len(serie_saidi)} obs)")
+            print(f"[DIAGNOSTICO] EXOG:  {exog_start} a {exog_end} ({len(exog_df)} obs)")
+            
+            # 1. Verificar que los índices coinciden EXACTAMENTE
+            if not exog_df.index.equals(serie_saidi.index):
+                print("[DIAGNOSTICO] ADVERTENCIA: Índices no coinciden exactamente")
+                
+                # Verificar fechas faltantes
+                missing_in_exog = [d for d in serie_saidi.index if d not in exog_df.index]
+                
+                if missing_in_exog:
+                    pct_missing = len(missing_in_exog) / len(serie_saidi) * 100
+                    print(f"[DIAGNOSTICO] Fechas SAIDI faltantes en EXOG: {len(missing_in_exog)} ({pct_missing:.1f}%)")
+                    
+                    # Mostrar primeras y últimas fechas faltantes
+                    if len(missing_in_exog) <= 5:
+                        print(f"[DIAGNOSTICO]   Fechas faltantes: {missing_in_exog}")
+                    else:
+                        print(f"[DIAGNOSTICO]   Primeras faltantes: {missing_in_exog[:3]}")
+                        print(f"[DIAGNOSTICO]   Últimas faltantes: {missing_in_exog[-3:]}")
+                    
+                    # CRÍTICO: Si falta >20% de fechas, rechazar
+                    if pct_missing > 20:
+                        print("[DIAGNOSTICO] ERROR CRÍTICO: >20% de fechas faltantes")
+                        if log_callback:
+                            log_callback(f"ERROR: {pct_missing:.1f}% de fechas SAIDI no tienen datos climáticos")
+                        return False
+            
+            # 2. Verificar que NO hay NaN en ninguna columna
+            if exog_df.isnull().any().any():
+                nan_cols = exog_df.columns[exog_df.isnull().any()].tolist()
+                nan_details = []
+                
+                for col in nan_cols:
+                    nan_count = exog_df[col].isnull().sum()
+                    pct_nan = (nan_count / len(exog_df)) * 100
+                    nan_details.append(f"{col}: {nan_count} ({pct_nan:.1f}%)")
+                
+                print(f"[DIAGNOSTICO] ERROR: Columnas con NaN encontradas:")
+                for detail in nan_details:
+                    print(f"[DIAGNOSTICO]   - {detail}")
+                
+                if log_callback:
+                    log_callback("ERROR: Variables exógenas contienen valores NaN")
+                
+                return False
+            
+            # 3. Verificar valores infinitos
+            if np.isinf(exog_df.values).any():
+                print("[DIAGNOSTICO] ERROR: Variables exógenas contienen valores infinitos")
+                return False
+            
+            # 4. Verificar que hay varianza en las variables
+            for col in exog_df.columns:
+                if exog_df[col].std() == 0:
+                    print(f"[DIAGNOSTICO] ADVERTENCIA: {col} tiene varianza cero")
+            
+            print("[DIAGNOSTICO] ✓ Cobertura temporal y calidad de datos OK")
+            return True
+            
+        except Exception as e:
+            print(f"[DIAGNOSTICO] ERROR durante diagnóstico: {e}")
+            return False
     
     def _evaluate_single_model(self,
-                            serie_original: pd.Series,
-                            order: Tuple[int, int, int],
-                            seasonal_order: Tuple[int, int, int, int],
-                            transformation: str,
-                            exog_df: Optional[pd.DataFrame]) -> Optional[Dict[str, Any]]:
+                        serie_original: pd.Series,
+                        order: Tuple[int, int, int],
+                        seasonal_order: Tuple[int, int, int, int],
+                        transformation: str,
+                        exog_df: Optional[pd.DataFrame]) -> Optional[Dict[str, Any]]:
+        """
+        Evaluar un modelo SARIMAX individual
+        """
         try:
+            # Calcular porcentaje de validación adaptativo
             n_obs = len(serie_original)
             if n_obs >= 60:
                 pct_validacion = 0.30
@@ -586,13 +703,14 @@ class OptimizationService:
             
             n_test = max(6, int(n_obs * pct_validacion))
             
+            # Dividir en train/test
             train_original = serie_original[:-n_test]
             test_original = serie_original[-n_test:]
             
             if len(train_original) < 12:
                 return None
             
-            # Aplicar transformación
+            # Aplicar transformación a la serie
             self.scaler = None
             self.transformation_params = {}
             
@@ -601,65 +719,128 @@ class OptimizationService:
             )
             train_transformed_series = pd.Series(train_transformed, index=train_original.index)
             
-            # Preparar exógenas
+            # ==================== PREPARAR EXÓGENAS CON VALIDACIÓN ESTRICTA ====================
             exog_train = None
             exog_test = None
+            
             if exog_df is not None:
-                exog_train = exog_df.loc[train_original.index]
-                exog_test = exog_df.loc[test_original.index]
+                try:
+                    train_index = train_original.index
+                    test_index = test_original.index
+                    
+                    # VALIDACIÓN 1: Verificar que exog_df contiene TODAS las fechas necesarias
+                    missing_train = [idx for idx in train_index if idx not in exog_df.index]
+                    missing_test = [idx for idx in test_index if idx not in exog_df.index]
+                    
+                    if missing_train:
+                        # Rechazar: faltan fechas de entrenamiento
+                        return None
+                    
+                    if missing_test:
+                        # Rechazar: faltan fechas de test
+                        return None
+                    
+                    # VALIDACIÓN 2: Extraer subconjuntos con .loc (garantiza alineación)
+                    exog_train = exog_df.loc[train_index].copy()
+                    exog_test = exog_df.loc[test_index].copy()
+                    
+                    # VALIDACIÓN 3: Verificar que NO hay NaN
+                    if exog_train.isnull().any().any():
+                        return None
+                    
+                    if exog_test.isnull().any().any():
+                        return None
+                    
+                    # VALIDACIÓN 4: Verificar dimensiones correctas
+                    if len(exog_train) != len(train_original):
+                        return None
+                    
+                    if len(exog_test) != n_test:
+                        return None
+                    
+                    # VALIDACIÓN 5: Verificar que no hay infinitos
+                    if np.isinf(exog_train.values).any() or np.isinf(exog_test.values).any():
+                        return None
+                    
+                except Exception:
+                    # Cualquier error en preparación de exógenas: rechazar modelo
+                    return None
             
-            # Entrenar modelo
-            model = SARIMAX(
-                train_transformed_series,
-                exog=exog_train,
-                order=order,
-                seasonal_order=seasonal_order,
-                enforce_stationarity=True,
-                enforce_invertibility=True
-            )
-            results = model.fit(disp=False, maxiter=50)
+            # ==================== ENTRENAR MODELO SARIMAX ====================
+            try:
+                model = SARIMAX(
+                    train_transformed_series,
+                    exog=exog_train,
+                    order=order,
+                    seasonal_order=seasonal_order,
+                    enforce_stationarity=True,
+                    enforce_invertibility=True
+                )
+                
+                # Fit con timeout implícito (maxiter limitado)
+                results = model.fit(disp=False, maxiter=50)
+                
+            except Exception:
+                # Convergencia fallida, parámetros inválidos, etc.
+                return None
             
-            # Predecir
-            pred = results.get_forecast(steps=n_test, exog=exog_test)
-            pred_mean_transformed = pred.predicted_mean
+            # ==================== PREDECIR EN TEST ====================
+            try:
+                pred = results.get_forecast(steps=n_test, exog=exog_test)
+                pred_mean_transformed = pred.predicted_mean
+                
+            except Exception:
+                # Error en forecast (usualmente por exógenas mal alineadas)
+                return None
             
-            # Revertir transformación
-            pred_mean_original = self._inverse_transformation(
-                pred_mean_transformed.values, transformation
-            )
+            # ==================== REVERTIR TRANSFORMACIÓN ====================
+            try:
+                pred_mean_original = self._inverse_transformation(
+                    pred_mean_transformed.values, transformation
+                )
+            except Exception:
+                return None
             
-            test_values = test_original.values  
-            pred_values = pred_mean_original     
+            # ==================== CALCULAR MÉTRICAS ====================
+            test_values = test_original.values
+            pred_values = pred_mean_original
             
-            # Ahora TODAS las operaciones usan arrays numpy
+            # RMSE (Root Mean Squared Error)
             rmse = np.sqrt(mean_squared_error(test_values, pred_values))
+            
+            # MAE (Mean Absolute Error)
             mae = np.mean(np.abs(test_values - pred_values))
             
+            # MAPE (Mean Absolute Percentage Error)
             epsilon = 1e-8
-            #  Ambos son arrays → operación correcta elemento por elemento
             mape = np.mean(np.abs((test_values - pred_values) / 
                                 (test_values + epsilon))) * 100
             
+            # R² Score
             ss_res = np.sum((test_values - pred_values) ** 2)
             ss_tot = np.sum((test_values - np.mean(test_values)) ** 2)
             r2_score = 1 - (ss_res / (ss_tot + epsilon))
             
-            # Precisión final
+            # Precisión final (inversa del MAPE)
             precision_final = max(0.0, min(100.0, (1 - mape/100) * 100))
             
-            # Validación adicional
+            # VALIDACIÓN: Verificar que métricas son válidas
             if np.isnan(precision_final) or np.isinf(precision_final):
                 return None
             
-            # Penalización por complejidad
+            if np.isnan(rmse) or np.isinf(rmse):
+                return None
+            
+            # Penalización por complejidad del modelo
             complexity_penalty = sum(order) + sum(seasonal_order[:3])
             composite_score = rmse + (complexity_penalty * 0.05)
             
-            # Estabilidad
+            # Score de estabilidad
             stability_score = self._calculate_stability_numpy(
                 test_values, pred_values, precision_final, mape
             )
             
+            # Retornar métricas completas
             return {
                 'rmse': rmse,
                 'mae': mae,
@@ -675,38 +856,45 @@ class OptimizationService:
                 'validation_pct': pct_validacion * 100
             }
             
-        except Exception as e:
+        except Exception:
+            # Cualquier error no controlado: rechazar modelo
             return None
 
+
     def _calculate_stability_numpy(self, 
-                                actual_values: np.ndarray,  
-                                predicted_values: np.ndarray,  
-                                precision: float,
-                                mape: float) -> float:
-        
+                            actual_values: np.ndarray,  
+                            predicted_values: np.ndarray,  
+                            precision: float,
+                            mape: float) -> float:
+        """
+        Calcular score de estabilidad del modelo
+        """
         try:
             errors = actual_values - predicted_values
             
             mean_abs_error = np.mean(np.abs(errors))
             std_error = np.std(errors)
             
+            # Coeficiente de variación de errores
             if mean_abs_error > 1e-8:
                 cv_error = std_error / mean_abs_error
+                # Convertir a score (menor CV = mayor estabilidad)
                 stability_cv = max(0, 100 * (1 - min(cv_error, 1)))
             else:
+                # Si errores son muy pequeños, estabilidad neutral
                 stability_cv = 50.0
             
-            # Penalización por MAPE alto
+            # Penalización adaptativa por MAPE
             if mape > 50:
-                mape_penalty = 0.5
+                mape_penalty = 0.5  # Penalización fuerte
             elif mape > 30:
-                mape_penalty = 0.7
+                mape_penalty = 0.7  # Penalización moderada
             else:
-                mape_penalty = 1.0
+                mape_penalty = 1.0  # Sin penalización
             
             stability_cv = stability_cv * mape_penalty
             
-            # Combinar con precisión
+            # Combinar estabilidad con precisión (60% estabilidad, 40% precisión)
             stability = (stability_cv * 0.6) + (precision * 0.4)
             
             return min(100.0, max(0.0, stability))
@@ -835,12 +1023,13 @@ class OptimizationService:
         stability = best_current.get('stability_score', 0)
         
         status_msg = (f"Evaluadas {self.current_iteration}/{self.total_iterations} | "
-                     f"Mejor: {transformation} - {precision:.1f}%{exog_mark}")
+                    f"Mejor: {transformation} - {precision:.1f}%{exog_mark}")
         
         if stability > 0:
             status_msg += f" (Stability: {stability:.0f})"
         
         iteration_callback(status_msg)
+
     
     def _select_best_models(self) -> Tuple[List[Dict], str, Dict[str, int]]:
         """
@@ -899,7 +1088,7 @@ class OptimizationService:
         }
         
         print(f"[DEBUG_OPT] Clasificacion: Excellent={len(excellent)}, Good={len(good)}, "
-              f"Acceptable={len(acceptable)}, Poor={len(poor)}")
+            f"Acceptable={len(acceptable)}, Poor={len(poor)}")
         
         # Estrategia de selección adaptativa
         if len(excellent) >= 5:
@@ -919,95 +1108,357 @@ class OptimizationService:
         
         return selected, quality_level, quality_counts
     
-    def _prepare_exogenous_variables(self,
-                                     climate_data: Optional[pd.DataFrame],
-                                     df_saidi: pd.DataFrame,
-                                     regional_code: Optional[str],
-                                     log_callback) -> Tuple[Optional[pd.DataFrame], Optional[Dict]]:
+    def _prepare_exogenous_adaptive(self,
+                            climate_data: pd.DataFrame,
+                            df_saidi: pd.DataFrame,
+                            regional_code: str,
+                            historico: pd.DataFrame,
+                            log_callback) -> Tuple[Optional[pd.DataFrame], Optional[Dict], Dict]:
         """
-        Preparar variables exógenas climáticas
-        
-        Returns:
-            Tuple con (DataFrame escalado, información de variables)
+        Preparar variables exogenas con estrategia de overlap inteligente
         """
         try:
-            if climate_data is None or climate_data.empty:
-                print("[DEBUG_OPT] Sin datos climaticos")
-                return None, None
-            
-            if not regional_code or regional_code not in self.REGIONAL_EXOG_VARS:
-                print(f"[DEBUG_OPT] Regional {regional_code} sin variables exogenas definidas")
-                if log_callback:
-                    log_callback(f"Regional {regional_code} no tiene variables exogenas definidas")
-                return None, None
-            
-            print(f"[DEBUG_OPT] Preparando variables exogenas para {regional_code}")
-            
-            exog_vars_config = self.REGIONAL_EXOG_VARS[regional_code]
-            
-            # Mapeo de columnas climáticas
-            climate_column_mapping = {
-                'temp_max': 'temp_max',
-                'humedad_avg': 'humedad_avg',
-                'precip_total': 'precip_total',
-                'uv_index_avg': 'uv_index_avg',
-                'heat_index_avg': 'heat_index_avg'
+            # Inicializar reporte de cobertura
+            coverage_report = {
+                'overlap_start': None,
+                'overlap_end': None,
+                'overlapping_months': 0,
+                'extrapolation_months': 0,
+                'backward_fill_months': 0,
+                'variables_accepted': [],
+                'variables_rejected': [],
+                'rejection_reasons': {}
             }
             
-            exog_df = pd.DataFrame(index=df_saidi.index)
+            if climate_data is None or climate_data.empty:
+                print("[EXOG_ADAPTIVE] Sin datos climaticos")
+                if log_callback:
+                    log_callback("Sin datos climaticos disponibles")
+                return None, None, coverage_report
+            
+            if not regional_code or regional_code not in self.REGIONAL_EXOG_VARS:
+                print(f"[EXOG_ADAPTIVE] Regional {regional_code} sin variables definidas")
+                return None, None, coverage_report
+            
+            print(f"[EXOG_ADAPTIVE] Iniciando preparacion para {regional_code}")
+            
+            # ==================== CORRECCIÓN CRÍTICA: VALIDAR ÍNDICE ====================
+            print(f"[EXOG_ADAPTIVE] Tipo de índice climate_data: {type(climate_data.index)}")
+            print(f"[EXOG_ADAPTIVE] Primeros valores: {climate_data.index[:3].tolist()}")
+            
+            # Si el índice NO es DatetimeIndex, intentar convertir desde columna 'fecha'
+            if not isinstance(climate_data.index, pd.DatetimeIndex):
+                print("[EXOG_ADAPTIVE] ADVERTENCIA: Índice no es DatetimeIndex")
+                
+                # Buscar columna de fecha
+                fecha_col = None
+                for col in ['fecha', 'Fecha', 'date', 'Date', 'month_date']:
+                    if col in climate_data.columns:
+                        fecha_col = col
+                        break
+                
+                if fecha_col is None:
+                    print("[EXOG_ADAPTIVE] ERROR: No se encontró columna de fecha")
+                    if log_callback:
+                        log_callback("ERROR: Datos climáticos sin columna de fecha válida")
+                    return None, None, coverage_report
+                
+                print(f"[EXOG_ADAPTIVE] Usando columna '{fecha_col}' como índice")
+                
+                try:
+                    # Convertir columna a datetime y usar como índice
+                    climate_data = climate_data.copy()
+                    climate_data[fecha_col] = pd.to_datetime(climate_data[fecha_col])
+                    climate_data = climate_data.set_index(fecha_col)
+                    
+                    print(f"[EXOG_ADAPTIVE] Índice convertido correctamente")
+                    print(f"[EXOG_ADAPTIVE] Nuevo periodo: {climate_data.index[0]} a {climate_data.index[-1]}")
+                    
+                except Exception as e:
+                    print(f"[EXOG_ADAPTIVE] ERROR convirtiendo índice: {e}")
+                    if log_callback:
+                        log_callback(f"ERROR: No se pudo convertir columna de fecha: {str(e)}")
+                    return None, None, coverage_report
+            
+            # Verificar que ahora sí es DatetimeIndex
+            if not isinstance(climate_data.index, pd.DatetimeIndex):
+                print(f"[EXOG_ADAPTIVE] ERROR: Índice sigue sin ser DatetimeIndex: {type(climate_data.index)}")
+                if log_callback:
+                    log_callback("ERROR: Datos climáticos con formato de fecha inválido")
+                return None, None, coverage_report
+            
+            # PASO 1: ANALISIS DE COBERTURA TEMPORAL
+            saidi_start = historico.index[0]
+            saidi_end = historico.index[-1]
+            clima_start = climate_data.index[0]
+            clima_end = climate_data.index[-1]
+            
+            print(f"[EXOG_ADAPTIVE] SAIDI: {saidi_start} a {saidi_end} ({len(historico)} meses)")
+            print(f"[EXOG_ADAPTIVE] CLIMA: {clima_start} a {clima_end} ({len(climate_data)} meses)")
+            
+            # Calcular periodo de overlap
+            overlap_start = max(saidi_start, clima_start)
+            overlap_end = min(saidi_end, clima_end)
+            
+            if overlap_start > overlap_end:
+                print("[EXOG_ADAPTIVE] ERROR: Sin overlap entre SAIDI y CLIMA")
+                if log_callback:
+                    log_callback("ERROR: Periodos SAIDI y CLIMA no se traslapan")
+                return None, None, coverage_report
+            
+            # Crear mascara de overlap
+            overlap_mask = (historico.index >= overlap_start) & (historico.index <= overlap_end)
+            overlap_months = overlap_mask.sum()
+            
+            # Validar overlap minimo (12 meses)
+            if overlap_months < 12:
+                print(f"[EXOG_ADAPTIVE] ERROR: Overlap insuficiente ({overlap_months} < 12 meses)")
+                if log_callback:
+                    log_callback(f"ERROR: Overlap insuficiente: {overlap_months} meses (minimo: 12)")
+                return None, None, coverage_report
+            
+            # Actualizar reporte
+            coverage_report['overlap_start'] = overlap_start
+            coverage_report['overlap_end'] = overlap_end
+            coverage_report['overlapping_months'] = int(overlap_months)
+            
+            # Calcular meses de extrapolacion (hacia futuro)
+            future_mask = historico.index > overlap_end
+            extrapolation_months = future_mask.sum()
+            coverage_report['extrapolation_months'] = int(extrapolation_months)
+            
+            # Calcular meses de backfill (hacia pasado)
+            past_mask = historico.index < overlap_start
+            backward_months = past_mask.sum()
+            coverage_report['backward_fill_months'] = int(backward_months)
+            
+            # LOG INICIAL DE COBERTURA
+            if log_callback:
+                log_callback("=" * 80)
+                log_callback("ANALISIS DE COBERTURA TEMPORAL")
+                log_callback("=" * 80)
+                log_callback(f"Periodo SAIDI completo: {saidi_start.strftime('%Y-%m')} a {saidi_end.strftime('%Y-%m')} ({len(historico)} meses)")
+                log_callback(f"Periodo CLIMA disponible: {clima_start.strftime('%Y-%m')} a {clima_end.strftime('%Y-%m')} ({len(climate_data)} meses)")
+                log_callback(f"Periodo de OVERLAP: {overlap_start.strftime('%Y-%m')} a {overlap_end.strftime('%Y-%m')} ({overlap_months} meses)")
+                log_callback("=" * 80)
+                log_callback(f"ENTRENAMIENTO usara: {overlap_months} meses con datos reales de clima")
+                if extrapolation_months > 0:
+                    log_callback(f"PREDICCION extrapolara: {extrapolation_months} meses hacia futuro (usando ultimo valor conocido)")
+                if backward_months > 0:
+                    log_callback(f"HISTORICO rellenara: {backward_months} meses hacia pasado (max 3 meses backfill)")
+                log_callback("")
+            
+            # PASO 2: MAPEO AUTOMATICO DE COLUMNAS
+            exog_vars_config = self.REGIONAL_EXOG_VARS[regional_code]
+            
+            available_cols_normalized = {}
+            for col in climate_data.columns:
+                normalized = col.lower().strip().replace(' ', '_').replace('-', '_')
+                available_cols_normalized[normalized] = col
+            
+            climate_column_mapping = {}
+            
+            for var_code in exog_vars_config.keys():
+                var_normalized = var_code.lower().strip()
+                
+                # Intento 1: Coincidencia exacta
+                if var_normalized in available_cols_normalized:
+                    climate_column_mapping[var_code] = available_cols_normalized[var_normalized]
+                    continue
+                
+                # Intento 2: Coincidencia parcial
+                var_parts = var_normalized.split('_')
+                best_match = None
+                best_match_score = 0
+                
+                for norm_col, orig_col in available_cols_normalized.items():
+                    matches = sum(1 for part in var_parts if part in norm_col)
+                    if matches > best_match_score:
+                        best_match_score = matches
+                        best_match = orig_col
+                
+                if best_match_score >= 2:
+                    climate_column_mapping[var_code] = best_match
+            
+            if not climate_column_mapping:
+                print("[EXOG_ADAPTIVE] ERROR: No se pudo mapear ninguna variable")
+                if log_callback:
+                    log_callback("ERROR: Nombres de columnas climaticas no coinciden")
+                return None, None, coverage_report
+            
+            print(f"[EXOG_ADAPTIVE] Variables mapeadas: {len(climate_column_mapping)}/{len(exog_vars_config)}")
+            
+            # PASO 3: PREPARACION Y VALIDACION DE VARIABLES
+            exog_df = pd.DataFrame(index=historico.index)
             exog_info = {}
             
             for var_code, var_nombre in exog_vars_config.items():
                 climate_col = climate_column_mapping.get(var_code)
                 
-                if climate_col and climate_col in climate_data.columns:
-                    var_series = climate_data[[climate_col]].copy()
-                    var_series.columns = [var_code]
+                if not climate_col or climate_col not in climate_data.columns:
+                    coverage_report['variables_rejected'].append(var_nombre)
+                    coverage_report['rejection_reasons'][var_code] = "Columna no encontrada"
+                    print(f"[EXOG_ADAPTIVE]   X RECHAZADA {var_code}: columna no encontrada")
+                    continue
+                
+                print(f"[EXOG_ADAPTIVE]   Procesando {var_code}...")
+                
+                try:
+                    # Extraer serie del clima
+                    var_series = climate_data[climate_col].copy()
                     
-                    # Alinear con índice SAIDI
-                    exog_values = self._align_exog_to_saidi(
-                        var_series, df_saidi, var_code, log_callback
-                    )
+                    # Crear serie alineada al indice SAIDI (inicialmente vacia)
+                    aligned_series = pd.Series(index=historico.index, dtype=float)
                     
-                    if exog_values is not None:
-                        exog_df[var_code] = exog_values
-                        exog_info[var_code] = {
-                            'nombre': var_nombre,
-                            'columna_clima': climate_col
-                        }
-                        print(f"[DEBUG_OPT]  Variable {var_code} preparada ({var_nombre})")
-                else:
-                    print(f"[DEBUG_OPT] Variable {var_code} no encontrada en datos climaticos")
-                    if log_callback and var_code in ['uv_index_avg', 'heat_index_avg']:
-                        log_callback(f"  Variable crítica para Tibú no encontrada: {var_nombre}")
+                    # PASO 3.1: Llenar datos donde hay overlap REAL
+                    for date in historico.index:
+                        if date in var_series.index:
+                            aligned_series[date] = var_series.loc[date]
+                    
+                    # VALIDACION CRITICA: Verificar cobertura en overlap
+                    overlap_data = aligned_series[overlap_mask]
+                    datos_reales_overlap = overlap_data.notna().sum()
+                    overlap_pct = (datos_reales_overlap / overlap_months) * 100
+                    
+                    print(f"[EXOG_ADAPTIVE]     Cobertura en overlap: {datos_reales_overlap}/{overlap_months} ({overlap_pct:.1f}%)")
+                    
+                    # RECHAZAR si cobertura < 80%
+                    if overlap_pct < 80:
+                        coverage_report['variables_rejected'].append(var_nombre)
+                        coverage_report['rejection_reasons'][var_code] = f"Cobertura insuficiente: {overlap_pct:.1f}%"
+                        print(f"[EXOG_ADAPTIVE]   X RECHAZADA {var_code}: cobertura {overlap_pct:.1f}% < 80%")
+                        continue
+                    
+                    # VALIDACION CRITICA: Verificar VARIANZA en overlap
+                    var_std = overlap_data.std()
+                    
+                    if pd.isna(var_std) or var_std == 0:
+                        coverage_report['variables_rejected'].append(var_nombre)
+                        coverage_report['rejection_reasons'][var_code] = "Varianza cero en overlap"
+                        print(f"[EXOG_ADAPTIVE]   X RECHAZADA {var_code}: varianza = 0")
+                        continue
+                    
+                    print(f"[EXOG_ADAPTIVE]     Varianza en overlap: {var_std:.4f}")
+                    
+                    # PASO 3.2: FORWARD-FILL (sin limite) para meses futuros
+                    if extrapolation_months > 0:
+                        aligned_series = aligned_series.fillna(method='ffill')
+                        print(f"[EXOG_ADAPTIVE]     Forward-fill aplicado: {extrapolation_months} meses")
+                    
+                    # PASO 3.3: BACKWARD-FILL (limitado a 3 meses) para meses pasados
+                    if backward_months > 0:
+                        aligned_series = aligned_series.fillna(method='bfill', limit=3)
+                        print(f"[EXOG_ADAPTIVE]     Backward-fill aplicado: max 3 meses")
+                    
+                    # PASO 3.4: Si TODAVIA hay NaN, rellenar con media del overlap
+                    if aligned_series.isnull().any():
+                        mean_overlap = overlap_data.mean()
+                        filled_count = aligned_series.isnull().sum()
+                        aligned_series = aligned_series.fillna(mean_overlap)
+                        print(f"[EXOG_ADAPTIVE]     Rellenados {filled_count} NaN con media={mean_overlap:.2f}")
+                    
+                    # VERIFICACION FINAL
+                    final_nan = aligned_series.isnull().sum()
+                    if final_nan > 0:
+                        coverage_report['variables_rejected'].append(var_nombre)
+                        coverage_report['rejection_reasons'][var_code] = f"{final_nan} NaN despues de relleno"
+                        print(f"[EXOG_ADAPTIVE]   X RECHAZADA {var_code}: {final_nan} NaN finales")
+                        continue
+                    
+                    # ACEPTAR VARIABLE
+                    exog_df[var_code] = aligned_series
+                    exog_info[var_code] = {
+                        'nombre': var_nombre,
+                        'columna_clima': climate_col,
+                        'disponible': True,
+                        'datos_reales_overlap': int(datos_reales_overlap),
+                        'overlap_coverage_pct': float(overlap_pct),
+                        'varianza_overlap': float(var_std),
+                        'extrapolados': int(extrapolation_months),
+                        'backfilled': min(int(backward_months), 3)
+                    }
+                    coverage_report['variables_accepted'].append(var_nombre)
+                    print(f"[EXOG_ADAPTIVE]   OK {var_code} -> ACEPTADA")
+                    
+                except Exception as e:
+                    coverage_report['variables_rejected'].append(var_nombre)
+                    coverage_report['rejection_reasons'][var_code] = f"Error: {str(e)}"
+                    print(f"[EXOG_ADAPTIVE]   X ERROR {var_code}: {e}")
+                    continue
             
+            # VALIDACION FINAL: Verificar que hay al menos 1 variable aceptada
             if exog_df.empty or exog_df.shape[1] == 0:
-                print("[DEBUG_OPT] No se pudieron preparar variables exogenas")
-                return None, None
+                print("[EXOG_ADAPTIVE] ERROR: Ninguna variable aceptada")
+                if log_callback:
+                    log_callback("ERROR: Ninguna variable exogena cumplio los criterios de calidad")
+                    log_callback("Razones de rechazo:")
+                    for var_code, reason in coverage_report['rejection_reasons'].items():
+                        log_callback(f"  - {var_code}: {reason}")
+                return None, None, coverage_report
             
-            # Eliminar filas donde todas las variables son NaN
-            exog_df = exog_df.dropna(how='all')
+            print(f"[EXOG_ADAPTIVE] Variables aceptadas: {len(exog_df.columns)}/{len(exog_vars_config)}")
             
-            # Interpolar valores faltantes
-            exog_df = exog_df.interpolate(method='linear', limit_direction='both')
+            # PASO 4: ESCALADO (usando SOLO datos del overlap)
+            print(f"[EXOG_ADAPTIVE] Escalando usando SOLO overlap ({overlap_months} meses)...")
             
-            # Escalar variables
-            self.exog_scaler = StandardScaler()
-            exog_df_scaled = pd.DataFrame(
-                self.exog_scaler.fit_transform(exog_df),
-                index=exog_df.index,
-                columns=exog_df.columns
-            )
+            try:
+                # Extraer datos del overlap para escalado
+                overlap_data_for_scaling = exog_df[overlap_mask].copy()
+                
+                # Verificar que no hay NaN en overlap
+                if overlap_data_for_scaling.isnull().any().any():
+                    print("[EXOG_ADAPTIVE] ERROR: NaN en datos de overlap para escalado")
+                    return None, None, coverage_report
+                
+                # Crear scaler y ajustar SOLO con overlap
+                self.exog_scaler = StandardScaler()
+                self.exog_scaler.fit(overlap_data_for_scaling)
+                
+                # Transformar TODOS los datos (usando parametros del overlap)
+                exog_scaled_values = self.exog_scaler.transform(exog_df)
+                
+                exog_df_scaled = pd.DataFrame(
+                    exog_scaled_values,
+                    index=exog_df.index,
+                    columns=exog_df.columns
+                )
+                
+                # Verificacion post-escalado
+                if exog_df_scaled.isnull().any().any():
+                    print("[EXOG_ADAPTIVE] ERROR: NaN introducidos durante escalado")
+                    return None, None, coverage_report
+                
+            except Exception as e:
+                print(f"[EXOG_ADAPTIVE] ERROR durante escalado: {e}")
+                if log_callback:
+                    log_callback(f"ERROR durante escalado: {str(e)}")
+                return None, None, coverage_report
             
-            print(f"[DEBUG_OPT] Variables exogenas preparadas: {len(exog_df_scaled.columns)} variables")
+            # LOG FINAL
+            if log_callback:
+                log_callback(f"Variables exogenas preparadas: {len(exog_df_scaled.columns)}")
+                for var_code, var_data in exog_info.items():
+                    log_callback(f"  OK {var_data['nombre']} "
+                            f"(datos_reales={var_data['datos_reales_overlap']}, "
+                            f"extrapolados={var_data['extrapolados']}, "
+                            f"varianza_overlap={var_data['varianza_overlap']:.2f})")
+                
+                if coverage_report['variables_rejected']:
+                    log_callback(f"Variables rechazadas: {len(coverage_report['variables_rejected'])}")
+                    for var_nombre in coverage_report['variables_rejected']:
+                        log_callback(f"  X {var_nombre}")
             
-            return exog_df_scaled, exog_info if exog_info else None
+            print(f"[EXOG_ADAPTIVE] Preparacion completada: {len(exog_df_scaled.columns)} variables")
+            
+            return exog_df_scaled, exog_info, coverage_report
             
         except Exception as e:
-            print(f"[DEBUG_OPT_ERROR] Error preparando variables exogenas: {e}")
+            print(f"[EXOG_ADAPTIVE] ERROR CRITICO: {e}")
+            import traceback
+            traceback.print_exc()
             if log_callback:
-                log_callback(f"Error preparando variables exogenas: {str(e)}")
-            return None, None
+                log_callback(f"ERROR preparando variables exogenas: {str(e)}")
+            return None, None, coverage_report
     
     def _align_exog_to_saidi(self,
                             exog_series: pd.DataFrame,
@@ -1056,8 +1507,8 @@ class OptimizationService:
             return None
     
     def _apply_transformation(self, 
-                             data: np.ndarray, 
-                             transformation_type: str) -> Tuple[np.ndarray, str]:
+                         data: np.ndarray, 
+                         transformation_type: str) -> Tuple[np.ndarray, str]:
         """Aplicar transformación a los datos"""
         if transformation_type == 'original':
             return data, "Sin transformacion"
@@ -1089,8 +1540,8 @@ class OptimizationService:
             return data, "Sin transformacion"
     
     def _inverse_transformation(self, 
-                               data: np.ndarray, 
-                               transformation_type: str) -> np.ndarray:
+                           data: np.ndarray, 
+                           transformation_type: str) -> np.ndarray:
         """Revertir transformación a escala original"""
         if transformation_type == 'original':
             return data
@@ -1117,18 +1568,18 @@ class OptimizationService:
             return data
     
     def _log_final_summary(self, 
-                          log_callback, 
-                          top_models: List[Dict],
-                          exog_info: Optional[Dict]):
-        """Generar resumen final de optimización"""
+                      log_callback, 
+                      top_models: List[Dict],
+                      exog_info: Optional[Dict]):
+        """Generar resumen final de optimizacion CON INFO DE CORRELACIONES"""
         log_callback("=" * 80)
         log_callback("RESUMEN FINAL - OPTIMIZACION COMPLETADA")
         if exog_info:
-            log_callback("Con variables exogenas climaticas")
+            log_callback("Con variables exogenas climaticas (basadas en correlacion)")
         log_callback("Validacion alineada con PredictionService (20-30% test)")
         log_callback("=" * 80)
         
-        # Estadísticas por transformación
+        # Estadisticas por transformacion
         log_callback("\nESTADISTICAS POR TRANSFORMACION:")
         log_callback("-" * 80)
         for transform in self.AVAILABLE_TRANSFORMATIONS:
@@ -1142,18 +1593,30 @@ class OptimizationService:
         log_callback("-" * 80)
         
         for i, modelo in enumerate(top_models[:10], 1):
-            medal = "Puesto 1" if i == 1 else "Puesto 2" if i == 2 else "Puesto 3" if i == 3 else f"Puesto {i}"
+            if i == 1:
+                medal = " Puesto 1"
+            elif i == 2:
+                medal = " Puesto 2"
+            elif i == 3:
+                medal = " Puesto 3"
+            else:
+                medal = f"   Puesto {i}"
+            
             exog_mark = " [+EXOG]" if modelo.get('with_exogenous') else ""
             
             quality = modelo.get('quality', 'poor')
-            quality_symbol = {
+            quality_map = {
                 'excellent': '[EXCELENTE]',
                 'good': '[BUENO]',
                 'acceptable': '[ACEPTABLE]',
                 'poor': '[LIMITADO]'
-            }.get(quality, '[?]')
+            }
+            quality_symbol = quality_map.get(quality, '[?]')
             
-            stability_str = f" | Stability: {modelo.get('stability_score', 0):.0f}" if modelo.get('stability_score') else ""
+            stability_str = ""
+            if modelo.get('stability_score'):
+                stability_str = f" | Stability: {modelo.get('stability_score', 0):.0f}"
+            
             val_pct = modelo.get('validation_pct', 0)
             
             log_callback(f"\n{medal} {quality_symbol}:")
@@ -1163,14 +1626,72 @@ class OptimizationService:
             log_callback(f"   RMSE: {modelo['rmse']:.4f} | R2: {modelo['r2_score']:.3f}")
             log_callback(f"   Validacion: {val_pct:.0f}% de datos como test ({modelo.get('n_test', 0)} meses)")
         
-        # Variables exógenas utilizadas
+        # Variables exogenas utilizadas CON CORRELACIONES
         if exog_info:
             log_callback("\nVARIABLES EXOGENAS UTILIZADAS:")
             log_callback("-" * 80)
+            
+            # Mapeo de correlaciones por variable (del analisis)
+            correlations_map = {
+                # Ocana
+                'realfeel_min': 0.689,
+                'windchill_avg': 0.520,
+                'dewpoint_avg': 0.470,
+                'windchill_max': 0.464,
+                'dewpoint_min': 0.456,
+                'precipitation_max_daily': 0.452,
+                'precipitation_avg_daily': 0.438,
+                'windchill_min': 0.409,
+                'heat_index_max': 0.380,
+                'uv_index_days': 0.331,
+                'windchill_days': 0.277,
+                'pressure_rel_avg': -0.261,
+                
+                # Cucuta
+                'realfeel_avg': 0.573,
+                'wind_speed_max': 0.356,
+                'pressure_abs_avg': -0.356,
+                
+                # Tibu
+                'wind_dir_avg': -0.400,
+                'uv_index_avg': 0.385,
+                'heat_index_avg': 0.363,
+                'temperature_min': 0.352,
+                'temperature_avg': 0.338,
+                'wind_gust_max': 0.318,
+                'uv_index_max': 0.248,
+                
+                # Aguachica
+                'uv_index_max': 0.664,
+                'days_with_rain': 0.535,
+                
+                # Pamplona
+                'precipitation_total': 0.577,
+            }
+            
             for var_code, var_data in exog_info.items():
-                log_callback(f"   {var_data['nombre']} ({var_data['columna_clima']})")
+                corr = correlations_map.get(var_code, 0.0)
+                
+                if corr != 0:
+                    corr_str = f"(r={corr:+.3f})"
+                else:
+                    corr_str = ""
+                
+                # Clasificar fuerza de correlacion
+                abs_corr = abs(corr)
+                if abs_corr >= 0.6:
+                    strength = "*** FUERTE ***"
+                elif abs_corr >= 0.4:
+                    strength = "** MODERADA-FUERTE **"
+                elif abs_corr >= 0.3:
+                    strength = "* MODERADA *"
+                else:
+                    strength = ""
+                
+                log_callback(f"   {strength} {var_data['nombre']} {corr_str}")
+                log_callback(f"      Columna: {var_data['columna_clima']}")
         
-        # Modelo óptimo seleccionado
+        # Modelo optimo seleccionado
         if top_models:
             best_model = top_models[0]
             precision = best_model['precision_final']
@@ -1186,13 +1707,13 @@ class OptimizationService:
             log_callback(f"Metodo de validacion: {best_model.get('validation_pct', 0):.0f}% test")
             
             if best_model.get('with_exogenous'):
-                log_callback("Modelo incluye variables exogenas climaticas")
+                log_callback("Modelo incluye variables exogenas climaticas correlacionadas")
             
             stability = best_model.get('stability_score', 0)
             if stability:
                 log_callback(f"Stability Score: {stability:.1f}/100")
             
-            # Interpretación
+            # Interpretacion
             if quality == 'excellent':
                 interpretacion = "EXCELENTE - Predicciones muy confiables"
             elif quality == 'good':
@@ -1202,13 +1723,12 @@ class OptimizationService:
             else:
                 interpretacion = "LIMITADO - Datos dificiles de predecir"
                 log_callback("\nNOTA: Precision baja sugiere que los datos historicos")
-                log_callback("tienen alta variabilidad o patrones irregulares.")
+                log_callback("      tienen alta variabilidad o patrones irregulares.")
             
             log_callback(f"Interpretacion: {interpretacion}")
-            log_callback("Optimizacion: Sistema adaptativo con fallback inteligente")
+            log_callback("Optimizacion: Sistema adaptativo con variables correlacionadas")
         
         log_callback("=" * 80)
-
 
 # FUNCIÓN WORKER PARA PROCESAMIENTO PARALELO
 def _evaluate_model_worker(task: Tuple) -> Optional[Dict[str, Any]]:
