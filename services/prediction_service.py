@@ -1,7 +1,4 @@
-# services/prediction_service.py -mini 
-import warnings
-warnings.filterwarnings('ignore')
-
+# services/prediction_service.py 
 import pandas as pd
 import numpy as np
 import matplotlib
@@ -12,13 +9,16 @@ from statsmodels.tsa.statespace.sarimax import SARIMAX
 from sklearn.metrics import mean_squared_error
 from sklearn.preprocessing import StandardScaler
 from scipy import stats
-import sys
 import os
 import tempfile
 from datetime import datetime
 from services.climate_simulation_service import ClimateSimulationService
 from services.uncertainty_service import UncertaintyService 
 from services.export_service import ExportService
+import warnings
+warnings.filterwarnings('ignore')
+
+
 
 class PredictionService:
     """Servicio para generar predicciones SAIDI con variables exogenas climaticas, simulacion e intervalos de confianza"""
@@ -288,7 +288,7 @@ class PredictionService:
                         )
                         exog_df = exog_df_scaled
                         if log_callback:
-                            log_callback(f"Variables exogenas escaladas correctamente")
+                            log_callback("Variables exogenas escaladas correctamente")
                 else:
                     if log_callback:
                         log_callback("No se pudieron preparar variables exogenas, continuando sin ellas")
@@ -340,14 +340,14 @@ class PredictionService:
             )
             
             if metricas and log_callback:
-                log_callback(f"Metricas del modelo (en escala original):")
+                log_callback("Metricas del modelo (en escala original):")
                 log_callback(f"  - RMSE: {metricas['rmse']:.4f} minutos")
                 log_callback(f"  - MAE: {metricas['mae']:.4f} minutos")
                 log_callback(f"  - MAPE: {metricas['mape']:.1f}%")
                 log_callback(f"  - R2 Score: {metricas['r2_score']:.4f}")
                 log_callback(f"  - Precision Final: {metricas['precision_final']:.1f}%")
                 if exog_df is not None:
-                    log_callback(f"   Con variables exogenas")
+                    log_callback("Con variables exogenas")
             
             if progress_callback:
                 progress_callback(60, "Ajustando modelo SARIMAX...")
@@ -374,12 +374,11 @@ class PredictionService:
                 results = model.fit(disp=False)
                 
                 if log_callback:
-                    log_callback(f"Modelo SARIMAX ajustado correctamente")
+                    log_callback("Modelo SARIMAX ajustado correctamente")
                     if exog_train is not None:
                         log_callback(f"  Variables exogenas incluidas: {exog_train.shape[1]}")
                         if simulation_applied:
-                            log_callback(f"  Modo: Entrenamiento con datos SIN ESCALAR")
-                    
+                            log_callback("Modo: Entrenamiento con datos SIN ESCALAR")                
             except Exception as e:
                 raise Exception(f"Error ajustando modelo: {str(e)}")
             
@@ -558,18 +557,18 @@ class PredictionService:
                 
                 if log_callback:
                     log_callback(f"Predicciones con intervalos de confianza generadas para {len(pred_mean)} periodos")
-                    log_callback(f"  Metodo: Intervalos paramétricos ajustados")
+                    log_callback("Metodo: Intervalos paramétricos ajustados")
                     if exog_forecast is not None:
                         if simulation_applied:
-                            log_callback(f"  Usando variables exogenas SIMULADAS")
+                            log_callback("Usando variables exogenas SIMULADAS")
                         else:
-                            log_callback(f"  Usando variables exogenas proyectadas")
-                    log_callback(f"  Intervalos de confianza: 95%")
+                            log_callback("Usando variables exogenas proyectadas")
+                    log_callback("Intervalos de confianza: 95%")
                     avg_margin_pct = np.mean(margin_error / pred_mean_original) * 100
-                    log_callback(f"  Margen de error promedio: ±{avg_margin_pct:.1f}%")
+                    log_callback(f"Margen de error promedio: ±{avg_margin_pct:.1f}%")
                     if simulation_applied:
-                        log_callback(f"  NOTA: El margen refleja incertidumbre estadistica del modelo, no del escenario simulado")
-                    
+                        log_callback("NOTA: El margen refleja incertidumbre estadistica del modelo, no del escenario simulado")
+
             except Exception as e:
                 raise Exception(f"Error generando predicciones: {str(e)}")
             
@@ -1001,7 +1000,7 @@ class PredictionService:
         elif transformation_type == 'standard':
             self.scaler = StandardScaler()
             transformed = self.scaler.fit_transform(data.reshape(-1, 1)).flatten()
-            return transformed, f"StandardScaler"
+            return transformed, "StandardScaler"
         
         elif transformation_type == 'log':
             data_positive = np.maximum(data, 1e-10)
@@ -1233,7 +1232,7 @@ class PredictionService:
                 summary = simulation_config.get('summary', {})
                 footer_text = f"SIMULACION CLIMATICA APLICADA: {summary.get('escenario', 'N/A')} | "
                 footer_text += f"Alcance: {summary.get('alcance_meses', 'N/A')} meses | "
-                footer_text += f"Intervalos reflejan incertidumbre estadistica, no del escenario simulado"
+                footer_text += "Intervalos reflejan incertidumbre estadistica, no del escenario simulado"
                 
                 plt.figtext(0.5, footer_y, footer_text, ha='center', fontsize=9, 
                            style='italic', color='darkred', weight='bold',

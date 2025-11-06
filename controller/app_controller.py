@@ -2,7 +2,6 @@
 import os
 import gc
 import pandas as pd
-import numpy as np
 from PyQt6.QtWidgets import QFileDialog, QMessageBox
 from PyQt6.QtCore import QObject, QThread, pyqtSignal, QTimer
 from datetime import datetime
@@ -231,7 +230,6 @@ class AppController(QObject):
 
         regional_code = None
         climate_data = None
-        simulation_config = None
 
         if self.model.is_regional_format():
             if not self.model.get_selected_regional():
@@ -243,9 +241,9 @@ class AppController(QObject):
             # Obtener datos climáticos si existen
             if self.are_climate_data_available(regional_code):
                 climate_data = self.get_climate_data_for_regional(regional_code)
-                self.view.log_message(f"✓ Datos climáticos disponibles - Se incluirán en la predicción")
+                self.view.log_message("Datos climáticos disponibles - Se incluirán en la predicción")
             else:
-                self.view.log_message(f"Sin datos climáticos - Predicción sin variables exógenas")
+                self.view.log_message("Sin datos climáticos - Predicción sin variables exógenas")
 
             # Si la simulación está habilitada en la UI, abrir diálogo
             if getattr(self.view, 'enable_simulation_checkbox', None) and self.view.enable_simulation_checkbox.isChecked():
@@ -373,20 +371,19 @@ class AppController(QObject):
                 
                 self.view.log_message("\nContenido del archivo:")
                 self.view.log_message("  • Hoja 1: Predicciones SAIDI")
-                self.view.log_message(f"    - Fecha y valores predichos")
+                self.view.log_message("Fecha y valores predichos")
                 if has_intervals:
-                    self.view.log_message(f"    - Intervalos de confianza (95%)")
-                    self.view.log_message(f"    - Márgenes de error")
+                    self.view.log_message("Intervalos de confianza (95%)")
+                    self.view.log_message("- Márgenes de error")
                 self.view.log_message("  • Hoja 2: Información del Modelo")
-                self.view.log_message(f"    - Parámetros SARIMAX")
-                self.view.log_message(f"    - Transformación aplicada")
-                self.view.log_message(f"    - Métricas de precisión")
+                self.view.log_message("- Parámetros SARIMAX")
+                self.view.log_message("- Transformación aplicada")
+                self.view.log_message("- Métricas de precisión")
                 
                 if model_params.get('with_exogenous'):
-                    self.view.log_message(f"    - Variables exógenas utilizadas")
+                    self.view.log_message("- Variables exógenas utilizadas")
                 if model_params.get('with_simulation'):
-                    self.view.log_message(f"    - Simulación climática aplicada")
-                
+                    self.view.log_message("- Simulación climática aplicada")
                 self.view.log_message("=" * 60)
                 
                 # Mensaje de éxito con opción de abrir
@@ -406,7 +403,6 @@ class AppController(QObject):
                 # Botones
                 open_btn = msg.addButton("Abrir Archivo", QMessageBox.ButtonRole.AcceptRole)
                 open_folder_btn = msg.addButton("Abrir Carpeta", QMessageBox.ButtonRole.ActionRole)
-                close_btn = msg.addButton("Cerrar", QMessageBox.ButtonRole.RejectRole)
                 
                 msg.exec()
                 
@@ -530,7 +526,7 @@ class AppController(QObject):
             regional_nombre = self.model.REGIONAL_MAPPING.get(regional_code, regional_code)
             
             self.view.log_message(f"Ejecutando optimización para: {regional_nombre}")
-            self.view.log_message(f"Se evaluarán TODAS las transformaciones disponibles")
+            self.view.log_message("Se evaluarán TODAS las transformaciones disponibles")
             self.view.log_message(f"Transformaciones: {', '.join(self.optimization_service.AVAILABLE_TRANSFORMATIONS)}")
             
             # CRÍTICO: Obtener datos climáticos
@@ -549,7 +545,7 @@ class AppController(QObject):
                     self.view.log_message("⚠ Datos climáticos vacíos o inválidos")
                     climate_data = None
             else:
-                self.view.log_message(f"ℹ Sin datos climáticos - Optimización sin variables exógenas")
+                self.view.log_message(" Sin datos climáticos - Optimización sin variables exógenas")
         
         try:
             self.view.log_message("Iniciando optimización de parámetros...")
@@ -735,9 +731,9 @@ class AppController(QObject):
             # Obtener datos climáticos si están disponibles
             if self.are_climate_data_available(regional_code):
                 climate_data = self.get_climate_data_for_regional(regional_code)
-                self.view.log_message(f"✓ Datos climáticos incluidos en el análisis")
+                self.view.log_message("Datos climáticos incluidos en el análisis")
             else:
-                self.view.log_message(f"⚠ Sin datos climáticos - Análisis básico")
+                self.view.log_message(" Sin datos climáticos - Análisis básico")
         
         try:
             self.view.set_buttons_enabled(False)
@@ -890,7 +886,7 @@ class AppController(QObject):
                 precision = best['precision_final']
                 best_transformation = best.get('transformation', 'unknown')
                 
-                self.view.log_message(f"\nN1 MODELO ÓPTIMO SELECCIONADO:")
+                self.view.log_message("\nN1 MODELO ÓPTIMO SELECCIONADO:")
                 self.view.log_message(f"  Transformación: {best_transformation.upper()}")
                 self.view.log_message(f"  Parámetros: order={best['order']}, seasonal={best['seasonal_order']}")
                 
@@ -1015,7 +1011,6 @@ class AppController(QObject):
                         upper_val = upper_bounds.get(fecha, mean_val)
                         
                         # Mostrar valor predicho y rango del intervalo (sin margenes individuales)
-                        ancho_intervalo = upper_val - lower_val
                         
                         self.view.log_message(
                             f"  - {fecha}: {mean_val:.2f} min "
@@ -1039,9 +1034,9 @@ class AppController(QObject):
             # Nota sobre intervalos (solo para referencia)
             if model_params.get('confidence_level'):
                 conf_level = model_params['confidence_level'] * 100
-                self.view.log_message(f"")
+                self.view.log_message("")
                 self.view.log_message(f"Nota: Intervalos de confianza al {conf_level:.0f}% disponibles en grafica")
-                self.view.log_message(f"      (solo para referencia visual, no afectan la precision del modelo)")
+                self.view.log_message("(solo para referencia visual, no afectan la precision del modelo)")
             
             self.view.log_message("=" * 60)
         
@@ -1125,7 +1120,6 @@ class AppController(QObject):
             
             open_btn = msg.addButton("Abrir PDF", QMessageBox.ButtonRole.AcceptRole)
             open_folder_btn = msg.addButton("Abrir Carpeta", QMessageBox.ButtonRole.ActionRole)
-            close_btn = msg.addButton("Cerrar", QMessageBox.ButtonRole.RejectRole)
             
             msg.exec()
             

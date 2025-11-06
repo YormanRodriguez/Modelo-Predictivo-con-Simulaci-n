@@ -1,7 +1,7 @@
 # services/climate_simulation_service.py - Servicio de simulación climática para SAIDI
 import pandas as pd
 import numpy as np
-from typing import Dict, Optional, Tuple, List
+from typing import Dict, Tuple
 
 class ClimateSimulationService:
     """Servicio para simular escenarios climáticos y modificar variables exógenas"""

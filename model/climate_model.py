@@ -157,7 +157,7 @@ class ClimateModel(QObject):
                     
                 elif file_ext == '.csv':
                     # Leer CSV
-                    print(f"[DEBUG CLIMATE] Leyendo archivo CSV")
+                    print("[DEBUG CLIMATE] Leyendo archivo CSV")
                     df = pd.read_csv(
                         file_path,
                         sep=";",
@@ -254,7 +254,7 @@ class ClimateModel(QObject):
             try:
                 # Intentar parsear como YYYY-MM
                 pd.to_datetime(df[date_col], format='%Y-%m', errors='coerce')
-            except:
+            except (ValueError, TypeError):
                 return {
                     'valid': False,
                     'error': f'Columna "{date_col}" en {regional_nombre} no tiene formato válido (esperado: YYYY-MM)'
@@ -360,7 +360,7 @@ class ClimateModel(QObject):
                 'Días_medición': [col for col in df_final.columns if 'days' in col]
             }
             
-            print(f"[DEBUG CLIMATE] Variables por categoría:")
+            print("[DEBUG CLIMATE] Variables por categoría:")
             for category, vars_list in var_categories.items():
                 if vars_list:
                     print(f"  - {category}: {len(vars_list)} variables")
@@ -646,7 +646,7 @@ class ClimateModel(QObject):
             
             print(f"Estado: {status}")
             
-            print(f"\nCompletitud por categoría:")
+            print("\nCompletitud por categoría:")
             for category, stats in validation['category_completeness'].items():
                 completeness = stats['completeness_pct']
                 indicator = "✅" if completeness >= 80 else "⚠️" if completeness >= 50 else "❌"

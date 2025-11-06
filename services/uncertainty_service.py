@@ -41,7 +41,6 @@ class UncertaintyService:
             
             # METODO 1: Intervalos parametricos del modelo (baseline)
             pred = model_results.get_forecast(steps=n_steps, exog=exog_forecast)
-            pred_mean_transformed = pred.predicted_mean.values
             
             # Calcular intervalos en escala transformada
             alpha = 1 - self.confidence_level
@@ -50,9 +49,6 @@ class UncertaintyService:
             upper_transformed = conf_int_transformed.iloc[:, 1].values
             
             # Revertir transformacion
-            pred_mean_original = self._inverse_transform(
-                pred_mean_transformed, transformation_type, transformation_params
-            )
             lower_parametric = self._inverse_transform(
                 lower_transformed, transformation_type, transformation_params
             )
@@ -61,7 +57,7 @@ class UncertaintyService:
             )
             
             if log_callback:
-                log_callback(f"  Intervalos parametricos calculados (baseline)")
+                log_callback("  Intervalos parametricos calculados (baseline)")
             
             # METODO 2: Bootstrap de residuales para incertidumbre del modelo
             if log_callback:
@@ -78,12 +74,12 @@ class UncertaintyService:
             mean_bootstrap = np.mean(bootstrap_preds, axis=0)
             
             if log_callback:
-                log_callback(f"  Bootstrap completado")
+                log_callback("  Bootstrap completado")
             
             # METODO 3: Incorporar incertidumbre de variables exogenas
             if include_exog_uncertainty and exog_forecast is not None and exog_std is not None:
                 if log_callback:
-                    log_callback(f"  Propagando incertidumbre de variables exogenas...")
+                    log_callback("  Propagando incertidumbre de variables exogenas...")
                 
                 exog_uncertainty_preds = self._propagate_exog_uncertainty(
                     model_results, n_steps, exog_forecast, exog_std,
@@ -98,7 +94,7 @@ class UncertaintyService:
                 mean_combined = np.mean(combined_preds, axis=0)
                 
                 if log_callback:
-                    log_callback(f"  Incertidumbre de variables exogenas incorporada")
+                    log_callback("  Incertidumbre de variables exogenas incorporada")
                 
                 # Usar intervalos combinados
                 lower_final = lower_combined
@@ -178,7 +174,7 @@ class UncertaintyService:
         bootstrap_predictions = []
         
         # Obtener datos originales y parametros del modelo
-        endog = model_results.model.endog
+        #endog = model_results.model.endog
         exog_train = model_results.model.exog
         order = model_results.model.order
         seasonal_order = model_results.model.seasonal_order
@@ -214,7 +210,7 @@ class UncertaintyService:
                 
                 bootstrap_predictions.append(pred_original)
                 
-            except:
+            except (ValueError, RuntimeError, np.linalg.LinAlgError):
                 # Si falla el ajuste, usar prediccion del modelo original
                 pred = model_results.get_forecast(steps=n_steps, exog=exog_forecast)
                 pred_transformed = pred.predicted_mean.values
@@ -239,9 +235,6 @@ class UncertaintyService:
         """
         n_samples = 500  # Menos muestras que bootstrap (mas rapido)
         exog_predictions = []
-        
-        order = model_results.model.order
-        seasonal_order = model_results.model.seasonal_order
         
         for i in range(n_samples):
             # Perturbar variables exogenas
@@ -268,7 +261,7 @@ class UncertaintyService:
                 
                 exog_predictions.append(pred_original)
                 
-            except:
+            except (ValueError, RuntimeError, np.linalg.LinAlgError):
                 # Si falla, usar prediccion sin perturbacion
                 pred = model_results.get_forecast(steps=n_steps, exog=exog_forecast)
                 pred_transformed = pred.predicted_mean.values

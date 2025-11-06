@@ -59,7 +59,7 @@ class ExcelModel(QObject):
                 try:
                     df = pd.read_excel(file_path, sheet_name="Hoja1")
                     print("[DEBUG] Hoja 'Hoja1' leída exitosamente")
-                except:
+                except (FileNotFoundError, pd.errors.EmptyDataError):
                     df = pd.read_excel(file_path, sheet_name=0)
                     print("[DEBUG] Primera hoja leída exitosamente")
                     
@@ -154,7 +154,7 @@ class ExcelModel(QObject):
             try:
                 df['year-month'] = pd.to_datetime(df['year-month'], format='%Y-%m')
                 print("[DEBUG] Columna 'year-month' validada como fechas")
-            except:
+            except ValueError:
                 return {'valid': False, 'error': 'La columna "year-month" no tiene formato válido (esperado: YYYY-MM)'}
             
             # Detectar columnas SAIDI regionales
@@ -169,9 +169,9 @@ class ExcelModel(QObject):
             for col in saidi_columns:
                 try:
                     pd.to_numeric(df[col], errors='coerce')
-                except:
+                except ValueError:
                     return {'valid': False, 'error': f'La columna "{col}" no contiene valores numéricos válidos'}
-            
+
             # Mapear códigos a nombres de regionales
             regionales_disponibles = []
             for col in saidi_columns:
@@ -187,10 +187,14 @@ class ExcelModel(QObject):
             min_datos = 12
             regionales_validas = []
             for col in saidi_columns:
-                datos_no_nulos = df[col].notna().sum()
-                if datos_no_nulos >= min_datos:
-                    regionales_validas.append(col)
-            
+                try:
+                    datos_no_nulos = df[col].notna().sum()
+                    if datos_no_nulos >= min_datos:
+                        regionales_validas.append(col)
+                except (KeyError, AttributeError):  # Removida la variable 'e' no utilizada
+                    print(f"[DEBUG ERROR] Error al procesar columna {col}")
+                    continue
+
             if len(regionales_validas) == 0:
                 return {
                     'valid': False, 
@@ -228,7 +232,7 @@ class ExcelModel(QObject):
             try:
                 pd.to_datetime(df.iloc[:, 0])
                 print(f"[DEBUG] Columna '{fecha_col}' validada como fechas")
-            except:
+            except (ValueError, TypeError):
                 return {'valid': False, 'error': f'La primera columna "{fecha_col}" no contiene fechas válidas'}
             
             # Verificar columna SAIDI
@@ -253,7 +257,7 @@ class ExcelModel(QObject):
             
             try:
                 pd.to_numeric(saidi_data)
-            except:
+            except (ValueError, TypeError):
                 return {'valid': False, 'error': f'La columna "{saidi_col}" no contiene valores numéricos válidos'}
             
             # Verificar que haya suficientes datos históricos

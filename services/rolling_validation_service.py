@@ -2,26 +2,23 @@
 """
 Servicio de Validación Temporal con Rolling Forecast para SAIDI - Manejo robusto de errores de álgebra lineal
 """
-
-import warnings
-warnings.filterwarnings('ignore')
-
 import pandas as pd
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
 from statsmodels.tsa.statespace.sarimax import SARIMAX
 from sklearn.metrics import mean_squared_error, mean_absolute_error
 from sklearn.preprocessing import StandardScaler
 from scipy import stats
-import sys
 import os
 import tempfile
 from datetime import datetime
-from typing import Optional, Dict, Any, Tuple, List
-from copy import deepcopy
+from typing import Optional, Dict, Any, Tuple
+import warnings
+warnings.filterwarnings('ignore')
+
+
 
 
 class RollingValidationService:
@@ -242,10 +239,10 @@ class RollingValidationService:
                 log_callback(f"Nivel de Confianza: {final_diagnosis['confidence_level']:.1f}%")
                 log_callback(f"Recomendación: {final_diagnosis['recommendation']}")
                 log_callback("\nCOMPARACIÓN DE PRECISIONES:")
-                log_callback(f"  • Precisión Rolling Forecast: {rolling_results['precision']:.1f}% (validación temporal estricta)")
-                log_callback(f"  • Precisión Split Único: {split_precision['precision']:.1f}% (comparable con Predicción)")
-                log_callback(f"    → La precisión rolling es más conservadora y robusta")
-                log_callback(f"    → La precisión split único es la referencia del servicio de predicción")
+                log_callback(f"Precisión Rolling Forecast: {rolling_results['precision']:.1f}% (validación temporal estricta)")
+                log_callback(f"Precisión Split Único: {split_precision['precision']:.1f}% (comparable con Predicción)")
+                log_callback("La precisión rolling es más conservadora y robusta")
+                log_callback("La precisión split único es la referencia del servicio de predicción")
                 
                 if final_diagnosis['limitations']:
                     log_callback("\nLimitaciones identificadas:")
@@ -342,7 +339,7 @@ class RollingValidationService:
                             columns=exog_df.columns
                         )
                         if log_callback and i == 0:
-                            log_callback(f"i Usando promedios históricos para variables exógenas futuras")
+                            log_callback("i Usando promedios históricos para variables exógenas futuras")
                     else:
                         exog_pred = None
             
@@ -395,8 +392,8 @@ class RollingValidationService:
                 if log_callback and (i < 3 or i >= n_validation - 2):
                     log_callback(f"  Mes {i+1}: Pred={pred_original:.2f}, Real={actual_original:.2f}, Error={error_pct:.1f}%")
                 
-            except np.linalg.LinAlgError as e:
-                #  CORREGIDO: Manejo específico de errores de álgebra lineal
+            except np.linalg.LinAlgError:
+                #  CORREGIDO: Manejo específico de errores de álgebra lineal (sin variable 'e' no usada)
                 if log_callback:
                     log_callback(f" Iteración {i+1} falló (matriz singular) - omitida")
                 continue
@@ -502,12 +499,8 @@ class RollingValidationService:
             val_end = train_end + val_size
             test_end = val_end + test_size
             
-            train_trans = data_transformed.iloc[:train_end]
-            val_trans = data_transformed.iloc[train_end:val_end]
-            test_trans = data_transformed.iloc[val_end:test_end]
-            
+            train_trans = data_transformed.iloc[:train_end] 
             train_orig = data_original.iloc[:train_end]
-            val_orig = data_original.iloc[train_end:val_end]
             test_orig = data_original.iloc[val_end:test_end]
             
             # Exógenas
@@ -569,8 +562,8 @@ class RollingValidationService:
                     'precision': precision
                 })
                 
-            except np.linalg.LinAlgError as e:
-                #  CORREGIDO: Manejo específico de errores de álgebra lineal
+            except np.linalg.LinAlgError:
+                #  CORREGIDO: Manejo específico de errores de álgebra lineal (sin variable 'e' no usada)
                 failed_splits += 1
                 if log_callback and failed_splits <= 3:  # Solo mostrar primeros 3 fallos
                     log_callback(f" Split {split_idx} falló (matriz singular) - omitido")
@@ -700,7 +693,7 @@ class RollingValidationService:
                 if log_callback and failed_windows <= 2:
                     log_callback(f" Ventana {window} falló (matriz singular) - omitida")
                 continue
-            except Exception as e:
+            except Exception:
                 failed_windows += 1
                 if log_callback and failed_windows <= 2:
                     log_callback(f" Ventana {window} falló - omitida")
@@ -818,8 +811,6 @@ class RollingValidationService:
                 
                 train_trans = data_transformed.iloc[:start_idx]
                 train_orig = data_original.iloc[:start_idx]
-                
-                test_trans = data_transformed.iloc[start_idx:start_idx + horizon]
                 test_orig = data_original.iloc[start_idx:start_idx + horizon]
                 
                 exog_train = None
@@ -1000,13 +991,12 @@ class RollingValidationService:
             precision = max(0, min(100, (1 - mape/100) * 100))
             
             if log_callback:
-                log_callback(f"\n PRECISIÓN SPLIT ÚNICO (Referencia Comparable)")
+                log_callback("\n PRECISIÓN SPLIT ÚNICO (Referencia Comparable)")
                 log_callback(f"Split: {len(train_original)} train / {n_test} test")
-                log_callback(f"  Precisión: {precision:.1f}%")
-                log_callback(f"  MAPE: {mape:.1f}%")
-                log_callback(f"  RMSE: {rmse:.4f} min")
-                log_callback(f"  R²: {r2_score:.4f}")
-            
+                log_callback(f"Precisión: {precision:.1f}%")
+                log_callback(f"MAPE: {mape:.1f}%")
+                log_callback(f"RMSE: {rmse:.4f} min")
+                log_callback(f"R²: {r2_score:.4f}")
             return {
                 'precision': precision,
                 'mape': mape,
@@ -1080,7 +1070,7 @@ class RollingValidationService:
         elif model_quality == "CONFIABLE":
             recommendation = f"Usar para pronósticos hasta {optimal_horizon} meses con precaución moderada"
         elif model_quality == "CUESTIONABLE":
-            recommendation = f"Usar solo para pronósticos de corto plazo (1-2 meses) con monitoreo continuo"
+            recommendation = "Usar solo para pronósticos de corto plazo (1-2 meses) con monitoreo continuo"
         else:
             recommendation = "No recomendado para uso productivo - Revisar especificación del modelo"
         
@@ -1255,7 +1245,7 @@ class RollingValidationService:
             # Verificación final
             if exog_df.isna().any().any():
                 if log_callback:
-                    log_callback(f"\n NaN residuales detectados - aplicando limpieza final...")
+                    log_callback("\nNaN residuales detectados - aplicando limpieza final...")
                 
                 # Forward fill, luego backward fill
                 exog_df = exog_df.ffill()
@@ -1280,12 +1270,12 @@ class RollingValidationService:
             
             if exog_df.empty:
                 if log_callback:
-                    log_callback(" Todas las variables exógenas contienen demasiados NaN - omitidas")
+                    log_callback("Todas las variables exógenas contienen demasiados NaN - omitidas")
                 return None, None
             
             if log_callback:
-                log_callback(f"\n Variables exógenas finales: {len(exog_df.columns)}")
-                log_callback(f"   Sin NaN - Listas para usar en validación")
+                log_callback(f"\nVariables exógenas finales: {len(exog_df.columns)}")
+                log_callback("Sin NaN - Listas para usar en validación")
             
             return exog_df, exog_info if exog_info else None
             
@@ -1395,7 +1385,7 @@ class RollingValidationService:
         elif transformation_type == 'standard':
             self.scaler = StandardScaler()
             transformed = self.scaler.fit_transform(data.reshape(-1, 1)).flatten()
-            return transformed, f"StandardScaler"
+            return transformed, "StandardScaler"
         
         elif transformation_type == 'log':
             data_positive = np.maximum(data, 1e-10)
@@ -1610,7 +1600,7 @@ class RollingValidationService:
             ax4.grid(True, alpha=0.3)
             
             lines = line1 + line2
-            labels = [l.get_label() for l in lines]
+            labels = [L.get_label() for L in lines]
             ax4.legend(lines, labels, fontsize=9, loc='lower left')
             
             # Panel 5: Diagnóstico Completo

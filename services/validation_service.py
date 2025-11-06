@@ -1,7 +1,4 @@
 # services/validation_service.py 
-import warnings 
-warnings.filterwarnings('ignore')
-
 import pandas as pd
 import numpy as np
 import matplotlib
@@ -12,12 +9,13 @@ from statsmodels.tsa.statespace.sarimax import SARIMAX
 from sklearn.metrics import mean_squared_error
 from sklearn.preprocessing import StandardScaler
 from scipy import stats
-import sys
 import os
 import tempfile
 from datetime import datetime
 from typing import Optional, Dict, Any, Tuple
 from services.climate_simulation_service import ClimateSimulationService
+import warnings 
+warnings.filterwarnings('ignore')
 
 class ValidationService:
     """Servicio para validar modelos SARIMAX con transformaciones por regional"""
@@ -343,7 +341,7 @@ class ValidationService:
                     
                     if log_callback:
                         summary = simulation_config.get('summary', {})
-                        log_callback(f"Simulacion aplicada a periodo de validacion:")
+                        log_callback("Simulacion aplicada a periodo de validacion:")
                         log_callback(f"  - Escenario: {summary.get('escenario', 'N/A')}")
                         log_callback(f"  - Periodos afectados: {len(exog_test)}")
                 else:

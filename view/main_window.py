@@ -2,9 +2,9 @@
 from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                             QPushButton, QLabel, QTextEdit, QGroupBox, 
                             QProgressBar, QStatusBar, QSplitter, QScrollArea, QDialog,
-                            QDialogButtonBox, QComboBox, QFrame, QSizePolicy, QCheckBox)
-from PyQt6.QtCore import Qt, pyqtSignal, QTimer
-from PyQt6.QtGui import QFont, QIcon, QPixmap
+                            QComboBox, QFrame, QSizePolicy, QCheckBox)
+from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtGui import QFont, QPixmap
 import os
 
 class PlotViewerDialog(QDialog):
@@ -889,13 +889,13 @@ class MainWindow(QMainWindow):
         
         for regional_code, info in climate_summary.items():
             if info:
-                details += f"<div style='margin-bottom: 12px; padding: 8px; background-color: #fff; border-left: 3px solid #FF9800; border-radius: 4px;'>"
+                details += "<div style='margin-bottom: 12px; padding: 8px; background-color: #fff; border-left: 3px solid #FF9800; border-radius: 4px;'>"
                 details += f"<b style='color: #FF6F00;'> {info['regional_name']}:</b><br>"
                 details += f"<span style='color: #666;'> Archivo: <b>{info['file_name']}</b></span><br>"
                 details += f"<span style='color: #666;'> Registros: <b>{info['total_records']:,}</b></span><br>"
                 details += f"<span style='color: #666;'> Período: <b>{info['date_range']['start'].strftime('%Y-%m-%d')}</b> a <b>{info['date_range']['end'].strftime('%Y-%m-%d')}</b></span><br>"
                 details += f"<span style='color: #666;'>✓ Completitud: <b style='color: #4CAF50;'>{info['avg_completeness']:.1f}%</b></span>"
-                details += f"</div>"
+                details += "</div>"
         
         details += "</div>"
         
@@ -1012,24 +1012,24 @@ class MainWindow(QMainWindow):
             self.log_success("Formato TRADICIONAL detectado")
 
         details = "<div style='font-size: 11px;'>"
-        details += f"<div style='padding: 10px; background-color: #fff; border-radius: 6px; margin-bottom: 8px;'>"
+        details += "<div style='padding: 10px; background-color: #fff; border-radius: 6px; margin-bottom: 8px;'>"
         details += f"<b style='color: #4CAF50; font-size: 12px;'> Archivo:</b> <span style='color: #333;'>{file_info.get('file_name', 'N/A')}</span><br>"
         details += f"<b style='color: #2196F3;'> Dimensiones:</b> <span style='color: #333;'>{file_info.get('rows', 0):,} filas × {file_info.get('columns', 0)} columnas</span><br>"
         
         if is_regional:
-            details += f"<b style='color: #FF9800;'> Formato:</b> <span style='color: #333; font-weight: bold;'>Regional (multi-columna)</span><br>"
+            details += "<b style='color: #FF9800;'> Formato:</b> <span style='color: #333; font-weight: bold;'>Regional (multi-columna)</span><br>"
             details += f"<b style='color: #9C27B0;'> Regionales:</b> <span style='color: #333;'>{len(file_info.get('available_regionales', []))}</span><br>"
         else:
-            details += f"<b style='color: #FF9800;'> Formato:</b> <span style='color: #333; font-weight: bold;'>Tradicional (columna única)</span><br>"
+            details += "<b style='color: #FF9800;'> Formato:</b> <span style='color: #333; font-weight: bold;'>Tradicional (columna única)</span><br>"
         
-        details += f"</div>"
+        details += "</div>"
         
-        details += f"<div style='padding: 10px; background-color: #f9f9f9; border-radius: 6px; border-left: 3px solid #2196F3;'>"
-        details += f"<b style='color: #2196F3;'> Período:</b><br>"
+        details += "<div style='padding: 10px; background-color: #f9f9f9; border-radius: 6px; border-left: 3px solid #2196F3;'>"
+        details += "<b style='color: #2196F3;'> Período:</b><br>"
         details += f"<span style='color: #666;'>Desde: <b>{file_info.get('date_range', {}).get('start', 'N/A')}</b></span><br>"
         details += f"<span style='color: #666;'>Hasta: <b>{file_info.get('date_range', {}).get('end', 'N/A')}</b></span><br>"
         details += f"<span style='color: #4CAF50; font-weight: bold;'>✓ Contiene SAIDI: {'Sí' if file_info.get('has_saidi', False) else 'No'}</span>"
-        details += f"</div>"
+        details += "</div>"
         
         details += "</div>"
         

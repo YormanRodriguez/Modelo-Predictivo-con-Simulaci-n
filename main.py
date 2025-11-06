@@ -3,16 +3,13 @@
 import sys
 import os
 from PyQt6.QtWidgets import QApplication
-#from PyQt6.QtCore import QDir
-
-current_dir = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, current_dir)
-
 from view.main_window import MainWindow
 from controller.app_controller import AppController
 from model.excel_model import ExcelModel
 from model.climate_model import ClimateModel
 
+current_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, current_dir)
 
 def clean_pycache(root_dir=None):
     """

@@ -1,7 +1,4 @@
 # services/optimization_service.py 
-import warnings
-warnings.filterwarnings('ignore')
-
 import pandas as pd
 import numpy as np
 from statsmodels.tsa.statespace.sarimax import SARIMAX
@@ -13,6 +10,9 @@ import gc
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing as mp
 from typing import List, Dict, Optional, Tuple, Any
+import warnings
+warnings.filterwarnings('ignore')
+
 
 class OptimizationService:
     """
@@ -542,7 +542,7 @@ class OptimizationService:
                 # Limpiar memoria después de cada lote
                 gc.collect()
         
-        print(f"[DEBUG_OPT] Procesamiento paralelo completado")
+        print("[DEBUG_OPT] Procesamiento paralelo completado")
     
     def _run_sequential_optimization(self,
                                 serie_original: pd.Series,
@@ -652,7 +652,7 @@ class OptimizationService:
                     pct_nan = (nan_count / len(exog_df)) * 100
                     nan_details.append(f"{col}: {nan_count} ({pct_nan:.1f}%)")
                 
-                print(f"[DIAGNOSTICO] ERROR: Columnas con NaN encontradas:")
+                print("[DIAGNOSTICO] ERROR: Columnas con NaN encontradas:")
                 for detail in nan_details:
                     print(f"[DIAGNOSTICO]   - {detail}")
                 
@@ -744,7 +744,7 @@ class OptimizationService:
                 if len(var_series) < 12:
                     # Datos insuficientes: usar media simple
                     projected_df[col] = var_series.mean()
-                    print(f"[CLIMATE_PROJECTION]   ADVERTENCIA: Datos insuficientes, usando media")
+                    print("[CLIMATE_PROJECTION]   ADVERTENCIA: Datos insuficientes, usando media")
                     continue
                 
                 # ========== PASO 1: CALCULAR PROMEDIOS MENSUALES PONDERADOS ==========
@@ -831,7 +831,7 @@ class OptimizationService:
             except Exception as e:
                 # Si falla la proyección de esta variable, usar forward-fill simple
                 print(f"[CLIMATE_PROJECTION]   ERROR proyectando {col}: {e}")
-                print(f"[CLIMATE_PROJECTION]   Fallback: usando último valor conocido")
+                print("[CLIMATE_PROJECTION]   Fallback: usando último valor conocido")
                 
                 last_value = climate_data[col].iloc[-1]
                 projected_df[col] = last_value
@@ -851,7 +851,7 @@ class OptimizationService:
             log_callback("Método: Promedios estacionales ponderados + tendencias")
             log_callback("=" * 80)
         
-        print(f"[CLIMATE_PROJECTION] Proyección completada exitosamente")
+        print("[CLIMATE_PROJECTION] Proyección completada exitosamente")
         
         return projected_df
 
@@ -862,11 +862,7 @@ class OptimizationService:
                     transformation: str,
                     exog_df: Optional[pd.DataFrame]) -> Optional[Dict[str, Any]]:
         """
-        Evaluar un modelo SARIMAX individual
-        
-        CAMBIO CRÍTICO: Variables exógenas se usan EN ESCALA ORIGINAL (sin StandardScaler).
-        SARIMAX maneja internamente la normalización de exógenas.
-        
+        Evaluar un modelo SARIMAX individual    
         Estrategia de validación:
         - Train/test split adaptativo (20-30% test según cantidad de datos)
         - Validación estricta de cobertura exógena (100% sin NaN)
@@ -943,15 +939,10 @@ class OptimizationService:
                     if np.isinf(exog_train.values).any() or np.isinf(exog_test.values).any():
                         return None
                     
-                    # ===== CAMBIO CRÍTICO: YA NO SE ESCALAN LAS EXÓGENAS =====
-                    # exog_train y exog_test están en escala ORIGINAL
-                    # SARIMAX maneja internamente la estandarización
-                    
                 except Exception:
                     # Cualquier error en preparación: rechazar modelo
                     return None
             
-            # ==================== ENTRENAR MODELO SARIMAX ====================
             try:
                 model = SARIMAX(
                     train_transformed_series,
@@ -1554,7 +1545,7 @@ class OptimizationService:
                     # Backward-fill (limitado a 3 meses) para meses pasados
                     if backward_months > 0:
                         aligned_series = aligned_series.fillna(method='bfill', limit=3)
-                        print(f"[EXOG_ADAPTIVE]     Backward-fill: máx 3 meses")
+                        print("[EXOG_ADAPTIVE]     Backward-fill: máx 3 meses")
                     
                     # Si TODAVÍA hay NaN, rellenar con media del overlap
                     if aligned_series.isnull().any():
@@ -1607,8 +1598,6 @@ class OptimizationService:
             
             print(f"[EXOG_ADAPTIVE] Variables aceptadas: {len(exog_df.columns)}/{len(exog_vars_config)}")
             
-            # ===== ELIMINADO: Ya NO hay escalado con StandardScaler =====
-            # self.exog_scaler = None (se asigna explícitamente a None para claridad)
             self.exog_scaler = None
             
             # LOG FINAL
@@ -1748,8 +1737,44 @@ class OptimizationService:
     def _log_final_summary(self, 
                       log_callback, 
                       top_models: List[Dict],
-                      exog_info: Optional[Dict]):
+                      exog_info: Optional[Dict],
+                      regional_code: Optional[str] = None):  # Agregar regional_code como parámetro
         """Generar resumen final de optimizacion CON INFO DE CORRELACIONES"""
+        
+        # Definir mapa de correlaciones por regional
+        correlations_map = {
+            'SAIDI_O': {  # Ocaña
+                'realfeel_min': 0.689,
+                'windchill_avg': 0.520,
+                'dewpoint_avg': 0.470,
+                'windchill_max': 0.464,
+                'dewpoint_min': 0.456,
+                'precipitation_max_daily': 0.452,
+                'precipitation_avg_daily': 0.438,
+            },
+            'SAIDI_C': {  # Cúcuta
+                'realfeel_avg': 0.573,
+                'wind_speed_max': 0.356, 
+                'pressure_abs_avg': -0.356,
+            },
+            'SAIDI_T': {  # Tibú
+                'wind_dir_avg': -0.400,
+                'uv_index_avg': 0.385,
+                'heat_index_avg': 0.363,
+                'temperature_min': 0.352,
+                'temperature_avg': 0.338,
+                'wind_gust_max': 0.318,
+                'uv_index_max': 0.248,
+            },
+            'SAIDI_A': {  # Aguachica
+                'uv_index_max': 0.664,
+                'days_with_rain': 0.535,
+            },
+            'SAIDI_P': {  # Pamplona
+                'precipitation_total': 0.577,
+            }
+        }
+    
         log_callback("=" * 80)
         log_callback("RESUMEN FINAL - OPTIMIZACION COMPLETADA")
         if exog_info:
@@ -1773,6 +1798,7 @@ class OptimizationService:
         for i, modelo in enumerate(top_models[:10], 1):
             if i == 1:
                 medal = " Puesto 1"
+
             elif i == 2:
                 medal = " Puesto 2"
             elif i == 3:
@@ -1809,46 +1835,12 @@ class OptimizationService:
             log_callback("\nVARIABLES EXOGENAS UTILIZADAS:")
             log_callback("-" * 80)
             
-            # Mapeo de correlaciones por variable (del analisis)
-            correlations_map = {
-                # Ocana
-                'realfeel_min': 0.689,
-                'windchill_avg': 0.520,
-                'dewpoint_avg': 0.470,
-                'windchill_max': 0.464,
-                'dewpoint_min': 0.456,
-                'precipitation_max_daily': 0.452,
-                'precipitation_avg_daily': 0.438,
-                'windchill_min': 0.409,
-                'heat_index_max': 0.380,
-                'uv_index_days': 0.331,
-                'windchill_days': 0.277,
-                'pressure_rel_avg': -0.261,
-                
-                # Cucuta
-                'realfeel_avg': 0.573,
-                'wind_speed_max': 0.356,
-                'pressure_abs_avg': -0.356,
-                
-                # Tibu
-                'wind_dir_avg': -0.400,
-                'uv_index_avg': 0.385,
-                'heat_index_avg': 0.363,
-                'temperature_min': 0.352,
-                'temperature_avg': 0.338,
-                'wind_gust_max': 0.318,
-                'uv_index_max': 0.248,
-                
-                # Aguachica
-                'uv_index_max': 0.664,
-                'days_with_rain': 0.535,
-                
-                # Pamplona
-                'precipitation_total': 0.577,
-            }
+            # Obtener correlaciones específicas de la regional
+            regional_correlations = correlations_map.get(regional_code, {})
             
             for var_code, var_data in exog_info.items():
-                corr = correlations_map.get(var_code, 0.0)
+                # Obtener correlación específica de la regional
+                corr = regional_correlations.get(var_code, 0.0)
                 
                 if corr != 0:
                     corr_str = f"(r={corr:+.3f})"

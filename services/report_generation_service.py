@@ -8,16 +8,15 @@ import os
 import tempfile
 from datetime import datetime
 from typing import Dict, Any, Optional
-from reportlab.lib.pagesizes import letter, A4
+from reportlab.lib.pagesizes import  A4
 from reportlab.lib.units import inch
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.lib.enums import TA_JUSTIFY, TA_CENTER, TA_LEFT
+from reportlab.lib.enums import TA_JUSTIFY, TA_CENTER
 from reportlab.lib import colors
 from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Spacer, Image, 
-    PageBreak, Table, TableStyle, KeepTogether
+    PageBreak, Table, TableStyle
 )
-from reportlab.pdfgen import canvas
 
 
 class ValidationReportService:
@@ -382,7 +381,7 @@ class ValidationReportService:
                     )
                     elements.append(caption)
             except Exception as e:
-                pass  # Si falla, continuar sin gráfica
+                self.log_callback(f"Error en gráfica CV: {str(e)}")
         
         return elements
     
@@ -476,7 +475,7 @@ class ValidationReportService:
                     )
                     elements.append(caption)
             except Exception as e:
-                pass
+                self.log_callback(f"Error en gráfica CV: {str(e)}")
         
         return elements
     
@@ -522,7 +521,7 @@ class ValidationReportService:
         
         unstable_params = param_stability.get('unstable_params', [])
         if unstable_params:
-            results_text += f"""
+            results_text += """
             <b>Parámetros inestables detectados:</b><br/>
             """
             for param in unstable_params:
@@ -581,7 +580,7 @@ class ValidationReportService:
                         self.styles['Normal']
                     )
                     elements.append(caption)
-            except Exception as e:
+            except Exception:
                 pass
         
         return elements
@@ -675,9 +674,9 @@ class ValidationReportService:
                         self.styles['Normal']
                     )
                     elements.append(caption)
-            except Exception as e:
+            except Exception:
                 pass
-        
+
         return elements
     
     def _extract_plot_section(self, plot_file: str, section: str) -> Optional[str]:
@@ -853,8 +852,8 @@ class ValidationReportService:
                 )
                 elements.append(caption)
                 
-            except Exception as e:
-                error_text = f"<i>Error al cargar la gráfica: {str(e)}</i>"
+            except Exception:
+                error_text = "<i>Error al cargar la gráfica</i>"
                 elements.append(Paragraph(error_text, self.styles['Normal']))
         else:
             no_plot_text = "<i>Gráfica no disponible en el resultado del análisis.</i>"

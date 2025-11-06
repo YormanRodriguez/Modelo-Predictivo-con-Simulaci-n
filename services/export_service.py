@@ -132,8 +132,14 @@ class ExportService:
                     try:
                         if len(str(cell.value)) > max_length:
                             max_length = len(str(cell.value))
-                    except:
-                        pass
+                    except ValueError as e:
+                        # Manejar específicamente errores de valor
+                        print(f"Error al procesar celda: {e}")
+                        continue
+                    except TypeError as e:
+                        # Manejar errores de tipo
+                        print(f"Error de tipo al procesar celda: {e}")
+                        continue
                 
                 adjusted_width = min(max_length + 2, 30)
                 ws.column_dimensions[column_letter].width = adjusted_width
