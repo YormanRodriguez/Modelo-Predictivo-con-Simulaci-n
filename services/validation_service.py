@@ -1,5 +1,5 @@
-# services/validation_service.py
-import warnings
+# services/validation_service.py 
+import warnings 
 warnings.filterwarnings('ignore')
 
 import pandas as pd
@@ -20,17 +20,7 @@ from typing import Optional, Dict, Any, Tuple
 from services.climate_simulation_service import ClimateSimulationService
 
 class ValidationService:
-    """
-    Servicio para validar modelos SARIMAX con transformaciones por regional
-    
-    ACTUALIZACIONES:
-    - Soporte para variables exogenas climaticas
-    - SOPORTE PARA SIMULACION CLIMATICA (como PredictionService)
-    - SIN intervalos de confianza
-    - Calculo de precision IDENTICO a OptimizationService
-    - Metricas completamente alineadas
-    - Validacion consistente (20-30% test)
-    """
+    """Servicio para validar modelos SARIMAX con transformaciones por regional"""
     
     # Mapeo de regionales a sus transformaciones optimas
     REGIONAL_TRANSFORMATIONS = {
@@ -42,7 +32,7 @@ class ValidationService:
         'SAIDI_Cens': 'original'  # Cens - Original
     }
     
-    # Variables exogenas por regional (consistente con OptimizationService)
+    # Variables exogenas por regional
     REGIONAL_EXOG_VARS = {
         'SAIDI_O': {
             'temp_max': 'Temperatura maxima',
@@ -71,6 +61,33 @@ class ValidationService:
         },
     }
     
+    REGIONAL_ORDERS = {
+        'SAIDI_O': {
+            'order': (4, 1, 3),
+            'seasonal_order': (1, 1, 4, 12)
+        },
+        'SAIDI_C': {
+            'order': (3, 1, 2),
+            'seasonal_order': (1, 1, 2, 12)
+        },
+        'SAIDI_A': {
+            'order': (2, 1, 3),
+            'seasonal_order': (2, 1, 1, 12)
+        },
+        'SAIDI_P': {
+            'order': (4, 1, 3),
+            'seasonal_order': (1, 1, 4, 12)
+        },
+        'SAIDI_T': {
+            'order': (3, 1, 3),
+            'seasonal_order': (2, 1, 2, 12)
+        },
+        'SAIDI_Cens': {
+            'order': (4, 1, 3),
+            'seasonal_order': (1, 1, 4, 12)
+        }
+    }
+    
     def __init__(self):
         self.default_order = (4, 1, 3)
         self.default_seasonal_order = (1, 1, 4, 12)
@@ -78,7 +95,24 @@ class ValidationService:
         self.scaler = None
         self.exog_scaler = None
         self.transformation_params = {}
-        self.simulation_service = ClimateSimulationService() 
+        self.simulation_service = ClimateSimulationService()
+
+    def _get_orders_for_regional(self, regional_code):
+        """
+        Obtener ordenes SARIMAX especificos para una regional
+        
+        Args:
+            regional_code: Codigo de la regional (ej: 'SAIDI_O')
+        
+        Returns:
+            tuple: (order, seasonal_order) - Ordenes ARIMA y estacionales
+        """
+        if regional_code and regional_code in self.REGIONAL_ORDERS:
+            config = self.REGIONAL_ORDERS[regional_code]
+            return config['order'], config['seasonal_order']
+        else:
+            # Fallback a valores por defecto si no hay configuracion especifica
+            return self.default_order, self.default_seasonal_order
     
     def run_validation(self, 
                       file_path: Optional[str] = None, 
@@ -93,25 +127,31 @@ class ValidationService:
         """
         Ejecutar validacion del modelo SARIMAX con transformacion especifica por regional
         
-        Args:
-            file_path: Ruta del archivo Excel SAIDI
-            df_prepared: DataFrame SAIDI preparado
-            order: Orden ARIMA
-            seasonal_order: Orden estacional
-            regional_code: Codigo de la regional (e.g., 'SAIDI_C', 'SAIDI_O')
-            climate_data: DataFrame con datos climaticos mensuales
-            simulation_config: Configuracion de simulacion climatica
-            progress_callback: Funcion para actualizar progreso
-            log_callback: Funcion para logging
-        
         Returns:
             Diccionario con resultados de validacion
         """
         try:
-            if order is None:
-                order = self.default_order
-            if seasonal_order is None:
-                seasonal_order = self.default_seasonal_order
+            if order is None or seasonal_order is None:
+                order_regional, seasonal_regional = self._get_orders_for_regional(regional_code)
+                
+                if order is None:
+                    order = order_regional
+                if seasonal_order is None:
+                    seasonal_order = seasonal_regional
+                
+                if log_callback and regional_code:
+                    regional_nombre = {
+                        'SAIDI_O': 'Ocaña',
+                        'SAIDI_C': 'Cúcuta',
+                        'SAIDI_A': 'Aguachica',
+                        'SAIDI_P': 'Pamplona',
+                        'SAIDI_T': 'Tibú',
+                        'SAIDI_Cens': 'CENS'
+                    }.get(regional_code, regional_code)
+                    
+                    log_callback(f"Usando parametros optimizados para regional {regional_nombre}")
+                    log_callback(f"   Order: {order}")
+                    log_callback(f"   Seasonal Order: {seasonal_order}")
             
             # Determinar transformacion a usar
             transformation = self._get_transformation_for_regional(regional_code)
@@ -125,18 +165,18 @@ class ValidationService:
                 
                 if simulation_applied:
                     log_callback("=" * 60)
-                    log_callback("  VALIDACIÓN CON SIMULACIÓN CLIMÁTICA")
+                    log_callback("VALIDACIÓN CON SIMULACIÓN CLIMÁTICA")
                     log_callback("=" * 60)
                     
                     summary = simulation_config.get('summary', {})
-                    log_callback(f" Escenario: {summary.get('escenario', 'N/A')}")
-                    log_callback(f" Alcance: {summary.get('alcance_meses', 'N/A')} meses")
-                    log_callback(f" Días base: {summary.get('dias_base', 'N/A')}")
-                    log_callback(f" Ajuste: {summary.get('slider_adjustment', 0):+d} días")
-                    log_callback(f" Total días simulados: {summary.get('dias_simulados', 'N/A')}")
+                    log_callback(f"Escenario: {summary.get('escenario', 'N/A')}")
+                    log_callback(f"Alcance: {summary.get('alcance_meses', 'N/A')} meses")
+                    log_callback(f"Días base: {summary.get('dias_base', 'N/A')}")
+                    log_callback(f"Ajuste: {summary.get('slider_adjustment', 0):+d} días")
+                    log_callback(f"Total días simulados: {summary.get('dias_simulados', 'N/A')}")
                     
                     # Mostrar variables que se modificarán
-                    log_callback("\n Variables a modificar:")
+                    log_callback("\nVariables a modificar:")
                     changes = summary.get('percentage_changes', {})
                     var_names = {
                         'temp_max': 'Temperatura máxima',
@@ -149,11 +189,11 @@ class ValidationService:
                         log_callback(f"   {arrow} {var_name}: {change_pct:+.1f}%")
                     
                     log_callback("")
-                    log_callback("  NOTA: Validación bajo condiciones climáticas HIPOTÉTICAS")
+                    log_callback("NOTA: Validación bajo condiciones climáticas HIPOTÉTICAS")
                     log_callback("=" * 60)
                 else:
                     log_callback("Modo: Validacion estandar (sin simulacion)")
-                
+            
             if progress_callback:
                 progress_callback(10, "Cargando datos...")
             
@@ -764,14 +804,6 @@ class ValidationService:
                                                with_exogenous: bool,
                                                pct_validacion: float,
                                                n_test: int) -> Dict[str, float]:
-        """
-        Calcular metricas de validacion IDENTICO a OptimizationService
-        
-        Esta implementación garantiza que:
-        - La precisión se calcula exactamente igual
-        - Todas las métricas usan numpy arrays
-        - El resultado es consistente con la optimización
-        """
         # Calcular RMSE
         rmse = np.sqrt(mean_squared_error(test_values, pred_values))
         
@@ -940,7 +972,7 @@ class ValidationService:
                         ha='center', va='center', color='gray', fontsize=10, weight='bold',
                         bbox=dict(boxstyle='round,pad=0.3', facecolor='lightgray', alpha=0.9, edgecolor='gray'))
             
-            # Cuadro de metricas (ACTUALIZADO con nuevas métricas)
+            # Cuadro de metricas 
             info_metricas = (f"METRICAS VALIDACION\n"
                             f"RMSE: {metricas['rmse']:.3f} | MAE: {metricas['mae']:.3f}\n"
                             f"MAPE: {metricas['mape']:.1f}% | R2: {metricas['r2_score']:.3f}\n"
@@ -980,7 +1012,7 @@ class ValidationService:
                     fontsize=9, verticalalignment='top', horizontalalignment='right',
                     bbox=dict(boxstyle='round,pad=0.4', facecolor='lightgreen', alpha=0.9, edgecolor='green'))
             
-            # Indicador de calidad (ACTUALIZADO con umbrales de OptimizationService)
+            # Indicador de calidad 
             precision = metricas['precision_final']
             if precision >= 60:
                 interpretacion = "EXCELENTE"

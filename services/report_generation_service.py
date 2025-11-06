@@ -366,7 +366,7 @@ class ValidationReportService:
         elements.append(Paragraph(results_text + interpretation, self.styles['JustifiedBody']))
         elements.append(Spacer(1, 0.2*inch))
         
-        # NUEVA: Insertar gráfica de Rolling Forecast
+        
         plot_file = result.get('plot_file')
         if plot_file and os.path.exists(plot_file):
             try:
@@ -462,7 +462,6 @@ class ValidationReportService:
         elements.append(Paragraph(results_text + interpretation, self.styles['JustifiedBody']))
         elements.append(Spacer(1, 0.2*inch))
         
-        # NUEVA: Insertar gráfica de Cross-Validation
         plot_file = result.get('plot_file')
         if plot_file and os.path.exists(plot_file):
             try:
@@ -569,7 +568,6 @@ class ValidationReportService:
         elements.append(Paragraph(results_text + interpretation, self.styles['JustifiedBody']))
         elements.append(Spacer(1, 0.2*inch))
         
-        # NUEVA: Insertar gráfica de Parameter Stability
         plot_file = result.get('plot_file')
         if plot_file and os.path.exists(plot_file):
             try:
@@ -664,7 +662,6 @@ class ValidationReportService:
         elements.append(Paragraph(results_text + interpretation, self.styles['JustifiedBody']))
         elements.append(Spacer(1, 0.2*inch))
         
-        # NUEVA: Insertar gráfica de Backtesting
         plot_file = result.get('plot_file')
         if plot_file and os.path.exists(plot_file):
             try:

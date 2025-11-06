@@ -1,14 +1,6 @@
 # services/rolling_validation_service.py
 """
-Servicio de Validación Temporal con Rolling Forecast para SAIDI
-VERSIÓN CORREGIDA - Manejo robusto de errores de álgebra lineal
-
-MEJORAS:
-- Manejo específico de np.linalg.LinAlgError
-- Parámetros SARIMAX más flexibles (enforce_stationarity=False)
-- Método de optimización más estable (lbfgs)
-- Corrección de scope de variable pred_date
-- Continue explícito en todos los catches
+Servicio de Validación Temporal con Rolling Forecast para SAIDI - Manejo robusto de errores de álgebra lineal
 """
 
 import warnings
@@ -53,6 +45,33 @@ class RollingValidationService:
         'SAIDI_P': {'temp_max': 'Temperatura máxima', 'humedad_avg': 'Humedad relativa', 'precip_total': 'Precipitación total'},
         'SAIDI_T': {'temp_max': 'Temperatura máxima', 'humedad_avg': 'Humedad relativa', 'precip_total': 'Precipitación total'},
     }
+
+    REGIONAL_ORDERS = {
+        'SAIDI_O': {
+            'order': (4, 1, 3),
+            'seasonal_order': (1, 1, 4, 12)
+        },
+        'SAIDI_C': {
+            'order': (3, 1, 2),
+            'seasonal_order': (1, 1, 2, 12)
+        },
+        'SAIDI_A': {
+            'order': (2, 1, 3),
+            'seasonal_order': (2, 1, 1, 12)
+        },
+        'SAIDI_P': {
+            'order': (4, 1, 3),
+            'seasonal_order': (1, 1, 4, 12)
+        },
+        'SAIDI_T': {
+            'order': (3, 1, 3),
+            'seasonal_order': (2, 1, 2, 12)
+        },
+        'SAIDI_Cens': {
+            'order': (4, 1, 3),
+            'seasonal_order': (1, 1, 4, 12)
+        }
+    }
     
     def __init__(self):
         self.default_order = (4, 1, 3)
@@ -61,6 +80,23 @@ class RollingValidationService:
         self.scaler = None
         self.exog_scaler = None
         self.transformation_params = {}
+
+    def _get_orders_for_regional(self, regional_code):
+        """
+        Obtener ordenes SARIMAX especificos para una regional
+        
+        Args:
+            regional_code: Codigo de la regional (ej: 'SAIDI_O')
+        
+        Returns:
+            tuple: (order, seasonal_order) - Ordenes ARIMA y estacionales
+        """
+        if regional_code and regional_code in self.REGIONAL_ORDERS:
+            config = self.REGIONAL_ORDERS[regional_code]
+            return config['order'], config['seasonal_order']
+        else:
+            # Fallback a valores por defecto si no hay configuracion especifica
+            return self.default_order, self.default_seasonal_order
     
     def run_comprehensive_validation(self,
                                      file_path: Optional[str] = None,
@@ -76,10 +112,27 @@ class RollingValidationService:
         Ejecutar análisis completo de validación temporal
         """
         try:
-            if order is None:
-                order = self.default_order
-            if seasonal_order is None:
-                seasonal_order = self.default_seasonal_order
+            if order is None or seasonal_order is None:
+                order_regional, seasonal_regional = self._get_orders_for_regional(regional_code)
+                
+                if order is None:
+                    order = order_regional
+                if seasonal_order is None:
+                    seasonal_order = seasonal_regional
+                
+                if log_callback and regional_code:
+                    regional_nombre = {
+                        'SAIDI_O': 'Ocaña',
+                        'SAIDI_C': 'Cúcuta',
+                        'SAIDI_A': 'Aguachica',
+                        'SAIDI_P': 'Pamplona',
+                        'SAIDI_T': 'Tibú',
+                        'SAIDI_Cens': 'CENS'
+                    }.get(regional_code, regional_code)
+                    
+                    log_callback(f"Usando parametros optimizados para regional {regional_nombre}")
+                    log_callback(f"   Order: {order}")
+                    log_callback(f"   Seasonal Order: {seasonal_order}")
             
             transformation = self._get_transformation_for_regional(regional_code)
             
@@ -89,6 +142,7 @@ class RollingValidationService:
                 log_callback("=" * 60)
                 log_callback(f"Regional: {regional_code}")
                 log_callback(f"Transformación: {transformation.upper()}")
+                log_callback(f"Parámetros: order={order}, seasonal_order={seasonal_order}")
                 log_callback(f"Meses de validación: {validation_months}")
             
             if progress_callback:
@@ -187,8 +241,6 @@ class RollingValidationService:
                 log_callback(f"Calidad del Modelo: {final_diagnosis['model_quality']}")
                 log_callback(f"Nivel de Confianza: {final_diagnosis['confidence_level']:.1f}%")
                 log_callback(f"Recomendación: {final_diagnosis['recommendation']}")
-                
-                # ← AGREGAR ESTAS LÍNEAS:
                 log_callback("\nCOMPARACIÓN DE PRECISIONES:")
                 log_callback(f"  • Precisión Rolling Forecast: {rolling_results['precision']:.1f}% (validación temporal estricta)")
                 log_callback(f"  • Precisión Split Único: {split_precision['precision']:.1f}% (comparable con Predicción)")

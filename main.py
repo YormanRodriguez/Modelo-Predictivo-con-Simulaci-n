@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-# main.py - Aplicación Principal MVC - CORREGIDO
+# main.py - Aplicación Principal MVC 
 import sys
 import os
 from PyQt6.QtWidgets import QApplication
-from PyQt6.QtCore import QDir
+#from PyQt6.QtCore import QDir
 
 current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, current_dir)

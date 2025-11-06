@@ -1,4 +1,4 @@
-# services/prediction_service.py - VERSION CON VARIABLES EXOGENAS, SIMULACION E INTERVALOS DE CONFIANZA CORREGIDOS
+# services/prediction_service.py -mini 
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -33,7 +33,34 @@ class PredictionService:
         'SAIDI_Cens': 'original'  # Cens - Original
     }
     
-    # Variables exogenas por regional (usando columnas procesadas por ClimateModel)
+    REGIONAL_ORDERS = {
+        'SAIDI_O': {
+            'order': (4, 1, 3),
+            'seasonal_order': (1, 1, 4, 12)
+        },
+        'SAIDI_C': {
+            'order': (3, 1, 2),
+            'seasonal_order': (1, 1, 2, 12)
+        },
+        'SAIDI_A': {
+            'order': (2, 1, 3),
+            'seasonal_order': (2, 1, 1, 12)
+        },
+        'SAIDI_P': {
+            'order': (4, 1, 3),
+            'seasonal_order': (1, 1, 4, 12)
+        },
+        'SAIDI_T': {
+            'order': (3, 1, 3),
+            'seasonal_order': (2, 1, 2, 12)
+        },
+        'SAIDI_Cens': {
+            'order': (4, 1, 3),
+            'seasonal_order': (1, 1, 4, 12)
+        }
+    }
+
+    # Variables exogenas por regional 
     REGIONAL_EXOG_VARS = {
         'SAIDI_O': {
             'temp_max': 'Temperatura maxima',         # Alta correlacion con SAIDI
@@ -73,6 +100,23 @@ class PredictionService:
         self.uncertainty_service = UncertaintyService()  
         self.export_service = ExportService() 
     
+    def _get_orders_for_regional(self, regional_code):
+        """
+        Obtener ordenes SARIMAX especificos para una regional
+        
+        Args:
+            regional_code: Codigo de la regional (ej: 'SAIDI_O')
+        
+        Returns:
+            tuple: (order, seasonal_order) - Ordenes ARIMA y estacionales
+        """
+        if regional_code and regional_code in self.REGIONAL_ORDERS:
+            config = self.REGIONAL_ORDERS[regional_code]
+            return config['order'], config['seasonal_order']
+        else:
+            # Fallback a valores por defecto si no hay configuracion especifica
+            return self.default_order, self.default_seasonal_order
+
     def export_predictions(self, predictions_dict, regional_code, regional_nombre, 
                       output_dir=None, include_intervals=True, model_params=None,
                       metrics=None):
@@ -127,8 +171,8 @@ class PredictionService:
         Args:
             file_path: Ruta del archivo SAIDI Excel
             df_prepared: DataFrame de SAIDI ya preparado
-            order: Orden ARIMA
-            seasonal_order: Orden estacional ARIMA
+            order: Orden ARIMA (opcional - si None usa el de la regional)
+            seasonal_order: Orden estacional ARIMA (opcional - si None usa el de la regional)
             regional_code: Codigo de la regional
             climate_data: DataFrame con datos climaticos mensuales
             simulation_config: Configuracion de simulacion climatica (opcional)
@@ -136,10 +180,27 @@ class PredictionService:
             log_callback: Funcion para loguear mensajes
         """
         try:
-            if order is None:
-                order = self.default_order
-            if seasonal_order is None:
-                seasonal_order = self.default_seasonal_order
+            if order is None or seasonal_order is None:
+                order_regional, seasonal_regional = self._get_orders_for_regional(regional_code)
+                
+                if order is None:
+                    order = order_regional
+                if seasonal_order is None:
+                    seasonal_order = seasonal_regional
+                
+                if log_callback and regional_code:
+                    regional_nombre = {
+                        'SAIDI_O': 'Ocaña',
+                        'SAIDI_C': 'Cúcuta',
+                        'SAIDI_A': 'Aguachica',
+                        'SAIDI_P': 'Pamplona',
+                        'SAIDI_T': 'Tibú',
+                        'SAIDI_Cens': 'CENS'
+                    }.get(regional_code, regional_code)
+                    
+                    log_callback(f" Usando parametros optimizados para regional {regional_nombre}")
+                    log_callback(f"   Order: {order}")
+                    log_callback(f"   Seasonal Order: {seasonal_order}")
             
             # Determinar transformacion segun regional
             transformation = self._get_transformation_for_regional(regional_code)
