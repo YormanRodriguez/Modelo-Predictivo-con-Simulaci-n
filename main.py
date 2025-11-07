@@ -11,6 +11,33 @@ from model.climate_model import ClimateModel
 current_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, current_dir)
 
+def clean_pycache(root_dir=None):
+    """
+    Elimina todas las carpetas __pycache__ del proyecto
+    """
+    if root_dir is None:
+        root_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    deleted_count = 0
+    
+    for dirpath, dirnames, filenames in os.walk(root_dir):
+        if '__pycache__' in dirnames:
+            try:
+                import shutil
+                cache_dir = os.path.join(dirpath, '__pycache__')
+                shutil.rmtree(cache_dir)
+                deleted_count += 1
+            except Exception:
+                pass
+    
+    if deleted_count > 0:
+        print(f"\n✓ Total de carpetas __pycache__ eliminadas: {deleted_count}")
+    else:
+        print("✓ No se encontraron carpetas __pycache__")
+    
+    return deleted_count
+
+
 class SAIDIApplication:
     """Aplicación principal SAIDI con arquitectura MVC"""
     
@@ -133,6 +160,7 @@ if __name__ == '__main__':
     print("=" * 60)
     
     # Limpiar carpetas __pycache__ antes de iniciar
+    clean_pycache()
     
     print("\nConfigurando arquitectura MVC...")
     app = SAIDIApplication()
