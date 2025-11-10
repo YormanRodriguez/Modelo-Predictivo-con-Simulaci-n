@@ -1,3 +1,4 @@
+# view/main_window.py - Interfaz Principal de la app
 
 import datetime
 import shutil

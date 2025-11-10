@@ -247,23 +247,46 @@ class AppController(QObject):
 
             # Si la simulación está habilitada en la UI, abrir diálogo
             if getattr(self.view, 'enable_simulation_checkbox', None) and self.view.enable_simulation_checkbox.isChecked():
-                # abrir diálogo de configuración de simulación
-                dialog = ClimateSimulationDialog(
+                # Crear configuración para el diálogo
+                from dataclasses import dataclass
+                
+                @dataclass
+                class SimulationConfig:
+                    climate_data: any
+                    mes_prediccion: int
+                    regional_code: str
+                    regional_nombre: str
+                    mode: str = "prediction"
+                
+                # Obtener mes de predicción
+                mes_prediccion = 1
+                if self.model.get_excel_data_for_analysis() is not None:
+                    mes_prediccion = pd.to_datetime(
+                        self.model.get_excel_data_for_analysis()['Fecha'].iloc[-1]
+                    ).month
+                
+                # Crear configuración
+                config = SimulationConfig(
                     climate_data=climate_data,
-                    mes_prediccion=pd.to_datetime(self.model.get_excel_data_for_analysis()['Fecha'].iloc[-1]).month
-                                    if self.model.get_excel_data_for_analysis() is not None else 1,
+                    mes_prediccion=mes_prediccion,
                     regional_code=regional_code,
                     regional_nombre=regional_nombre,
-                    parent=self.view
+                    mode="prediction"
                 )
-                dialog.simulation_accepted.connect(lambda cfg: self._on_simulation_configured(cfg, regional_code, climate_data))
-                dialog.simulation_cancelled.connect(lambda: self._on_simulation_configured({'enabled': False}, regional_code, climate_data))
+                
+                # Abrir diálogo con configuración
+                dialog = ClimateSimulationDialog(config, parent=self.view)
+                dialog.simulation_accepted.connect(
+                    lambda cfg: self._on_simulation_configured(cfg, regional_code, climate_data)
+                )
+                dialog.simulation_cancelled.connect(
+                    lambda: self._on_simulation_configured({'enabled': False}, regional_code, climate_data)
+                )
                 dialog.exec()
                 return
 
         # Si llegamos aquí, ejecutar predicción normal (sin simulación)
         self._execute_prediction(regional_code, climate_data, None)
-
     def export_predictions_to_excel(self):
         """Exportar predicciones a Excel con validación completa"""
         try:

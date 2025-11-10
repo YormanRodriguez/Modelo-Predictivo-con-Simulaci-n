@@ -1,80 +1,142 @@
 # view/climate_simulation_dialog.py - Diálogo de simulación climática
-from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QPushButton, 
-                              QLabel, QSlider, QRadioButton, QButtonGroup, 
-                              QGroupBox, QFrame, QMessageBox, QScrollArea, QWidget)
+from dataclasses import dataclass
+
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont
+from PyQt6.QtWidgets import (
+    QButtonGroup,
+    QDialog,
+    QFrame,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QMessageBox,
+    QPushButton,
+    QRadioButton,
+    QScrollArea,
+    QSlider,
+    QVBoxLayout,
+    QWidget,
+)
+
 from services.climate_simulation_service import ClimateSimulationService
 
+
+@dataclass
+class SimulationConfig:
+    """Configuración para el diálogo de simulación."""
+
+    climate_data: any
+    mes_prediccion: int
+    regional_code: str
+    regional_nombre: str
+    mode: str = "prediction"
+
+
 class ClimateSimulationDialog(QDialog):
-    """Diálogo para configurar simulación climática antes de predicción"""
-    
+    """Diálogo para configurar simulación climática antes de predicción."""
+
     # Señales
     simulation_accepted = pyqtSignal(dict)
     simulation_cancelled = pyqtSignal()
-    
-    def __init__(self, climate_data, mes_prediccion, regional_code, regional_nombre, 
-             mode='prediction', parent=None):  
+
+    def __init__(self, config: SimulationConfig, parent=None):
         super().__init__(parent)
-        
-        self.climate_data = climate_data
-        self.mes_prediccion = mes_prediccion
-        self.regional_code = regional_code
-        self.regional_nombre = regional_nombre
-        self.mode = mode  
-        
+
+        self.climate_data = config.climate_data
+        self.mes_prediccion = config.mes_prediccion
+        self.regional_code = config.regional_code
+        self.regional_nombre = config.regional_nombre
+        self.mode = config.mode
+
         self.simulation_service = ClimateSimulationService()
-        
+
         # Datos calculados
         self.percentiles = None
         self.dias_base = None
         self.slider_ranges = None
-        
+
         # Estado actual
         self.escenario_seleccionado = None
         self.slider_adjustment = 0
-        
+
         self.setup_ui()
         self.calculate_simulation_data()
-        
+
     def setup_ui(self):
-        """Configurar interfaz de usuario"""
+        """Configurar interfaz de usuario."""
         self.setWindowTitle(f"Simulador - {self.regional_nombre}")
         self.setModal(True)
         self.setMinimumSize(500, 550)
         self.resize(550, 600)
-        
+
         # Layout principal del diálogo
         dialog_layout = QVBoxLayout(self)
         dialog_layout.setContentsMargins(0, 0, 0, 0)
         dialog_layout.setSpacing(0)
-        
-        # Área scrolleable
+
+        # Crear área scrolleable con contenido
+        scroll = self._create_scroll_area()
+        dialog_layout.addWidget(scroll)
+
+        # Separador
+        separator = self._create_separator()
+        dialog_layout.addWidget(separator)
+
+        # Botones de acción
+        buttons_layout = self._create_action_buttons()
+        dialog_layout.addLayout(buttons_layout)
+
+        self.apply_dialog_styles()
+
+    def _create_scroll_area(self):
+        """Crear área scrolleable con todo el contenido."""
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
-        
-        # Widget contenedor del contenido scrolleable
+
+        # Widget contenedor
         scroll_content = QWidget()
         main_layout = QVBoxLayout(scroll_content)
         main_layout.setSpacing(12)
         main_layout.setContentsMargins(16, 16, 16, 16)
-        
-        # Encabezado compacto
-        # Encabezado compacto
-        mode_text = "VALIDACIÓN" if self.mode == 'validation' else "PREDICCIÓN"
-        mode_icon = "📊" if self.mode == 'validation' else "🔮"
-        
+
+        # Agregar todos los componentes
+        header = self._create_header()
+        main_layout.addWidget(header)
+
+        desc = self._create_description()
+        main_layout.addWidget(desc)
+
+        self.create_scenario_group(main_layout)
+
+        historical_group = self._create_historical_group()
+        main_layout.addWidget(historical_group)
+
+        adjustment_group = self._create_adjustment_group()
+        main_layout.addWidget(adjustment_group)
+
+        alcance_group = self._create_alcance_group()
+        main_layout.addWidget(alcance_group)
+
+        scroll.setWidget(scroll_content)
+        return scroll
+
+    def _create_header(self):
+        """Crear encabezado del diálogo."""
+        mode_text = "VALIDACIÓN" if self.mode == "validation" else "PREDICCIÓN"
+        mode_icon = "📊" if self.mode == "validation" else "🔮"
+
         header = QLabel(f"{mode_icon} Simulador Climático\n{mode_text} - {self.regional_nombre}")
         header.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
         header.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        
+
         # Color según modo
-        header_color = "#1976D2" if self.mode == 'prediction' else "#FF6F00"
-        gradient_start = "#E3F2FD" if self.mode == 'prediction' else "#FFF3E0"
-        gradient_end = "#BBDEFB" if self.mode == 'prediction' else "#FFE0B2"
-        
+        header_color = "#1976D2" if self.mode == "prediction" else "#FF6F00"
+        gradient_start = "#E3F2FD" if self.mode == "prediction" else "#FFF3E0"
+        gradient_end = "#BBDEFB" if self.mode == "prediction" else "#FFE0B2"
+
         header.setStyleSheet(f"""
             QLabel {{
                 color: {header_color};
@@ -84,10 +146,11 @@ class ClimateSimulationDialog(QDialog):
                 border-radius: 6px;
             }}
         """)
-        main_layout.addWidget(header)
-        
-        # Descripción según modo
-        if self.mode == 'validation':
+        return header
+
+    def _create_description(self):
+        """Crear descripción según el modo."""
+        if self.mode == "validation":
             desc_text = (
                 "Configure un escenario climático para evaluar la SENSIBILIDAD "
                 "del modelo bajo diferentes condiciones meteorológicas."
@@ -97,22 +160,21 @@ class ClimateSimulationDialog(QDialog):
                 "Configure un escenario climático para ajustar la predicción SAIDI "
                 "según condiciones meteorológicas esperadas."
             )
-        
+
         desc = QLabel(desc_text)
         desc.setWordWrap(True)
         desc.setAlignment(Qt.AlignmentFlag.AlignCenter)
         desc.setStyleSheet("color: #666; font-size: 10px; padding: 6px;")
-        main_layout.addWidget(desc)
-        
-        # Grupo: Selección de escenario (compacto)
-        self.create_scenario_group(main_layout)
-        
-        # Grupo: Datos históricos (compacto)
+        return desc
+
+    def _create_historical_group(self):
+        """Crear grupo de datos históricos."""
         self.historical_group = QGroupBox("Datos Históricos")
         self.historical_group.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+
         historical_layout = QVBoxLayout(self.historical_group)
         historical_layout.setContentsMargins(8, 12, 8, 8)
-        
+
         self.historical_label = QLabel("Calculando...")
         self.historical_label.setWordWrap(True)
         self.historical_label.setStyleSheet("""
@@ -125,28 +187,54 @@ class ClimateSimulationDialog(QDialog):
             }
         """)
         historical_layout.addWidget(self.historical_label)
-        
-        main_layout.addWidget(self.historical_group)
-        
-        # Grupo: Ajustar intensidad (compacto)
+
+        return self.historical_group
+
+    def _create_adjustment_group(self):
+        """Crear grupo de ajuste de intensidad."""
         self.adjustment_group = QGroupBox("Ajustar Intensidad")
         self.adjustment_group.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
         self.adjustment_group.setEnabled(False)
+
         adjustment_layout = QVBoxLayout(self.adjustment_group)
         adjustment_layout.setContentsMargins(8, 12, 8, 8)
         adjustment_layout.setSpacing(6)
-        
+
+        # Label de ajuste
         self.adjustment_label = QLabel("Seleccione un escenario")
         self.adjustment_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.adjustment_label.setStyleSheet("color: #666; font-size: 10px; padding: 4px;")
         adjustment_layout.addWidget(self.adjustment_label)
-        
-        # Slider compacto
+
+        # Slider y controles
+        self._add_slider_controls(adjustment_layout)
+
+        # Vista previa
+        self.preview_label = QLabel("")
+        self.preview_label.setWordWrap(True)
+        self.preview_label.setStyleSheet("""
+            QLabel {
+                background-color: #E3F2FD;
+                padding: 8px;
+                border-radius: 4px;
+                border-left: 3px solid #2196F3;
+                font-size: 10px;
+                color: #1565C0;
+            }
+        """)
+        adjustment_layout.addWidget(self.preview_label)
+
+        return self.adjustment_group
+
+    def _add_slider_controls(self, layout):
+        """Agregar controles del slider al layout."""
+        # Label de rango
         self.slider_range_label = QLabel("")
         self.slider_range_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.slider_range_label.setStyleSheet("font-size: 9px; color: #888;")
-        adjustment_layout.addWidget(self.slider_range_label)
-        
+        layout.addWidget(self.slider_range_label)
+
+        # Slider
         self.intensity_slider = QSlider(Qt.Orientation.Horizontal)
         self.intensity_slider.setMinimum(-10)
         self.intensity_slider.setMaximum(10)
@@ -169,87 +257,76 @@ class ClimateSimulationDialog(QDialog):
                 border-radius: 9px;
             }
         """)
-        adjustment_layout.addWidget(self.intensity_slider)
-        
+        layout.addWidget(self.intensity_slider)
+
+        # Label de valor
         self.slider_value_label = QLabel("0 días")
         self.slider_value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.slider_value_label.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
         self.slider_value_label.setStyleSheet("color: #2196F3; padding: 3px;")
-        adjustment_layout.addWidget(self.slider_value_label)
-        
-        # Vista previa compacta
-        self.preview_label = QLabel("")
-        self.preview_label.setWordWrap(True)
-        self.preview_label.setStyleSheet("""
-            QLabel {
-                background-color: #E3F2FD;
-                padding: 8px;
-                border-radius: 4px;
-                border-left: 3px solid #2196F3;
-                font-size: 10px;
-                color: #1565C0;
-            }
-        """)
-        adjustment_layout.addWidget(self.preview_label)
-        
-        main_layout.addWidget(self.adjustment_group)
-        
-        # Grupo: Alcance temporal (compacto)
+        layout.addWidget(self.slider_value_label)
+
+    def _create_alcance_group(self):
+        """Crear grupo de alcance temporal."""
         alcance_group = QGroupBox("Alcance Temporal")
         alcance_group.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+
         alcance_layout = QVBoxLayout(alcance_group)
         alcance_layout.setContentsMargins(8, 12, 8, 8)
         alcance_layout.setSpacing(6)
-        
+
+        # Descripción
         alcance_desc = QLabel("¿A cuántos meses?")
         alcance_desc.setStyleSheet("color: #666; font-size: 9px; padding: 2px;")
         alcance_layout.addWidget(alcance_desc)
-        
+
+        # Botones de radio
         self.alcance_group = QButtonGroup(self)
         alcance_buttons_layout = QHBoxLayout()
         alcance_buttons_layout.setSpacing(8)
-        
+
         self.alcance_1 = QRadioButton("1 mes")
         self.alcance_3 = QRadioButton("3 meses")
         self.alcance_6 = QRadioButton("6 meses")
-        
+
         self.alcance_3.setChecked(True)
-        
+
         self.alcance_group.addButton(self.alcance_1, 1)
         self.alcance_group.addButton(self.alcance_3, 3)
         self.alcance_group.addButton(self.alcance_6, 6)
-        
+
+        radio_style = """
+            QRadioButton {
+                font-size: 10px;
+                spacing: 6px;
+            }
+            QRadioButton::indicator {
+                width: 14px;
+                height: 14px;
+            }
+        """
+
         for btn in [self.alcance_1, self.alcance_3, self.alcance_6]:
-            btn.setStyleSheet("""
-                QRadioButton {
-                    font-size: 10px;
-                    spacing: 6px;
-                }
-                QRadioButton::indicator {
-                    width: 14px;
-                    height: 14px;
-                }
-            """)
+            btn.setStyleSheet(radio_style)
             alcance_buttons_layout.addWidget(btn)
-        
+
         alcance_layout.addLayout(alcance_buttons_layout)
-        main_layout.addWidget(alcance_group)
-        
-        # Asignar contenido al scroll
-        scroll.setWidget(scroll_content)
-        dialog_layout.addWidget(scroll)
-        
-        # Separador
+        return alcance_group
+
+    def _create_separator(self):
+        """Crear separador horizontal."""
         separator = QFrame()
         separator.setFrameShape(QFrame.Shape.HLine)
         separator.setStyleSheet("background-color: #ddd;")
-        dialog_layout.addWidget(separator)
-        
-        # Botones de acción (fijos en la parte inferior)
+        return separator
+
+    def _create_action_buttons(self):
+        """Crear botones de acción del diálogo."""
         buttons_layout = QHBoxLayout()
         buttons_layout.setSpacing(10)
         buttons_layout.setContentsMargins(16, 12, 16, 12)
-        
+
+        # Botón "Sin Simulación"
         self.no_simulation_button = QPushButton("Sin Simulación")
         self.no_simulation_button.setMinimumHeight(38)
         self.no_simulation_button.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
@@ -265,18 +342,19 @@ class ClimateSimulationDialog(QDialog):
             }
         """)
         buttons_layout.addWidget(self.no_simulation_button)
-        
-        button_text = "Validar con Simulación" if self.mode == 'validation' else "Simular Predicción"
+
+        # Botón de simulación
+        button_text = "Validar con Simulación" if self.mode == "validation" else "Simular Predicción"
         self.simulate_button = QPushButton(button_text)
         self.simulate_button.setMinimumHeight(38)
         self.simulate_button.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
         self.simulate_button.setEnabled(False)
         self.simulate_button.clicked.connect(self.on_simulate)
-        
+
         # Color según modo
-        button_color = "#FF6F00" if self.mode == 'validation' else "#4CAF50"
-        button_hover = "#F57C00" if self.mode == 'validation' else "#45a049"
-        
+        button_color = "#FF6F00" if self.mode == "validation" else "#4CAF50"
+        button_hover = "#F57C00" if self.mode == "validation" else "#45a049"
+
         self.simulate_button.setStyleSheet(f"""
             QPushButton {{
                 background-color: {button_color};
@@ -293,40 +371,38 @@ class ClimateSimulationDialog(QDialog):
             }}
         """)
         buttons_layout.addWidget(self.simulate_button)
-        
-        dialog_layout.addLayout(buttons_layout)
-        
-        self.apply_dialog_styles()
-    
+
+        return buttons_layout
+
     def create_scenario_group(self, parent_layout):
-        """Crear grupo de selección de escenarios"""
+        """Crear grupo de selección de escenarios."""
         scenario_group = QGroupBox("Escenario Climático")
         scenario_group.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
         scenario_layout = QVBoxLayout(scenario_group)
         scenario_layout.setContentsMargins(8, 12, 8, 8)
         scenario_layout.setSpacing(6)
-        
+
         self.scenario_buttons = {}
         self.scenario_group = QButtonGroup(self)
-        
+
         scenarios = ClimateSimulationService.SCENARIOS
-        
+
         for idx, (key, scenario) in enumerate(scenarios.items()):
             btn = QPushButton(f"{scenario['icon']} {scenario['name']}")
             btn.setMinimumHeight(40)
             btn.setCheckable(True)
             btn.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
-            btn.clicked.connect(lambda checked, k=key: self.on_scenario_selected(k))
-            
+            btn.clicked.connect(lambda _checked, k=key: self.on_scenario_selected(k))
+
             colors = {
-                'soleado': '#FF9800',
-                'lluvioso': '#2196F3',
-                'tormentoso': '#9C27B0',
-                'ola_calor': '#F44336'
+                "soleado": "#FF9800",
+                "lluvioso": "#2196F3",
+                "tormentoso": "#9C27B0",
+                "ola_calor": "#F44336",
             }
-            
-            color = colors.get(key, '#757575')
-            
+
+            color = colors.get(key, "#757575")
+
             btn.setStyleSheet(f"""
                 QPushButton {{
                     background-color: white;
@@ -346,100 +422,117 @@ class ClimateSimulationDialog(QDialog):
                     border-color: {color};
                 }}
             """)
-            
+
             scenario_layout.addWidget(btn)
             self.scenario_buttons[key] = btn
             self.scenario_group.addButton(btn, idx)
-            
+
             # Descripción compacta
             desc = QLabel(f"   {scenario['description']}")
             desc.setStyleSheet("color: #888; font-size: 9px; font-style: italic; padding-left: 16px;")
             scenario_layout.addWidget(desc)
-        
+
         parent_layout.addWidget(scenario_group)
-    
+
     def calculate_simulation_data(self):
-        """Calcular datos necesarios para la simulación"""
+        """Calcular datos necesarios para la simulación."""
         try:
             self.percentiles = self.simulation_service.calculate_percentiles(
-                self.climate_data, self.regional_code
+                self.climate_data, self.regional_code,
             )
-            
+
             self.dias_base = self.simulation_service.calculate_base_days(
-                self.climate_data, self.mes_prediccion, self.regional_code
+                self.climate_data, self.mes_prediccion, self.regional_code,
             )
-            
+
             self.slider_ranges = self.simulation_service.calculate_slider_ranges(
-                self.climate_data, self.mes_prediccion, 'lluvioso', self.regional_code
+                self.climate_data, self.mes_prediccion, "lluvioso", self.regional_code,
             )
-            
+
             self.update_historical_info()
-            
-        except Exception as e:
-            self.historical_label.setText(f"Error: {str(e)}")
+
+        except AttributeError as e:
+            error_msg = f"Error: Servicio no inicializado - {e!s}"
+            self.historical_label.setText(error_msg)
             print(f"Error en calculate_simulation_data: {e}")
-    
+        except (KeyError, ValueError) as e:
+            error_msg = f"Error: Datos climáticos inválidos - {e!s}"
+            self.historical_label.setText(error_msg)
+            print(f"Error en calculate_simulation_data: {e}")
+        except TypeError as e:
+            error_msg = f"Error: Parámetros incorrectos - {e!s}"
+            self.historical_label.setText(error_msg)
+            print(f"Error en calculate_simulation_data: {e}")
+
     def update_historical_info(self):
-        """Actualizar información histórica del mes"""
+        """Actualizar información histórica del mes."""
         try:
-            meses_nombres = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun',
-                           'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic']
-            
+            meses_nombres = ["Ene", "Feb", "Mar", "Abr", "May", "Jun",
+                        "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"]
+
             mes_nombre = meses_nombres[self.mes_prediccion - 1]
-            
+
             info = f"<b>Mes:</b> {mes_nombre} | "
             info += f"<b>☀</b> {self.dias_base['soleado']}d | "
             info += f"<b>🌧</b> {self.dias_base['lluvioso']}d | "
             info += f"<b>⛈</b> {self.dias_base['tormentoso']}d"
-            
+
             self.historical_label.setText(info)
-            
-        except Exception as e:
-            self.historical_label.setText(f"Error: {str(e)}")
-    
+
+        except IndexError as e:
+            self.historical_label.setText(f"Error: Mes inválido - {e!s}")
+        except KeyError as e:
+            self.historical_label.setText(f"Error: Tipo de clima no encontrado - {e!s}")
+        except (AttributeError, TypeError) as e:
+            self.historical_label.setText(f"Error: Datos no disponibles - {e!s}")
+
     def on_scenario_selected(self, escenario_key):
-        """Callback cuando se selecciona un escenario"""
+        """Callback cuando se selecciona un escenario."""
         try:
             self.escenario_seleccionado = escenario_key
-            
+
             self.adjustment_group.setEnabled(True)
             self.simulate_button.setEnabled(True)
-            
+
             scenario_to_climate = {
-                'soleado': 'soleado',
-                'lluvioso': 'lluvioso',
-                'tormentoso': 'tormentoso',
-                'ola_calor': 'soleado'
+                "soleado": "soleado",
+                "lluvioso": "lluvioso",
+                "tormentoso": "tormentoso",
+                "ola_calor": "soleado",
             }
-            
-            climate_type = scenario_to_climate.get(escenario_key, 'lluvioso')
-            
+
+            climate_type = scenario_to_climate.get(escenario_key, "lluvioso")
+
             if climate_type in self.slider_ranges:
                 min_dias, max_dias, base_dias = self.slider_ranges[climate_type]
-                
+
                 min_adjustment = min_dias - base_dias
                 max_adjustment = max_dias - base_dias
-                
+
                 self.intensity_slider.setMinimum(min_adjustment)
                 self.intensity_slider.setMaximum(max_adjustment)
                 self.intensity_slider.setValue(0)
-                
+
                 self.slider_range_label.setText(
-                    f"Rango: {min_dias}-{max_dias}d (base: {base_dias}d)"
+                    f"Rango: {min_dias}-{max_dias}d (base: {base_dias}d)",
                 )
-            
+
             scenario_info = ClimateSimulationService.SCENARIOS[escenario_key]
             self.adjustment_label.setText(f"Ajustar: {scenario_info['name']}")
-            
+
             self.update_preview()
-            
-        except Exception as e:
-            QMessageBox.warning(self, "Error", f"Error: {str(e)}")
-    
+
+        except KeyError as e:
+            QMessageBox.warning(self, "Error", f"Error: Escenario no encontrado - {e!s}")
+        except (ValueError, TypeError) as e:
+            QMessageBox.warning(self, "Error", f"Error en los valores del rango - {e!s}")
+        except AttributeError as e:
+            QMessageBox.warning(self, "Error", f"Error: Componente no inicializado - {e!s}")
+
     def on_slider_changed(self, value):
-        """Callback cuando cambia el slider"""
+        """Callback cuando cambia el slider."""
         self.slider_adjustment = value
-        
+
         if value > 0:
             self.slider_value_label.setText(f"+{value} días")
             self.slider_value_label.setStyleSheet("color: #FF5722; padding: 3px; font-weight: bold;")
@@ -449,52 +542,52 @@ class ClimateSimulationDialog(QDialog):
         else:
             self.slider_value_label.setText("0 días")
             self.slider_value_label.setStyleSheet("color: #757575; padding: 3px; font-weight: bold;")
-        
+
         self.update_preview()
-    
+
     def update_preview(self):
-        """Actualizar vista previa de la simulación"""
+        """Actualizar vista previa de la simulación."""
         try:
             if not self.escenario_seleccionado:
                 return
-            
+
             scenario_to_climate = {
-                'soleado': 'soleado',
-                'lluvioso': 'lluvioso',
-                'tormentoso': 'tormentoso',
-                'ola_calor': 'soleado'
+                "soleado": "soleado",
+                "lluvioso": "lluvioso",
+                "tormentoso": "tormentoso",
+                "ola_calor": "soleado",
             }
-            
-            climate_type = scenario_to_climate.get(self.escenario_seleccionado, 'lluvioso')
+
+            climate_type = scenario_to_climate.get(self.escenario_seleccionado, "lluvioso")
             dias_base = self.dias_base[climate_type]
             dias_simulados = dias_base + self.slider_adjustment
-            
+
             alcance = self.alcance_group.checkedId()
-            
+
             summary = self.simulation_service.get_simulation_summary(
                 self.escenario_seleccionado,
                 self.slider_adjustment,
                 dias_base,
                 alcance,
                 self.percentiles,
-                self.regional_code
+                self.regional_code,
             )
-            
+
             scenario_info = ClimateSimulationService.SCENARIOS[self.escenario_seleccionado]
-            
+
             preview = f"<b>{scenario_info['icon']} {scenario_info['name']}</b> | "
             preview += f"{dias_simulados}d ({climate_type}) | {alcance} meses<br>"
-            
+
             var_names = {
-                'temp_max': 'Temp máx',
-                'humedad_avg': 'Humedad',
-                'precip_total': 'Precip'
+                "temp_max": "Temp máx",
+                "humedad_avg": "Humedad",
+                "precip_total": "Precip",
             }
-            
+
             changes = []
-            for var, change_pct in summary['percentage_changes'].items():
+            for var, change_pct in summary["percentage_changes"].items():
                 var_name = var_names.get(var, var)
-                
+
                 if abs(change_pct) < 1:
                     arrow = "→"
                     color = ""
@@ -504,82 +597,88 @@ class ClimateSimulationDialog(QDialog):
                 else:
                     arrow = "↓"
                     color = " style='color: #2196F3;'"
-                
+
                 changes.append(f"{var_name}: <b{color}>{arrow}{change_pct:+.1f}%</b>")
-            
+
             preview += " | ".join(changes)
-            
+
             # Advertencia según modo
-            if self.mode == 'validation':
+            if self.mode == "validation":
                 preview += "<br><b style='color: #F57C00;'>⚠ Validación: Evalúa sensibilidad del modelo</b>"
-            
+
             self.preview_label.setText(preview)
-            
-        except Exception as e:
-            self.preview_label.setText(f"Error: {str(e)}")
-    
+
+        except KeyError as e:
+            self.preview_label.setText(f"Error: Clave no encontrada - {e!s}")
+        except (AttributeError, TypeError) as e:
+            self.preview_label.setText(f"Error: Datos inválidos - {e!s}")
+        except ValueError as e:
+            self.preview_label.setText(f"Error: Valor incorrecto - {e!s}")
+
     def on_simulate(self):
-        """Callback cuando se acepta la simulación"""
+        """Callback cuando se acepta la simulación."""
         try:
             if not self.escenario_seleccionado:
                 QMessageBox.warning(self, "Advertencia", "Seleccione un escenario")
                 return
-            
+
             scenario_to_climate = {
-                'soleado': 'soleado',
-                'lluvioso': 'lluvioso',
-                'tormentoso': 'tormentoso',
-                'ola_calor': 'soleado'
+                "soleado": "soleado",
+                "lluvioso": "lluvioso",
+                "tormentoso": "tormentoso",
+                "ola_calor": "soleado",
             }
-            
-            climate_type = scenario_to_climate.get(self.escenario_seleccionado, 'lluvioso')
+
+            climate_type = scenario_to_climate.get(self.escenario_seleccionado, "lluvioso")
             dias_base = self.dias_base[climate_type]
-            
+
             alcance = self.alcance_group.checkedId()
-            
+
             is_valid, error_msg = self.simulation_service.validate_simulation_params(
                 self.escenario_seleccionado,
                 self.slider_adjustment,
                 dias_base,
-                alcance
+                alcance,
             )
-            
+
             if not is_valid:
                 QMessageBox.critical(self, "Error", error_msg)
                 return
-            
+
             config = {
-                'enabled': True,
-                'escenario': self.escenario_seleccionado,
-                'slider_adjustment': self.slider_adjustment,
-                'dias_base': dias_base,
-                'alcance_meses': alcance,
-                'percentiles': self.percentiles,
-                'regional_code': self.regional_code,
-                'summary': self.simulation_service.get_simulation_summary(
+                "enabled": True,
+                "escenario": self.escenario_seleccionado,
+                "slider_adjustment": self.slider_adjustment,
+                "dias_base": dias_base,
+                "alcance_meses": alcance,
+                "percentiles": self.percentiles,
+                "regional_code": self.regional_code,
+                "summary": self.simulation_service.get_simulation_summary(
                     self.escenario_seleccionado,
                     self.slider_adjustment,
                     dias_base,
                     alcance,
                     self.percentiles,
-                    self.regional_code
-                )
+                    self.regional_code,
+                ),
             }
-            
+
             self.simulation_accepted.emit(config)
             self.accept()
-            
-        except Exception as e:
-            QMessageBox.critical(self, "Error", f"Error: {str(e)}")
-    
+
+        except (KeyError, AttributeError, ValueError, TypeError) as e:
+            QMessageBox.critical(self, "Error", f"Error en la configuración: {e!s}")
+        except RuntimeError as e:
+            QMessageBox.critical(self, "Error", f"Error de ejecución: {e!s}")
+
     def on_no_simulation(self):
-        """Callback cuando se cancela la simulación"""
-        config = {'enabled': False}
+        """Callback cuando se cancela la simulación."""
+        config = {"enabled": False}
         self.simulation_accepted.emit(config)
         self.accept()
-    
+
     def apply_dialog_styles(self):
-        """Aplicar estilos globales al diálogo"""
+        """Aplicar estilos globales al diálogo."""
         self.setStyleSheet("""
             QDialog {
                 background-color: #f5f5f5;
