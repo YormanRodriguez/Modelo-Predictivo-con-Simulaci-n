@@ -336,7 +336,7 @@ class AppController(QObject):
                 'metrics': result.get('metrics')
             }
             
-            self.view.show_progress(True)
+            self.view.show_progress(visible=True)
             self.view.update_progress(30, "Preparando datos para exportación...")
             self.view.log_message("Generando archivo Excel con formato profesional...")
             
@@ -352,7 +352,7 @@ class AppController(QObject):
             )
             
             self.view.update_progress(100, "Exportación completada")
-            self.view.show_progress(False)
+            self.view.show_progress(visible=False)
             
             if saved_path and os.path.exists(saved_path):
                 file_size = os.path.getsize(saved_path) / 1024  # KB
@@ -420,7 +420,7 @@ class AppController(QObject):
                 self.show_error("No se pudo exportar el archivo Excel")
             
         except Exception as e:
-            self.view.show_progress(False)
+            self.view.show_progress(visible=False)
             error_msg = str(e)
             self.view.log_error("=" * 60)
             self.view.log_error("ERROR EN EXPORTACIÓN")
@@ -483,7 +483,7 @@ class AppController(QObject):
         """Ejecutar la predicción con o sin simulación"""
         try:
             self.view.set_buttons_enabled(False)
-            self.view.show_progress(True)
+            self.view.show_progress(visible=True)
             self.view.update_status("Generando predicción...")
 
             df_prepared = self.model.get_excel_data_for_analysis()
@@ -575,13 +575,13 @@ class AppController(QObject):
             self.optimization_thread.finished.connect(self.on_optimization_finished)
             self.optimization_thread.error_occurred.connect(self.on_optimization_error)
             
-            self.view.show_progress(True)
+            self.view.show_progress(visible=True)
             self.optimization_thread.start()
             
         except Exception as e:
             self.view.log_error(f"Error iniciando optimización: {str(e)}")
             self.view.set_buttons_enabled(True)
-            self.view.show_progress(False)
+            self.view.show_progress(visible=False)
     
     def run_validation(self):
         """Ejecutar validación del modelo CON VARIABLES EXÓGENAS, SIMULACIÓN E INTERVALOS"""
@@ -693,13 +693,13 @@ class AppController(QObject):
             self.validation_thread.finished.connect(self.on_validation_finished)
             self.validation_thread.error_occurred.connect(self.on_validation_error)
             
-            self.view.show_progress(True)
+            self.view.show_progress(visible=True)
             self.validation_thread.start()
             
         except Exception as e:
             self.view.log_error(f"Error ejecutando validación: {str(e)}")
             self.view.set_buttons_enabled(True)
-            self.view.show_progress(False)
+            self.view.show_progress(visible=False)
     
     def generate_validation_report(self):
         """Generar informe PDF completo de validación temporal"""
@@ -758,13 +758,13 @@ class AppController(QObject):
             self.rolling_validation_thread.finished.connect(self.on_report_validation_finished)
             self.rolling_validation_thread.error_occurred.connect(self.on_report_validation_error)
             
-            self.view.show_progress(True)
+            self.view.show_progress(visible=True)
             self.rolling_validation_thread.start()
             
         except Exception as e:
             self.view.log_error(f"Error iniciando generación de informe: {str(e)}")
             self.view.set_buttons_enabled(True)
-            self.view.show_progress(False)
+            self.view.show_progress(visible=False)
             
     def on_prediction_finished(self, result):
         """Callback cuando termina la predicción - ACTUALIZADO CON EXPORTACIÓN"""
@@ -775,7 +775,7 @@ class AppController(QObject):
             # Restaurar UI
             try:
                 self.view.set_buttons_enabled(True)
-                self.view.show_progress(False)
+                self.view.show_progress(visible=False)
                 self.view.update_status("Predicción completada")
             except Exception:
                 pass
@@ -789,7 +789,7 @@ class AppController(QObject):
             preds = result.get('predictions')
             
             if preds:
-                self.view.enable_export_button(True)
+                self.view.enable_export_button(enabled=True)
                 self.view.log_message(f"✓ Botón de exportación habilitado ({len(preds)} predicciones disponibles)")
                 
                 self.view.log_message(f"Se generaron {len(preds)} predicciones")
@@ -852,7 +852,7 @@ class AppController(QObject):
     def on_optimization_finished(self, result):
         """Callback cuando termina la optimización"""
         self.view.set_buttons_enabled(True)
-        self.view.show_progress(False)
+        self.view.show_progress(visible=False)
         self.view.update_status("Optimización completada")
         self.view.log_success("Optimización de parámetros completada")
         
@@ -918,7 +918,7 @@ class AppController(QObject):
     def on_validation_finished(self, result):
         """Callback cuando termina la validacion"""
         self.view.set_buttons_enabled(True)
-        self.view.show_progress(False)
+        self.view.show_progress(visible=False)
         self.view.update_status("Validacion completada")
         
         # NUEVO: Detectar si hubo simulación
@@ -1066,7 +1066,7 @@ class AppController(QObject):
             
             if not filepath:
                 self.view.set_buttons_enabled(True)
-                self.view.show_progress(False)
+                self.view.show_progress(visible=False)
                 self.view.log_message("Generación de informe cancelada por el usuario")
                 return
             
@@ -1086,7 +1086,7 @@ class AppController(QObject):
             )
             
             self.view.set_buttons_enabled(True)
-            self.view.show_progress(False)
+            self.view.show_progress(visible=False)
             self.view.update_status("Informe de validación generado")
             
             # Log resumen rápido
@@ -1131,7 +1131,7 @@ class AppController(QObject):
             
         except Exception as e:
             self.view.set_buttons_enabled(True)
-            self.view.show_progress(False)
+            self.view.show_progress(visible=False)
             self.view.log_error(f"Error generando informe PDF: {str(e)}")
             import traceback
             self.view.log_error(traceback.format_exc())
@@ -1140,14 +1140,14 @@ class AppController(QObject):
     def on_report_validation_error(self, error_msg):
         """Callback cuando hay error en generación de informe"""
         self.view.set_buttons_enabled(True)
-        self.view.show_progress(False)
+        self.view.show_progress(visible=False)
         self.view.update_status("Error en generación de informe")
         self.view.log_error(f"Error: {error_msg}")
         self.show_error(f"Error durante la generación del informe: {error_msg}")
     
     def on_prediction_error(self, error_msg):
         self.view.set_buttons_enabled(True)
-        self.view.show_progress(False)
+        self.view.show_progress(visible=False)
         self.view.update_status("Error en predicción")
         self.view.log_error(f"Error en predicción: {error_msg}")
         self.show_error(f"Error durante la predicción: {error_msg}")
@@ -1155,7 +1155,7 @@ class AppController(QObject):
     def on_optimization_error(self, error_msg):
         """Callback cuando hay error en optimización"""
         self.view.set_buttons_enabled(True)
-        self.view.show_progress(False)
+        self.view.show_progress(visible=False)
         self.view.update_status("Error en optimización")
         self.view.log_error(f"Error en optimización: {error_msg}")
         self.show_error(f"Error durante la optimización: {error_msg}")
@@ -1163,7 +1163,7 @@ class AppController(QObject):
     def on_validation_error(self, error_msg):
         """Callback cuando hay error en validación"""
         self.view.set_buttons_enabled(True)
-        self.view.show_progress(False)
+        self.view.show_progress(visible=False)
         self.view.update_status("Error en validacion")
         self.view.log_error(f"Error en validacion: {error_msg}")
         self.show_error(f"Error durante la validacion: {error_msg}")
