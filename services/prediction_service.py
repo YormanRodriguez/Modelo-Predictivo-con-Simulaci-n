@@ -7,6 +7,7 @@ import os
 import tempfile
 import warnings
 from datetime import datetime
+from typing import Optional, Dict, Any
 
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
@@ -27,7 +28,7 @@ class PredictionService:
 
     # Mapeo de regionales a sus transformaciones optimas
     REGIONAL_TRANSFORMATIONS = {
-        "SAIDI_O": "original",
+        "SAIDI_O": "original", 
         "SAIDI_C": "original",
         "SAIDI_A": "original",
         "SAIDI_P": "boxcox",
@@ -97,22 +98,129 @@ class PredictionService:
         self.uncertainty_service = UncertaintyService()
         self.export_service = ExportService()
 
+    def load_optimized_config(self, regional_code: str) -> Optional[Dict[str, Any]]:
+        """
+        Cargar configuración optimizada para una regional
+        
+        Lee el archivo JSON generado por OptimizationService y retorna
+        los mejores parámetros encontrados previamente.
+        
+        Args:
+            regional_code: Código de la regional (ej: 'SAIDI_O')
+        
+        Returns:
+            Dict con configuración óptima o None si no existe
+        """
+        try:
+            import json
+            from pathlib import Path
+            
+            # Ubicación del archivo de configuración
+            config_file = Path(__file__).parent.parent / 'config' / 'optimized_models.json'
+            
+            if not config_file.exists():
+                print("[LOAD_CONFIG] No existe archivo de configuraciones optimizadas")
+                return None
+            
+            # Cargar configuraciones
+            with open(config_file, 'r', encoding='utf-8') as f:
+                configs = json.load(f)
+            
+            # Buscar configuración de la regional
+            if regional_code not in configs:
+                print(f"[LOAD_CONFIG] No hay configuración optimizada para {regional_code}")
+                return None
+            
+            config = configs[regional_code]
+            
+            print(f"[LOAD_CONFIG] ✓ Configuración cargada para {regional_code}")
+            print(f"[LOAD_CONFIG]   Transformación: {config['transformation']}")
+            print(f"[LOAD_CONFIG]   Order: {config['order']}")
+            print(f"[LOAD_CONFIG]   Seasonal: {config['seasonal_order']}")
+            print(f"[LOAD_CONFIG]   Precisión: {config['precision_final']:.1f}%")
+            print(f"[LOAD_CONFIG]   Optimizado: {config['optimization_date']}")
+            
+            return config
+            
+        except Exception as e:
+            print(f"[LOAD_CONFIG] ERROR cargando configuración: {e}")
+            return None
+
+    def _get_transformation_for_regional(self, regional_code):
+        """
+        MÉTODO ACTUALIZADO: Obtener transformación para la regional
+        
+        Primero intenta cargar de configuración optimizada,
+        si no existe usa los defaults hardcodeados.
+        """
+        if not regional_code:
+            return "original"
+        
+        # PRIORIDAD 1: Intentar cargar configuración optimizada
+        optimized_config = self.load_optimized_config(regional_code)
+        
+        if optimized_config:
+            transformation = optimized_config.get('transformation', 'original')
+            print(f"[TRANSFORMATION] Usando transformación OPTIMIZADA: {transformation}")
+            return transformation
+        
+        # PRIORIDAD 2: Usar defaults hardcodeados
+        if regional_code in self.REGIONAL_TRANSFORMATIONS:
+            transformation = self.REGIONAL_TRANSFORMATIONS[regional_code]
+            print(f"[TRANSFORMATION] Usando transformación DEFAULT: {transformation}")
+            return transformation
+        
+        # FALLBACK: Original
+        print("[TRANSFORMATION] Usando transformación FALLBACK: original")
+        return "original"
+
     def _get_orders_for_regional(self, regional_code):
         """
-        Obtener ordenes SARIMAX especificos para una regional
-
+        MÉTODO ACTUALIZADO: Obtener órdenes SARIMAX específicos para una regional
+        
+        Prioriza configuración optimizada sobre defaults hardcodeados.
+        
         Args:
-            regional_code: Codigo de la regional (ej: 'SAIDI_O')
-
+            regional_code: Código de la regional (ej: 'SAIDI_O')
+        
         Returns:
-            tuple: (order, seasonal_order) - Ordenes ARIMA y estacionales
+            tuple: (order, seasonal_order) - Órdenes ARIMA y estacionales
         """
-        if regional_code and regional_code in self.REGIONAL_ORDERS:
-            config = self.REGIONAL_ORDERS[regional_code]
-            return config["order"], config["seasonal_order"]
-        else:
-            # Fallback a valores por defecto si no hay configuracion especifica
+        if not regional_code:
             return self.default_order, self.default_seasonal_order
+        
+        # PRIORIDAD 1: Intentar cargar configuración optimizada
+        optimized_config = self.load_optimized_config(regional_code)
+        
+        if optimized_config:
+            order = tuple(optimized_config['order'])
+            seasonal_order = tuple(optimized_config['seasonal_order'])
+            
+            print(f"[ORDERS] Usando parámetros OPTIMIZADOS para {regional_code}")
+            print(f"[ORDERS]   Order: {order}")
+            print(f"[ORDERS]   Seasonal: {seasonal_order}")
+            print(f"[ORDERS]   Precisión documentada: {optimized_config['precision_final']:.1f}%")
+            
+            return order, seasonal_order
+        
+        # PRIORIDAD 2: Usar configuración hardcodeada
+        if regional_code in self.REGIONAL_ORDERS:
+            config = self.REGIONAL_ORDERS[regional_code]
+            order = config["order"]
+            seasonal_order = config["seasonal_order"]
+            
+            print(f"[ORDERS] Usando parámetros DEFAULT para {regional_code}")
+            print(f"[ORDERS]   Order: {order}")
+            print(f"[ORDERS]   Seasonal: {seasonal_order}")
+            
+            return order, seasonal_order
+        
+        # FALLBACK: Usar valores por defecto genéricos
+        print(f"[ORDERS] Usando parámetros FALLBACK para {regional_code}")
+        print(f"[ORDERS]   Order: {self.default_order}")
+        print(f"[ORDERS]   Seasonal: {self.default_seasonal_order}")
+        
+        return self.default_order, self.default_seasonal_order
 
     def export_predictions(
         self,
@@ -180,16 +288,13 @@ class PredictionService:
         """
         Ejecutar prediccion SAIDI con variables exogenas climaticas, simulacion e intervalos de confianza
         
-        CORREGIDO: Alineado con OptimizationService para obtener métricas consistentes
-        - Variables exógenas en escala ORIGINAL (sin doble escalado)
-        - Validación estricta de cobertura temporal
-        - Train/test split adaptativo (20-30%)
+        ACTUALIZADO: Carga automáticamente parámetros optimizados si existen
         
         Args:
             file_path: Ruta del archivo SAIDI Excel
             df_prepared: DataFrame de SAIDI ya preparado
-            order: Orden ARIMA (opcional - si None usa el de la regional)
-            seasonal_order: Orden estacional ARIMA (opcional - si None usa el de la regional)
+            order: Orden ARIMA (opcional - si None usa el optimizado/default de la regional)
+            seasonal_order: Orden estacional ARIMA (opcional - si None usa el optimizado/default)
             regional_code: Codigo de la regional
             climate_data: DataFrame con datos climaticos mensuales
             simulation_config: Configuracion de simulacion climatica (opcional)
@@ -197,6 +302,25 @@ class PredictionService:
             log_callback: Funcion para loguear mensajes
         """
         try:
+            # ========== NUEVO: CARGAR CONFIGURACIÓN OPTIMIZADA ==========
+            optimized_config = None
+            
+            if regional_code:
+                optimized_config = self.load_optimized_config(regional_code)
+                
+                if optimized_config and log_callback:
+                    log_callback("=" * 80)
+                    log_callback("⚙️  USANDO CONFIGURACIÓN OPTIMIZADA")
+                    log_callback("=" * 80)
+                    log_callback(f"Regional: {regional_code}")
+                    log_callback(f"Transformación: {optimized_config['transformation'].upper()}")
+                    log_callback(f"Order: {optimized_config['order']}")
+                    log_callback(f"Seasonal: {optimized_config['seasonal_order']}")
+                    log_callback(f"Precisión documentada: {optimized_config['precision_final']:.1f}%")
+                    log_callback(f"Optimizado en: {optimized_config['optimization_date']}")
+                    log_callback("=" * 80)
+            
+            # Obtener parámetros (prioriza optimizados > hardcoded > default)
             if order is None or seasonal_order is None:
                 order_regional, seasonal_regional = self._get_orders_for_regional(
                     regional_code
@@ -207,7 +331,7 @@ class PredictionService:
                 if seasonal_order is None:
                     seasonal_order = seasonal_regional
 
-                if log_callback and regional_code:
+                if log_callback and regional_code and not optimized_config:
                     regional_nombre = {
                         "SAIDI_O": "Ocaña",
                         "SAIDI_C": "Cúcuta",
@@ -218,12 +342,12 @@ class PredictionService:
                     }.get(regional_code, regional_code)
 
                     log_callback(
-                        f"✓ Usando parametros optimizados para regional {regional_nombre}"
+                        f"✓ Usando parametros default para regional {regional_nombre}"
                     )
                     log_callback(f"   Order: {order}")
                     log_callback(f"   Seasonal Order: {seasonal_order}")
 
-            # Determinar transformacion segun regional
+            # Determinar transformacion segun regional (prioriza optimizada)
             transformation = self._get_transformation_for_regional(regional_code)
 
             if log_callback:
@@ -1452,12 +1576,6 @@ class PredictionService:
             if log_callback:
                 log_callback(f"ERROR durante diagnostico: {e}")
             return False
-
-    def _get_transformation_for_regional(self, regional_code):
-        """Obtener transformacion para la regional"""
-        if regional_code and regional_code in self.REGIONAL_TRANSFORMATIONS:
-            return self.REGIONAL_TRANSFORMATIONS[regional_code]
-        return "original"
 
     def _apply_transformation(self, data, transformation_type):
         """Aplicar transformacion a los datos"""

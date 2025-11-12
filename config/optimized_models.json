@@ -1,0 +1,68 @@
+{
+  "SAIDI_T": {
+    "transformation": "boxcox",
+    "order": [
+      1,
+      0,
+      1
+    ],
+    "seasonal_order": [
+      0,
+      1,
+      0,
+      12
+    ],
+    "precision_final": 69.597164232023,
+    "rmse": 4.975568005998709,
+    "mape": 30.402835767976992,
+    "r2_score": 0.15290021487102856,
+    "with_exogenous": true,
+    "stability_score": 27.838865692809204,
+    "optimization_date": "2025-11-12 11:08:23",
+    "quality": "excellent"
+  },
+  "SAIDI_P": {
+    "transformation": "log",
+    "order": [
+      1,
+      0,
+      0
+    ],
+    "seasonal_order": [
+      1,
+      0,
+      1,
+      12
+    ],
+    "precision_final": 78.85885620672097,
+    "rmse": 0.9347655461225209,
+    "mape": 21.14114379327902,
+    "r2_score": 0.2203771486979299,
+    "with_exogenous": false,
+    "stability_score": 31.54354248268839,
+    "optimization_date": "2025-11-12 11:23:09",
+    "quality": "excellent"
+  },
+  "SAIDI_A": {
+    "transformation": "original",
+    "order": [
+      1,
+      0,
+      0
+    ],
+    "seasonal_order": [
+      1,
+      0,
+      1,
+      12
+    ],
+    "precision_final": 77.6508771321695,
+    "rmse": 0.5170203968648877,
+    "mape": 22.349122867830506,
+    "r2_score": 0.16004547751595521,
+    "with_exogenous": false,
+    "stability_score": 31.0603508528678,
+    "optimization_date": "2025-11-12 11:23:37",
+    "quality": "excellent"
+  }
+}

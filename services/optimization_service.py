@@ -10,6 +10,7 @@ import gc
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing as mp
 from typing import List, Dict, Optional, Tuple, Any
+from datetime import datetime
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -45,8 +46,7 @@ class OptimizationService:
             'precipitation_avg_daily': 'Precipitación promedio diaria', # r=0.438
         },
         
-        'SAIDI_C': {  # Cúcuta -
-            
+        'SAIDI_C': {  # Cúcuta 
             'realfeel_avg': 'Temperatura aparente promedio',        # r=0.573 
             'pressure_rel_avg': 'Presión relativa promedio',        # r=-0.358 (negativa)
             'wind_speed_max': 'Velocidad máxima del viento',        # r=0.356
@@ -108,15 +108,15 @@ class OptimizationService:
         self._debug_models_added = 0
     
     def run_optimization(self, 
-                        file_path: Optional[str] = None,
-                        df_prepared: Optional[pd.DataFrame] = None,
-                        regional_code: Optional[str] = None,
-                        climate_data: Optional[pd.DataFrame] = None,
-                        progress_callback = None,
-                        log_callback = None,
-                        iteration_callback = None,
-                        use_parallel: bool = True,
-                        max_workers: Optional[int] = None) -> Dict[str, Any]:
+                    file_path: Optional[str] = None,
+                    df_prepared: Optional[pd.DataFrame] = None,
+                    regional_code: Optional[str] = None,
+                    climate_data: Optional[pd.DataFrame] = None,
+                    progress_callback = None,
+                    log_callback = None,
+                    iteration_callback = None,
+                    use_parallel: bool = True,
+                    max_workers: Optional[int] = None) -> Dict[str, Any]:
         """
         Ejecutar optimización de parámetros SARIMAX
         
@@ -260,15 +260,33 @@ class OptimizationService:
                     log_callback("Recomendacion: Revisar calidad de datos historicos")
             
             if progress_callback:
+                progress_callback(95, "Guardando configuración óptima...")
+            
+            # ========== NUEVO: GUARDAR MEJOR MODELO ==========
+            best_model = top_models[0] if top_models else None
+            
+            if best_model and regional_code:
+                save_success = self.save_best_model_config(regional_code, best_model)
+                
+                if save_success and log_callback:
+                    log_callback("\n" + "=" * 80)
+                    log_callback("✓ CONFIGURACIÓN ÓPTIMA GUARDADA")
+                    log_callback("=" * 80)
+                    log_callback(f"Los parámetros óptimos de {regional_code} se usarán automáticamente")
+                    log_callback("en futuras predicciones para esta regional.")
+                    log_callback(f"Transformación: {best_model['transformation'].upper()}")
+                    log_callback(f"Order: {best_model['order']}")
+                    log_callback(f"Seasonal: {best_model['seasonal_order']}")
+                    log_callback(f"Precisión: {best_model['precision_final']:.1f}%")
+            
+            if progress_callback:
                 progress_callback(100, "Optimizacion completada")
             
             # Paso 6: Generar resumen final
             if log_callback:
-                self._log_final_summary(log_callback, top_models, exog_info)
+                self._log_final_summary(log_callback, top_models, exog_info, regional_code)
             
             # Preparar resultado
-            best_model = top_models[0] if top_models else None
-            
             result = {
                 'success': True,
                 'top_models': top_models[:20],  # Limitar a top 20
@@ -284,7 +302,8 @@ class OptimizationService:
                 'validation_method': 'aligned_with_prediction',
                 'optimization_method': 'exhaustive_search',
                 'quality_level': quality_level,
-                'quality_counts': quality_counts
+                'quality_counts': quality_counts,
+                'config_saved': best_model is not None and regional_code is not None  # NUEVO
             }
             
             print("[DEBUG_OPT] Optimizacion finalizada exitosamente")
@@ -399,7 +418,7 @@ class OptimizationService:
         P_range = range(0, 6)  # AR estacional
         D_range = range(0, 3)  # Diferenciación estacional
         Q_range = range(0, 6)  # MA estacional
-        s_range = [12]         # Estacionalidad mensual
+        s_range = [12]
         
         # Generar todas las combinaciones
         all_combinations = list(product(
@@ -1900,6 +1919,72 @@ class OptimizationService:
         
         log_callback("=" * 80)
 
+    def save_best_model_config(self, regional_code: str, best_model: Dict[str, Any]) -> bool:
+        """
+        Guardar la configuración del mejor modelo para una regional
+        
+        Crea/actualiza un archivo JSON con los mejores parámetros encontrados
+        para cada regional. Este archivo será leído por PredictionService.
+        
+        Args:
+            regional_code: Código de la regional (ej: 'SAIDI_O')
+            best_model: Dict con información del mejor modelo
+        
+        Returns:
+            bool: True si se guardó correctamente
+        """
+        try:
+            import json
+            from pathlib import Path
+            
+            # Crear directorio de configuración si no existe
+            config_dir = Path(__file__).parent.parent / 'config'
+            config_dir.mkdir(exist_ok=True)
+            
+            config_file = config_dir / 'optimized_models.json'
+            
+            # Cargar configuraciones existentes
+            if config_file.exists():
+                with open(config_file, 'r', encoding='utf-8') as f:
+                    configs = json.load(f)
+            else:
+                configs = {}
+            
+            # Preparar nueva configuración
+            new_config = {
+                'transformation': best_model.get('transformation', 'original'),
+                'order': list(best_model.get('order', (3, 1, 3))),
+                'seasonal_order': list(best_model.get('seasonal_order', (1, 1, 1, 12))),
+                'precision_final': float(best_model.get('precision_final', 0)),
+                'rmse': float(best_model.get('rmse', 0)),
+                'mape': float(best_model.get('mape', 0)),
+                'r2_score': float(best_model.get('r2_score', 0)),
+                'with_exogenous': bool(best_model.get('with_exogenous', False)),
+                'stability_score': float(best_model.get('stability_score', 0)),
+                'optimization_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'quality': best_model.get('quality', 'unknown')
+            }
+            
+            # Actualizar configuración de la regional
+            configs[regional_code] = new_config
+            
+            # Guardar archivo
+            with open(config_file, 'w', encoding='utf-8') as f:
+                json.dump(configs, f, indent=2, ensure_ascii=False)
+            
+            print(f"[SAVE_CONFIG] ✓ Configuración guardada para {regional_code}")
+            print(f"[SAVE_CONFIG]   Archivo: {config_file}")
+            print(f"[SAVE_CONFIG]   Transformación: {new_config['transformation']}")
+            print(f"[SAVE_CONFIG]   Order: {new_config['order']}")
+            print(f"[SAVE_CONFIG]   Seasonal: {new_config['seasonal_order']}")
+            print(f"[SAVE_CONFIG]   Precisión: {new_config['precision_final']:.1f}%")
+            
+            return True
+            
+        except Exception as e:
+            print(f"[SAVE_CONFIG] ERROR guardando configuración: {e}")
+            return False
+
 # FUNCIÓN WORKER PARA PROCESAMIENTO PARALELO
 def _evaluate_model_worker(task: Tuple) -> Optional[Dict[str, Any]]:
     """
@@ -1922,4 +2007,4 @@ def _evaluate_model_worker(task: Tuple) -> Optional[Dict[str, Any]]:
         
     except Exception:
         # No propagar excepciones en workers paralelos
-        return None
+        return None    
