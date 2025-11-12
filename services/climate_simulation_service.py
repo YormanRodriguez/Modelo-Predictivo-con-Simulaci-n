@@ -1,442 +1,650 @@
 # services/climate_simulation_service.py - Servicio de simulación climática para SAIDI
+# VERSIÓN ACTUALIZADA: Simulación adaptativa por regional con categorización dinámica
 
 import numpy as np
 import pandas as pd
 
 
 class ClimateSimulationService:
-    """Servicio para simular escenarios climáticos y modificar variables exógenas"""
+    """
+    Servicio para simular escenarios climáticos adaptativos por regional
+    
+    NUEVA ARQUITECTURA:
+    1. Categoriza variables automáticamente (temperatura, precipitación, presión, viento, UV)
+    2. Aplica escenarios según categoría física de la variable
+    3. Soporta cualquier combinación de variables específicas de cada regional
+    4. Sincronizado con PredictionService para variables exógenas
+    """
 
-    # Definición de escenarios climáticos basados en percentiles
-    SCENARIOS = {
-        "soleado": {
-            "name": "Clima Seco/Soleado",
-            "icon": "☀️",
-            "description": "Días soleados, baja humedad y poca lluvia",
-            "percentiles": {
-                "temp_max": 75,      # Temperatura alta
-                "humedad_avg": 25,   # Humedad baja
-                "precip_total": 10,   # Precipitación muy baja
-            },
+    # ========== CATEGORÍAS DE VARIABLES CLIMÁTICAS ==========
+    VARIABLE_CATEGORIES = {
+        'temperature': {
+            'variables': [
+                'realfeel_min', 'realfeel_max', 'realfeel_avg',
+                'temperature_min', 'temperature_max', 'temperature_avg',
+                'windchill_min', 'windchill_max', 'windchill_avg',
+                'dewpoint_min', 'dewpoint_max', 'dewpoint_avg',
+                'heat_index_min', 'heat_index_max', 'heat_index_avg'
+            ],
+            'scenarios': {
+                'calor_extremo': {'percentile': 90, 'intensity': 1.2},
+                'calor_moderado': {'percentile': 75, 'intensity': 1.1},
+                'normal': {'percentile': 50, 'intensity': 1.0},
+                'frio_moderado': {'percentile': 25, 'intensity': 0.9},
+                'frio_extremo': {'percentile': 10, 'intensity': 0.8},
+            }
         },
-        "lluvioso": {
-            "name": "Clima Lluvioso",
-            "icon": "🌧️",
-            "description": "Lluvias moderadas, humedad alta",
-            "percentiles": {
-                "temp_max": 50,      # Temperatura normal
-                "humedad_avg": 75,   # Humedad alta
-                "precip_total": 75,   # Precipitación alta
-            },
+        
+        'precipitation': {
+            'variables': [
+                'precipitation_total', 'precipitation_max_daily',
+                'precipitation_avg_daily', 'days_with_rain'
+            ],
+            'scenarios': {
+                'sequia': {'percentile': 10, 'intensity': 0.3},
+                'seco': {'percentile': 25, 'intensity': 0.6},
+                'normal': {'percentile': 50, 'intensity': 1.0},
+                'lluvioso': {'percentile': 75, 'intensity': 1.5},
+                'tormenta': {'percentile': 90, 'intensity': 2.0},
+            }
         },
-        "tormentoso": {
-            "name": "Clima Tormentoso",
-            "icon": "⛈️",
-            "description": "Tormentas intensas, lluvia extrema",
-            "percentiles": {
-                "temp_max": 25,      # Temperatura baja
-                "humedad_avg": 90,   # Humedad muy alta
-                "precip_total": 90,   # Precipitación extrema
-            },
+        
+        'pressure': {
+            'variables': [
+                'pressure_rel_avg', 'pressure_rel_min', 'pressure_rel_max',
+                'pressure_abs_avg', 'pressure_abs_min', 'pressure_abs_max'
+            ],
+            'scenarios': {
+                'baja_presion': {'percentile': 25, 'intensity': 0.95},
+                'normal': {'percentile': 50, 'intensity': 1.0},
+                'alta_presion': {'percentile': 75, 'intensity': 1.05},
+            }
         },
-        "ola_calor": {
-            "name": "Ola de Calor",
-            "icon": "🌡️",
-            "description": "Calor extremo, sequía",
-            "percentiles": {
-                "temp_max": 90,      # Temperatura muy alta
-                "humedad_avg": 10,   # Humedad muy baja
-                "precip_total": 10,   # Precipitación muy baja
-            },
+        
+        'wind': {
+            'variables': [
+                'wind_speed_max', 'wind_speed_avg', 'wind_speed_min',
+                'wind_gust_max', 'wind_dir_avg'
+            ],
+            'scenarios': {
+                'calma': {'percentile': 10, 'intensity': 0.5},
+                'brisa': {'percentile': 50, 'intensity': 1.0},
+                'ventoso': {'percentile': 75, 'intensity': 1.3},
+                'vendaval': {'percentile': 90, 'intensity': 1.8},
+            }
+        },
+        
+        'uv': {
+            'variables': [
+                'uv_index_min', 'uv_index_max', 'uv_index_avg'
+            ],
+            'scenarios': {
+                'bajo': {'percentile': 25, 'intensity': 0.7},
+                'moderado': {'percentile': 50, 'intensity': 1.0},
+                'alto': {'percentile': 75, 'intensity': 1.3},
+                'extremo': {'percentile': 90, 'intensity': 1.6},
+            }
         },
     }
 
-    # Variables exógenas por regional (debe coincidir con PredictionService)
-    REGIONAL_EXOG_VARS = {
-        "SAIDI_O": ["temp_max", "humedad_avg", "precip_total"],
-        "SAIDI_C": ["temp_max", "humedad_avg", "precip_total"],
-        "SAIDI_A": ["temp_max", "humedad_avg", "precip_total"],
-        "SAIDI_P": ["temp_max", "humedad_avg", "precip_total"],
-        "SAIDI_T": ["temp_max", "humedad_avg", "precip_total"],
+    # ========== ESCENARIOS CLIMÁTICOS COMPUESTOS ==========
+    # Escenarios GENÉRICOS aplicables a cualquier región
+    COMPOSITE_SCENARIOS = {
+        'calor_extremo': {
+            'name': 'Calor Extremo',
+            'icon': '🌡️',
+            'description': 'Temperaturas muy altas, ambiente seco',
+            'categories': {
+                'temperature': 'calor_extremo',
+                'precipitation': 'sequia',
+                'wind': 'calma',
+                'uv': 'extremo',
+            }
+        },
+        
+        'lluvias_intensas': {
+            'name': 'Lluvias Intensas',
+            'icon': '⛈️',
+            'description': 'Precipitaciones abundantes con tormentas',
+            'categories': {
+                'temperature': 'normal',
+                'precipitation': 'tormenta',
+                'wind': 'vendaval',
+                'pressure': 'baja_presion',
+            }
+        },
+        
+        'condiciones_normales': {
+            'name': 'Condiciones Normales',
+            'icon': '🌤️',
+            'description': 'Clima típico sin extremos',
+            'categories': {
+                'temperature': 'normal',
+                'precipitation': 'normal',
+                'wind': 'brisa',
+                'pressure': 'normal',
+            }
+        },
+        
+        'sequia': {
+            'name': 'Sequía',
+            'icon': '🏜️',
+            'description': 'Ausencia prolongada de lluvias',
+            'categories': {
+                'temperature': 'calor_moderado',
+                'precipitation': 'sequia',
+                'wind': 'calma',
+                'uv': 'alto',
+            }
+        },
+        
+        'vientos_fuertes': {
+            'name': 'Vientos Fuertes',
+            'icon': '💨',
+            'description': 'Vientos intensos con ráfagas',
+            'categories': {
+                'temperature': 'normal',
+                'precipitation': 'seco',
+                'wind': 'vendaval',
+                'pressure': 'baja_presion',
+            }
+        },
+        
+        'tiempo_humedo': {
+            'name': 'Tiempo Húmedo',
+            'icon': '🌧️',
+            'description': 'Lluvias moderadas constantes',
+            'categories': {
+                'temperature': 'normal',
+                'precipitation': 'lluvioso',
+                'wind': 'brisa',
+                'pressure': 'normal',
+            }
+        },
+    }
+
+    # ========== CONFIGURACIÓN DE REGIONALES ==========
+    # Metadata climática de cada regional para filtrar escenarios
+    REGIONAL_CLIMATE_PROFILE = {
+        'SAIDI_O': {  # Ocaña
+            'tipo_clima': 'calido_seco',
+            'elevacion': 'baja',  # ~1200 msnm
+            'escenarios_excluidos': []  # Todos aplicables
+        },
+        'SAIDI_C': {  # Cúcuta
+            'tipo_clima': 'calido_seco',
+            'elevacion': 'baja',  # ~320 msnm
+            'escenarios_excluidos': []  # Todos aplicables
+        },
+        'SAIDI_T': {  # Tibú
+            'tipo_clima': 'calido_humedo',
+            'elevacion': 'baja',  # ~75 msnm
+            'escenarios_excluidos': []  # Todos aplicables
+        },
+        'SAIDI_A': {  # Aguachica
+            'tipo_clima': 'calido_seco',
+            'elevacion': 'baja',  # ~150 msnm
+            'escenarios_excluidos': []  # Todos aplicables
+        },
+        'SAIDI_P': {  # Pamplona
+            'tipo_clima': 'frio_humedo',
+            'elevacion': 'alta',  # ~2200 msnm
+            'escenarios_excluidos': ['calor_extremo', 'sequia']  # ❌ No aplican
+        },
     }
 
     def __init__(self):
-        self.percentiles_cache = {}
-        self.base_days_cache = {}
+        """Inicializar servicio con configuración adaptativa"""
+        self.variable_categories = self.VARIABLE_CATEGORIES
+        self.composite_scenarios = self.COMPOSITE_SCENARIOS
+        self.regional_climate_profile = self.REGIONAL_CLIMATE_PROFILE
+        
+        # Sincronizar con PredictionService (importación dinámica para evitar ciclos)
+        try:
+            from services.prediction_service import PredictionService
+            self.regional_exog_vars = PredictionService.REGIONAL_EXOG_VARS
+        except ImportError:
+            # Fallback si no se puede importar
+            self.regional_exog_vars = {}
 
-    def calculate_percentiles(self, climate_data: pd.DataFrame, regional_code: str) -> dict[str, dict[str, float]]:
+    def categorize_variable(self, var_code: str) -> str:
+        """
+        Determinar categoría de una variable climática
+        
+        Args:
+            var_code: Código de variable (ej: 'realfeel_min')
+        
+        Returns:
+            Categoría (ej: 'temperature') o 'unknown'
+        """
+        # Búsqueda exacta en categorías definidas
+        for category, config in self.variable_categories.items():
+            if var_code in config['variables']:
+                return category
+        
+        # Fallback: inferir por nombre de la variable
+        var_lower = var_code.lower()
+        
+        if any(kw in var_lower for kw in ['temp', 'feel', 'chill', 'heat', 'dewpoint']):
+            return 'temperature'
+        elif any(kw in var_lower for kw in ['precip', 'rain']):
+            return 'precipitation'
+        elif any(kw in var_lower for kw in ['pressure', 'press']):
+            return 'pressure'
+        elif any(kw in var_lower for kw in ['wind', 'gust']):
+            return 'wind'
+        elif 'uv' in var_lower:
+            return 'uv'
+        
+        return 'unknown'
+
+    def apply_simulation(self,
+                        exog_forecast: pd.DataFrame,
+                        scenario_name: str,
+                        intensity_adjustment: float,
+                        alcance_meses: int,
+                        percentiles: dict,
+                        regional_code: str) -> pd.DataFrame:
+        """
+        Aplicar simulación climática adaptativa según variables de la regional
+        
+        MEJORAS:
+        - Detecta automáticamente qué variables tiene la regional
+        - Aplica transformación según categoría física
+        - Maneja variables desconocidas con estrategia conservadora
+        
+        Args:
+            exog_forecast: Variables exógenas SIN ESCALAR
+            scenario_name: Nombre del escenario (ej: 'ola_calor')
+            intensity_adjustment: Multiplicador de intensidad (0.5 - 2.0)
+            alcance_meses: Meses a afectar (1, 3 o 6)
+            percentiles: Percentiles históricos por variable
+            regional_code: Código regional (ej: 'SAIDI_O')
+        
+        Returns:
+            DataFrame simulado (sin escalar)
+        """
+        try:
+            # Validar escenario
+            if scenario_name not in self.composite_scenarios:
+                raise ValueError(f"Escenario '{scenario_name}' no existe")
+            
+            scenario = self.composite_scenarios[scenario_name]
+            exog_simulated = exog_forecast.copy()
+            
+            # Obtener variables de esta regional
+            regional_vars = self.regional_exog_vars.get(regional_code, {})
+            
+            if not regional_vars:
+                # Si no hay configuración específica, intentar con todas las columnas
+                regional_vars = {col: col for col in exog_forecast.columns}
+            
+            # Aplicar simulación solo a primeros N meses
+            meses_a_simular = min(alcance_meses, len(exog_simulated))
+            
+            for i in range(meses_a_simular):
+                for var_code in exog_simulated.columns:
+                    # Categorizar variable
+                    category = self.categorize_variable(var_code)
+                    
+                    if category == 'unknown':
+                        # Conservar valor original si no sabemos cómo simularlo
+                        continue
+                    
+                    # Obtener configuración del escenario para esta categoría
+                    category_scenario = scenario['categories'].get(category)
+                    
+                    if not category_scenario:
+                        # Este escenario no afecta esta categoría
+                        continue
+                    
+                    # Obtener configuración de la categoría
+                    cat_config = self.variable_categories[category]
+                    scenario_config = cat_config['scenarios'][category_scenario]
+                    
+                    # Calcular multiplicador
+                    base_percentile = scenario_config['percentile']
+                    base_intensity = scenario_config['intensity']
+                    
+                    # Aplicar ajuste de intensidad del usuario
+                    final_intensity = base_intensity * intensity_adjustment
+                    
+                    # Obtener valor actual
+                    current_value = exog_simulated.iloc[i][var_code]
+                    
+                    # Aplicar transformación según percentil
+                    if var_code in percentiles:
+                        p_data = percentiles[var_code]
+                        
+                        # Calcular valor objetivo del percentil
+                        percentile_map = {
+                            10: 'p10', 25: 'p25', 50: 'p50',
+                            75: 'p75', 90: 'p90'
+                        }
+                        
+                        p_key = percentile_map.get(base_percentile, 'p50')
+                        target = p_data[p_key]
+                        
+                        # Interpolar entre valor actual y objetivo
+                        simulated_value = current_value + (target - current_value) * final_intensity
+                        
+                        # Aplicar límites seguros
+                        simulated_value = self._apply_safe_limits(
+                            simulated_value, var_code, category, p_data
+                        )
+                        
+                        # Actualizar
+                        exog_simulated.iloc[i, exog_simulated.columns.get_loc(var_code)] = simulated_value
+            
+            return exog_simulated
+        
+        except Exception as e:
+            raise Exception(f"Error aplicando simulación: {str(e)}")
+
+    def _apply_safe_limits(self,
+                          value: float,
+                          var_code: str,
+                          category: str,
+                          percentiles: dict) -> float:
+        """
+        Aplicar límites físicamente razonables según categoría
+        
+        Args:
+            value: Valor a limitar
+            var_code: Código de la variable
+            category: Categoría de la variable
+            percentiles: Percentiles históricos
+        
+        Returns:
+            Valor limitado dentro de rangos razonables
+        """
+        if category == 'temperature':
+            # Temperatura: -10°C a 50°C
+            return np.clip(value, -10, 50)
+        
+        elif category == 'precipitation':
+            # Precipitación: 0 a 500mm (extremo)
+            return np.clip(value, 0, 500)
+        
+        elif category == 'pressure':
+            # Presión: 900 a 1100 hPa
+            return np.clip(value, 900, 1100)
+        
+        elif category == 'wind':
+            # Viento: 0 a 150 km/h (huracán categoría 1)
+            return np.clip(value, 0, 150)
+        
+        elif category == 'uv':
+            # Índice UV: 0 a 15 (extremo)
+            return np.clip(value, 0, 15)
+        
+        else:
+            # Límites por percentiles históricos (±50% del rango histórico)
+            return np.clip(
+                value,
+                percentiles['p10'] * 0.5,
+                percentiles['p90'] * 1.5
+            )
+
+    def calculate_percentiles(self, climate_data: pd.DataFrame, regional_code: str) -> dict:
         """
         Calcular percentiles históricos para cada variable climática
         
         Args:
             climate_data: DataFrame con datos climáticos históricos
             regional_code: Código de la regional
-            
+        
         Returns:
             Dict con percentiles por variable
-
         """
         try:
             if climate_data is None or climate_data.empty:
                 raise ValueError("No hay datos climáticos disponibles")
-
-            cache_key = f"{regional_code}_{len(climate_data)}"
-            if cache_key in self.percentiles_cache:
-                return self.percentiles_cache[cache_key]
-
-            variables = self.REGIONAL_EXOG_VARS.get(regional_code, [])
+            
+            # Obtener variables de esta regional
+            regional_vars = self.regional_exog_vars.get(regional_code, {})
+            
+            if not regional_vars:
+                # Si no hay configuración, usar todas las columnas numéricas
+                regional_vars = {col: col for col in climate_data.select_dtypes(include=[np.number]).columns}
+            
             percentiles_result = {}
-
-            for var in variables:
-                if var not in climate_data.columns:
+            
+            for var_code in regional_vars.keys():
+                # Buscar columna en climate_data (puede tener nombre diferente)
+                if var_code not in climate_data.columns:
                     continue
-
-                data = climate_data[var].dropna()
-
+                
+                data = climate_data[var_code].dropna()
+                
                 if len(data) < 12:  # Necesitamos al menos 1 año de datos
                     continue
-
-                percentiles_result[var] = {
-                    "p10": float(np.percentile(data, 10)),
-                    "p25": float(np.percentile(data, 25)),
-                    "p50": float(np.percentile(data, 50)),
-                    "p75": float(np.percentile(data, 75)),
-                    "p90": float(np.percentile(data, 90)),
-                    "mean": float(data.mean()),
-                    "std": float(data.std()),
-                    "min": float(data.min()),
-                    "max": float(data.max()),
+                
+                percentiles_result[var_code] = {
+                    'p10': float(np.percentile(data, 10)),
+                    'p25': float(np.percentile(data, 25)),
+                    'p50': float(np.percentile(data, 50)),
+                    'p75': float(np.percentile(data, 75)),
+                    'p90': float(np.percentile(data, 90)),
+                    'mean': float(data.mean()),
+                    'std': float(data.std()),
+                    'min': float(data.min()),
+                    'max': float(data.max()),
                 }
-
-            self.percentiles_cache[cache_key] = percentiles_result
+            
             return percentiles_result
-
-        except Exception as e:
-            raise Exception(f"Error calculando percentiles: {e!s}")
-
-    def calculate_base_days(self, climate_data: pd.DataFrame, mes_prediccion: int,
-                           regional_code: str) -> dict[str, int]:
-        """
-        Calcular días base para cada tipo de clima según histórico del mes
         
-        Args:
-            climate_data: DataFrame con datos climáticos históricos
-            mes_prediccion: Mes a predecir (1-12)
-            regional_code: Código de la regional
-            
-        Returns:
-            Dict con días base por escenario
-
-        """
-        try:
-            if climate_data is None or climate_data.empty:
-                return {"soleado": 10, "lluvioso": 12, "tormentoso": 8}
-
-            cache_key = f"{regional_code}_{mes_prediccion}"
-            if cache_key in self.base_days_cache:
-                return self.base_days_cache[cache_key]
-
-            # Filtrar datos del mes específico
-            mes_data = climate_data[climate_data["month"] == mes_prediccion].copy()
-
-            if len(mes_data) < 3:  # Necesitamos al menos 3 años de ese mes
-                return {"soleado": 10, "lluvioso": 12, "tormentoso": 8}
-
-            # Calcular percentiles de precipitación para el mes
-            precip_col = "precip_total"
-            if precip_col not in mes_data.columns:
-                return {"soleado": 10, "lluvioso": 12, "tormentoso": 8}
-
-            precip_data = mes_data[precip_col].dropna()
-
-            if len(precip_data) == 0:
-                return {"soleado": 10, "lluvioso": 12, "tormentoso": 8}
-
-            p25_precip = np.percentile(precip_data, 25)
-            p75_precip = np.percentile(precip_data, 75)
-            p90_precip = np.percentile(precip_data, 90)
-
-            # Contar meses según rangos de precipitación
-            soleados = len(precip_data[precip_data < p25_precip])
-            lluviosos = len(precip_data[(precip_data >= p25_precip) & (precip_data < p75_precip)])
-            tormentosos = len(precip_data[precip_data >= p90_precip])
-
-            total_meses = len(precip_data)
-
-            # Normalizar a 30 días
-            dias_base = {
-                "soleado": int(round((soleados / total_meses) * 30)),
-                "lluvioso": int(round((lluviosos / total_meses) * 30)),
-                "tormentoso": int(round((tormentosos / total_meses) * 30)),
-            }
-
-            # Asegurar al menos 6 días para cada tipo
-            dias_base = {k: max(6, v) for k, v in dias_base.items()}
-
-            # Asegurar que sumen aproximadamente 30
-            total = sum(dias_base.values())
-            if total < 28 or total > 32:
-                # Reajustar proporcionalmente
-                factor = 30 / total
-                dias_base = {k: int(round(v * factor)) for k, v in dias_base.items()}
-
-            self.base_days_cache[cache_key] = dias_base
-            return dias_base
-
         except Exception as e:
-            print(f"Error calculando días base: {e}")
-            return {"soleado": 10, "lluvioso": 12, "tormentoso": 8}
+            raise Exception(f"Error calculando percentiles: {str(e)}")
 
-    def calculate_multipliers(self, percentiles: dict[str, dict[str, float]],
-                             escenario: str, regional_code: str) -> dict[str, float]:
-        """
-        Calcular multiplicadores para cada variable según escenario
-        
-        Args:
-            percentiles: Percentiles calculados de las variables
-            escenario: Nombre del escenario ('soleado', 'lluvioso', etc.)
-            regional_code: Código de la regional
-            
-        Returns:
-            Dict con multiplicadores por variable
-
-        """
-        try:
-            if escenario not in self.SCENARIOS:
-                raise ValueError(f"Escenario no válido: {escenario}")
-
-            scenario_config = self.SCENARIOS[escenario]
-            multipliers = {}
-
-            variables = self.REGIONAL_EXOG_VARS.get(regional_code, [])
-
-            for var in variables:
-                if var not in percentiles:
-                    multipliers[var] = 1.0
-                    continue
-
-                p_data = percentiles[var]
-                p50 = p_data["p50"]  # Mediana
-
-                # Obtener el percentil del escenario
-                target_percentile = scenario_config["percentiles"].get(var, 50)
-
-                # Calcular valor del percentil objetivo
-                if target_percentile == 10:
-                    target_value = p_data["p10"]
-                elif target_percentile == 25:
-                    target_value = p_data["p25"]
-                elif target_percentile == 50:
-                    target_value = p_data["p50"]
-                elif target_percentile == 75:
-                    target_value = p_data["p75"]
-                elif target_percentile == 90:
-                    target_value = p_data["p90"]
-                else:
-                    target_value = p50
-
-                # Calcular multiplicador como ratio
-                if p50 > 0:
-                    multipliers[var] = target_value / p50
-                else:
-                    multipliers[var] = 1.0
-
-            return multipliers
-
-        except Exception as e:
-            print(f"Error calculando multiplicadores: {e}")
-            return dict.fromkeys(self.REGIONAL_EXOG_VARS.get(regional_code, []), 1.0)
-
-    def calculate_slider_ranges(self, climate_data: pd.DataFrame, mes_prediccion: int,
-                                escenario: str, regional_code: str) -> dict[str, tuple[int, int, int]]:
-        """
-        Calcular rangos del slider basados en desviación estándar
-        
-        Args:
-            climate_data: DataFrame con datos climáticos
-            mes_prediccion: Mes a predecir
-            escenario: Nombre del escenario
-            regional_code: Código de la regional
-            
-        Returns:
-            Dict con (min, max, base) por tipo de clima
-
-        """
-        try:
-            dias_base = self.calculate_base_days(climate_data, mes_prediccion, regional_code)
-
-            # Calcular desviación estándar de ocurrencias por tipo de clima
-            # Usamos 2 desviaciones estándar como rango
-
-            ranges = {}
-
-            for tipo_clima in ["soleado", "lluvioso", "tormentoso"]:
-                base = dias_base[tipo_clima]
-
-                # Estimar desviación estándar (aproximadamente 30% del valor base)
-                std_dev = max(3, int(round(base * 0.3)))
-
-                # Rango = ±2 * desviación estándar
-                min_dias = max(2, base - 2 * std_dev)
-                max_dias = min(28, base + 2 * std_dev)
-
-                ranges[tipo_clima] = (min_dias, max_dias, base)
-
-            return ranges
-
-        except Exception as e:
-            print(f"Error calculando rangos de slider: {e}")
-            return {
-                "soleado": (4, 16, 10),
-                "lluvioso": (6, 18, 12),
-                "tormentoso": (2, 14, 8),
-            }
-
-    def apply_simulation(self, exog_forecast: pd.DataFrame, escenario: str,
-                        slider_adjustment: int, dias_base: int, alcance_meses: int,
-                        percentiles: dict[str, dict[str, float]],
-                        regional_code: str) -> pd.DataFrame:
-        """
-        Aplicar simulación climática a las variables exógenas de predicción
-        
-        Args:
-            exog_forecast: DataFrame con variables exógenas proyectadas
-            escenario: Nombre del escenario
-            slider_adjustment: Ajuste de días del slider (ej: +3, -2)
-            dias_base: Días base del escenario
-            alcance_meses: Número de meses a afectar (1, 3, o 6)
-            percentiles: Percentiles calculados de las variables
-            regional_code: Código de la regional
-            
-        Returns:
-            DataFrame con variables exógenas simuladas
-
-        """
-        try:
-            if exog_forecast is None or exog_forecast.empty:
-                raise ValueError("No hay variables exógenas para simular")
-
-            exog_simulated = exog_forecast.copy()
-
-            # Calcular multiplicadores base del escenario
-            base_multipliers = self.calculate_multipliers(percentiles, escenario, regional_code)
-
-            # Calcular factor de intensidad por días adicionales
-            dias_simulados = dias_base + slider_adjustment
-            intensity_factor = dias_simulados / dias_base if dias_base > 0 else 1.0
-
-            # Aplicar simulación solo a los primeros N meses
-            meses_a_simular = min(alcance_meses, len(exog_simulated))
-
-            for i in range(meses_a_simular):
-                for var, base_mult in base_multipliers.items():
-                    if var not in exog_simulated.columns:
-                        continue
-
-                    # Multiplicador final = base * intensidad
-                    final_mult = base_mult * intensity_factor
-
-                    # Aplicar multiplicador
-                    current_value = exog_simulated.iloc[i][var]
-                    simulated_value = current_value * final_mult
-
-                    # Aplicar límites de seguridad (clip)
-                    if var in percentiles:
-                        p_data = percentiles[var]
-
-                        if var == "temp_max":
-                            min_limit = p_data["p10"]
-                            max_limit = p_data["p90"] * 1.1
-                        elif var == "humedad_avg":
-                            min_limit = 30
-                            max_limit = 100
-                        elif var == "precip_total":
-                            min_limit = 0
-                            max_limit = p_data["p90"] * 1.5
-                        else:
-                            min_limit = p_data["min"]
-                            max_limit = p_data["max"]
-
-                        simulated_value = np.clip(simulated_value, min_limit, max_limit)
-
-                    exog_simulated.iloc[i, exog_simulated.columns.get_loc(var)] = simulated_value
-
-            return exog_simulated
-
-        except Exception as e:
-            raise Exception(f"Error aplicando simulación: {e!s}")
-
-    def get_simulation_summary(self, escenario: str, slider_adjustment: int,
-                               dias_base: int, alcance_meses: int,
-                               percentiles: dict[str, dict[str, float]],
+    def get_simulation_summary(self,
+                               scenario_name: str,
+                               intensity_adjustment: float,
+                               alcance_meses: int,
+                               percentiles: dict,
                                regional_code: str) -> dict:
         """
         Generar resumen de la configuración de simulación
         
+        Args:
+            scenario_name: Nombre del escenario
+            intensity_adjustment: Factor de intensidad (0.5 - 2.0)
+            alcance_meses: Número de meses afectados
+            percentiles: Percentiles históricos
+            regional_code: Código de la regional
+        
         Returns:
             Dict con información del resumen
-
         """
         try:
-            scenario_info = self.SCENARIOS.get(escenario, {})
-            base_multipliers = self.calculate_multipliers(percentiles, escenario, regional_code)
-
-            dias_simulados = dias_base + slider_adjustment
-            intensity_factor = dias_simulados / dias_base if dias_base > 0 else 1.0
-
-            # Calcular multiplicadores finales
-            final_multipliers = {
-                var: base_mult * intensity_factor
-                for var, base_mult in base_multipliers.items()
-            }
-
-            # Calcular cambios porcentuales
-            percentage_changes = {
-                var: (final_mult - 1.0) * 100
-                for var, final_mult in final_multipliers.items()
-            }
-
+            if scenario_name not in self.composite_scenarios:
+                return {}
+            
+            scenario_info = self.composite_scenarios[scenario_name]
+            
+            # Obtener variables afectadas
+            regional_vars = self.regional_exog_vars.get(regional_code, {})
+            affected_vars = {}
+            
+            for var_code, var_nombre in regional_vars.items():
+                category = self.categorize_variable(var_code)
+                
+                if category == 'unknown':
+                    continue
+                
+                category_scenario = scenario_info['categories'].get(category)
+                
+                if not category_scenario:
+                    continue
+                
+                # Calcular cambio estimado
+                cat_config = self.variable_categories[category]
+                scenario_config = cat_config['scenarios'][category_scenario]
+                
+                base_intensity = scenario_config['intensity']
+                final_intensity = base_intensity * intensity_adjustment
+                
+                # Cambio porcentual
+                change_pct = (final_intensity - 1.0) * 100
+                
+                affected_vars[var_code] = {
+                    'nombre': var_nombre,
+                    'categoria': category,
+                    'escenario_categoria': category_scenario,
+                    'cambio_porcentual': change_pct,
+                    'intensidad_final': final_intensity
+                }
+            
             return {
-                "escenario": scenario_info.get("name", escenario),
-                "icono": scenario_info.get("icon", ""),
-                "descripcion": scenario_info.get("description", ""),
-                "dias_base": dias_base,
-                "slider_adjustment": slider_adjustment,
-                "dias_simulados": dias_simulados,
-                "alcance_meses": alcance_meses,
-                "intensity_factor": intensity_factor,
-                "base_multipliers": base_multipliers,
-                "final_multipliers": final_multipliers,
-                "percentage_changes": percentage_changes,
+                'escenario': scenario_info['name'],
+                'icono': scenario_info['icon'],
+                'descripcion': scenario_info['description'],
+                'intensity_adjustment': intensity_adjustment,
+                'alcance_meses': alcance_meses,
+                'variables_afectadas': affected_vars,
+                'num_variables': len(affected_vars)
             }
-
+        
         except Exception as e:
             print(f"Error generando resumen: {e}")
             return {}
 
-    def validate_simulation_params(self, escenario: str, slider_adjustment: int,
-                                   dias_base: int, alcance_meses: int) -> tuple[bool, str]:
+    def validate_simulation_params(self,
+                                   scenario_name: str,
+                                   intensity_adjustment: float,
+                                   alcance_meses: int,
+                                   regional_code: str = None) -> tuple:
         """
         Validar parámetros de simulación
         
+        Args:
+            scenario_name: Nombre del escenario
+            intensity_adjustment: Factor de intensidad
+            alcance_meses: Número de meses
+            regional_code: Código de regional (opcional, para validar compatibilidad)
+        
         Returns:
             (es_valido, mensaje_error)
-
         """
-        if escenario not in self.SCENARIOS:
-            return False, f"Escenario no válido: {escenario}"
-
-        if not isinstance(slider_adjustment, int):
-            return False, "Ajuste de días debe ser un número entero"
-
-        if not isinstance(dias_base, int) or dias_base < 1:
-            return False, "Días base debe ser un número positivo"
-
-        dias_simulados = dias_base + slider_adjustment
-        if dias_simulados < 2 or dias_simulados > 28:
-            return False, f"Días simulados ({dias_simulados}) fuera de rango válido (2-28)"
-
+        if scenario_name not in self.composite_scenarios:
+            return False, f"Escenario no válido: {scenario_name}"
+        
+        # Validar que el escenario sea aplicable a la regional
+        if regional_code and regional_code in self.regional_climate_profile:
+            exclusiones = self.regional_climate_profile[regional_code].get('escenarios_excluidos', [])
+            
+            if scenario_name in exclusiones:
+                regional_info = self.regional_climate_profile[regional_code]
+                return False, f"El escenario '{scenario_name}' no es aplicable a esta regional (clima: {regional_info['tipo_clima']})"
+        
+        if not isinstance(intensity_adjustment, (int, float)):
+            return False, "Ajuste de intensidad debe ser un número"
+        
+        if intensity_adjustment < 0.5 or intensity_adjustment > 2.0:
+            return False, "Intensidad debe estar entre 0.5x y 2.0x"
+        
         if alcance_meses not in [1, 3, 6]:
             return False, "Alcance debe ser 1, 3 o 6 meses"
-
+        
         return True, ""
+
+    def get_available_scenarios(self, regional_code: str = None) -> list:
+        """
+        Obtener lista de escenarios disponibles (filtrados por regional)
+        
+        Args:
+            regional_code: Código de regional (opcional). Si se especifica,
+                          filtra escenarios no aplicables a esa región.
+        
+        Returns:
+            Lista de dicts con información de cada escenario
+        """
+        scenarios_list = []
+        
+        # Obtener exclusiones de la regional
+        exclusiones = []
+        if regional_code and regional_code in self.regional_climate_profile:
+            exclusiones = self.regional_climate_profile[regional_code].get('escenarios_excluidos', [])
+        
+        for key, info in self.composite_scenarios.items():
+            # Filtrar escenarios excluidos para esta regional
+            if key in exclusiones:
+                continue
+            
+            scenarios_list.append({
+                'id': key,
+                'name': info['name'],
+                'icon': info['icon'],
+                'description': info['description'],
+                'categories': list(info['categories'].keys())
+            })
+        
+        return scenarios_list
+
+    def get_regional_climate_info(self, regional_code: str) -> dict:
+        """
+        Obtener información climática de una regional
+        
+        Args:
+            regional_code: Código de la regional
+        
+        Returns:
+            Dict con información del perfil climático
+        """
+        if regional_code not in self.regional_climate_profile:
+            return {
+                'tipo_clima': 'desconocido',
+                'elevacion': 'desconocida',
+                'escenarios_excluidos': [],
+                'escenarios_aplicables': list(self.composite_scenarios.keys())
+            }
+        
+        profile = self.regional_climate_profile[regional_code]
+        
+        # Calcular escenarios aplicables
+        todos_escenarios = set(self.composite_scenarios.keys())
+        excluidos = set(profile.get('escenarios_excluidos', []))
+        aplicables = list(todos_escenarios - excluidos)
+        
+        return {
+            'tipo_clima': profile['tipo_clima'],
+            'elevacion': profile['elevacion'],
+            'escenarios_excluidos': list(excluidos),
+            'escenarios_aplicables': aplicables
+        }
+
+    def get_variable_category_info(self, var_code: str) -> dict:
+        """
+        Obtener información de categoría de una variable
+        
+        Args:
+            var_code: Código de la variable
+        
+        Returns:
+            Dict con información de la categoría
+        """
+        category = self.categorize_variable(var_code)
+        
+        if category == 'unknown':
+            return {
+                'category': 'unknown',
+                'scenarios': [],
+                'unit': 'N/A'
+            }
+        
+        cat_config = self.variable_categories[category]
+        
+        # Determinar unidad según categoría
+        unit_map = {
+            'temperature': '°C',
+            'precipitation': 'mm',
+            'pressure': 'hPa',
+            'wind': 'km/h',
+            'uv': 'índice'
+        }
+        
+        return {
+            'category': category,
+            'scenarios': list(cat_config['scenarios'].keys()),
+            'unit': unit_map.get(category, '')
+        }

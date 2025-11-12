@@ -22,47 +22,60 @@ class ValidationService:
     
     # Mapeo de regionales a sus transformaciones optimas
     REGIONAL_TRANSFORMATIONS = {
-        'SAIDI_O': 'boxcox',      # Ocana - Boxcox
-        'SAIDI_C': 'original',    # Cucuta - Original
-        'SAIDI_A': 'original',    # Aguachica - Original
-        'SAIDI_P': 'boxcox',      # Pamplona - Boxcox
-        'SAIDI_T': 'sqrt',        # Tibu - Sqrt
-        'SAIDI_Cens': 'original'  # Cens - Original
+        'SAIDI_O': 'original',     
+        'SAIDI_C': 'original',    
+        'SAIDI_A': 'original',    
+        'SAIDI_P': 'boxcox',      
+        'SAIDI_T': 'sqrt',       
+        'SAIDI_Cens': 'original'  #
     }
     
     # Variables exogenas por regional
     REGIONAL_EXOG_VARS = {
-        'SAIDI_O': {
-            'temp_max': 'Temperatura maxima',
-            'humedad_avg': 'Humedad relativa',
-            'precip_total': 'Precipitacion total'
-        },
-        'SAIDI_C': {
-            'temp_max': 'Temperatura maxima',
-            'humedad_avg': 'Humedad relativa',
-            'precip_total': 'Precipitacion total'
-        },
-        'SAIDI_A': {
-            'temp_max': 'Temperatura maxima',
-            'humedad_avg': 'Humedad relativa',
-            'precip_total': 'Precipitacion total'
-        },
-        'SAIDI_P': {
-            'temp_max': 'Temperatura maxima',
-            'humedad_avg': 'Humedad relativa',
-            'precip_total': 'Precipitacion total'
-        },
-        'SAIDI_T': {
-            'temp_max': 'Temperatura maxima',
-            'humedad_avg': 'Humedad relativa',
-            'precip_total': 'Precipitacion total'
-        },
-    }
+    'SAIDI_O': {  # Ocaña - 7 variables correlacionadas
+        'realfeel_min': 'Temperatura aparente mínima',           # r=0.689 *** FUERTE
+        'windchill_avg': 'Sensación térmica promedio',          # r=0.520 ** MODERADA-FUERTE
+        'dewpoint_avg': 'Punto de rocío promedio',              # r=0.470 ** MODERADA-FUERTE
+        'windchill_max': 'Sensación térmica máxima',            # r=0.464 ** MODERADA-FUERTE
+        'dewpoint_min': 'Punto de rocío mínimo',                # r=0.456 ** MODERADA-FUERTE
+        'precipitation_max_daily': 'Precipitación máxima diaria', # r=0.452
+        'precipitation_avg_daily': 'Precipitación promedio diaria', # r=0.438
+    },
+    
+    'SAIDI_C': {  # Cúcuta - 4 variables correlacionadas
+        'realfeel_avg': 'Temperatura aparente promedio',        # r=0.573 ** MODERADA-FUERTE
+        'pressure_rel_avg': 'Presión relativa promedio',        # r=-0.358 (negativa)
+        'wind_speed_max': 'Velocidad máxima del viento',        # r=0.356
+        'pressure_abs_avg': 'Presión absoluta promedio',        # r=-0.356 (negativa)
+    },
+    
+    'SAIDI_T': {  # Tibú - 8 variables correlacionadas
+        'realfeel_avg': 'Temperatura aparente promedio',        # r=0.906 *** MUY FUERTE
+        'wind_dir_avg': 'Dirección promedio del viento',        # r=-0.400 (negativa)
+        'uv_index_avg': 'Índice UV promedio',                   # r=0.385
+        'heat_index_avg': 'Índice de calor promedio',           # r=0.363
+        'temperature_min': 'Temperatura mínima',                # r=0.352
+        'windchill_min': 'Sensación térmica mínima',            # r=0.340
+        'temperature_avg': 'Temperatura promedio',              # r=0.338
+        'pressure_rel_avg': 'Presión relativa promedio',        # r=-0.330 (negativa)
+    },
+    
+    'SAIDI_A': {  # Aguachica - 2 variables correlacionadas
+        'uv_index_max': 'Índice UV máximo',                     # r=0.664 *** FUERTE
+        'days_with_rain': 'Días con lluvia',                    # r=0.535 ** MODERADA-FUERTE
+    },
+    
+    'SAIDI_P': {  # Pamplona - 3 variables correlacionadas
+        'precipitation_total': 'Precipitación total',           # r=0.577 ** MODERADA-FUERTE
+        'precipitation_avg_daily': 'Precipitación promedio diaria', # r=0.552
+        'realfeel_min': 'Temperatura aparente mínima',          # r=0.344
+    },
+}
     
     REGIONAL_ORDERS = {
         'SAIDI_O': {
-            'order': (4, 1, 3),
-            'seasonal_order': (1, 1, 4, 12)
+            'order': (3, 1, 6),
+            'seasonal_order': (3, 1, 0, 12)
         },
         'SAIDI_C': {
             'order': (3, 1, 2),
@@ -253,30 +266,39 @@ class ValidationService:
                 if exog_df is not None:
                     if log_callback:
                         log_callback(f"Variables exogenas disponibles: {len(exog_df.columns)}")
-                        for var_code, var_data in exog_info.items():
-                            log_callback(f"  - {var_data['nombre']}")
                     
-                    # CRITICO: NO ESCALAR si hay simulacion
-                    if simulation_applied:
+                    # ========== NUEVO: Validar cobertura como OptimizationService ==========
+                    if not self._diagnose_exog_coverage(historico[col_saidi], exog_df, log_callback):
                         if log_callback:
-                            log_callback("Variables exogenas SIN ESCALAR (para simulacion)")
-                        # Solo FIT del scaler, no transform
-                        self.exog_scaler = StandardScaler()
-                        self.exog_scaler.fit(exog_df)
-                        # exog_df permanece SIN ESCALAR
+                            log_callback("=" * 60)
+                            log_callback("ADVERTENCIA: Cobertura insuficiente")
+                            log_callback("Las variables exogenas seran DESACTIVADAS")
+                            log_callback("=" * 60)
+                        exog_df = None
+                        exog_info = None
                     else:
-                        # Sin simulacion: escalar normalmente
+                        # Solo si pasa la validación, continuar con las exógenas
                         if log_callback:
-                            log_callback("Escalando variables exogenas...")
-                        self.exog_scaler = StandardScaler()
-                        exog_df_scaled = pd.DataFrame(
-                            self.exog_scaler.fit_transform(exog_df),
-                            index=exog_df.index,
-                            columns=exog_df.columns
-                        )
-                        exog_df = exog_df_scaled
-                        if log_callback:
-                            log_callback("Variables exogenas escaladas correctamente")
+                            for var_code, var_data in exog_info.items():
+                                log_callback(f"  - {var_data['nombre']}")
+                        
+                        # CRÍTICO: NO ESCALAR AQUÍ
+                        # SARIMAX normaliza internamente las variables exógenas
+                        # Escalar manualmente causa DOBLE ESCALADO y pérdida de precisión
+                        
+                        if simulation_applied:
+                            # [Código de simulación - se omite por ahora]
+                            pass
+                        else:
+                            # ========== CAMBIO CRÍTICO: Sin simulación tampoco escalar ==========
+                            if log_callback:
+                                log_callback("Variables exogenas en escala ORIGINAL")
+                                log_callback("SARIMAX las normalizara internamente")
+                            
+                            # Guardar scaler solo para compatibilidad, pero NO transformar
+                            self.exog_scaler = StandardScaler()
+                            self.exog_scaler.fit(exog_df)  # Solo FIT, NO transform
+                            # exog_df permanece completamente SIN ESCALAR
                 else:
                     if log_callback:
                         log_callback("No se pudieron preparar variables exogenas, continuando sin ellas")
@@ -621,69 +643,247 @@ class ValidationService:
         return 'original'
     
     def _prepare_exogenous_variables(self,
-                                     climate_data: pd.DataFrame,
-                                     df_saidi: pd.DataFrame,
-                                     regional_code: Optional[str],
-                                     log_callback) -> Tuple[Optional[pd.DataFrame], Optional[Dict]]:
+                                 climate_data: pd.DataFrame,
+                                 df_saidi: pd.DataFrame,
+                                 regional_code: Optional[str],
+                                 log_callback) -> Tuple[Optional[pd.DataFrame], Optional[Dict]]:
         """
-        Preparar variables exogenas climaticas SIN ESCALAR
-        (IDENTICO a OptimizationService)
+        Preparar variables exógenas climáticas SIN ESCALAR
+        ALINEADO CON OptimizationService para obtener métricas consistentes
+        
+        CAMBIOS CRÍTICOS:
+        1. Mapeo de columnas con coincidencia parcial (no solo exacta)
+        2. Validación de cobertura temporal (80% mínimo en overlap)
+        3. Validación de varianza no-cero en overlap
+        4. Relleno inteligente: forward-fill + backward-fill (máx 3) + media
+        5. RETORNA EN ESCALA ORIGINAL (sin StandardScaler)
+        
+        Args:
+            climate_data: DataFrame con datos climáticos mensuales
+            df_saidi: DataFrame SAIDI completo
+            regional_code: Código de la regional
+            log_callback: Función para logging
+        
+        Returns:
+            Tuple de (exog_df, exog_info) o (None, None) si falla
+            - exog_df: DataFrame EN ESCALA ORIGINAL
+            - exog_info: Dict con metadata de cada variable
         """
         try:
+            # Validaciones iniciales
             if climate_data is None or climate_data.empty:
+                if log_callback:
+                    log_callback("Sin datos climáticos disponibles")
                 return None, None
             
             if not regional_code or regional_code not in self.REGIONAL_EXOG_VARS:
                 if log_callback:
-                    log_callback(f"Regional {regional_code} no tiene variables exogenas definidas")
+                    log_callback(f"Regional {regional_code} sin variables definidas")
                 return None, None
             
+            if log_callback:
+                log_callback(f"Preparando variables para {regional_code}")
+                log_callback("MODO: SIN ESCALADO (valores originales)")
+            
+            # ========== VALIDAR ÍNDICE DATETIME ==========
+            if not isinstance(climate_data.index, pd.DatetimeIndex):
+                # Buscar columna de fecha
+                fecha_col = None
+                for col in ['fecha', 'Fecha', 'date', 'Date', 'month_date']:
+                    if col in climate_data.columns:
+                        fecha_col = col
+                        break
+                
+                if fecha_col is None:
+                    if log_callback:
+                        log_callback("ERROR: No se encontró columna de fecha válida")
+                    return None, None
+                
+                try:
+                    climate_data = climate_data.copy()
+                    climate_data[fecha_col] = pd.to_datetime(climate_data[fecha_col])
+                    climate_data = climate_data.set_index(fecha_col)
+                except Exception as e:
+                    if log_callback:
+                        log_callback(f"ERROR convirtiendo índice: {str(e)}")
+                    return None, None
+            
+            # Verificar que ahora es DatetimeIndex
+            if not isinstance(climate_data.index, pd.DatetimeIndex):
+                if log_callback:
+                    log_callback("ERROR: Formato de fecha inválido")
+                return None, None
+            
+            # ========== ANÁLISIS DE COBERTURA TEMPORAL ==========
+            historico = df_saidi[df_saidi['SAIDI'].notna() if 'SAIDI' in df_saidi.columns else df_saidi['SAIDI Historico'].notna()]
+            
+            saidi_start = historico.index[0]
+            saidi_end = historico.index[-1]
+            clima_start = climate_data.index[0]
+            clima_end = climate_data.index[-1]
+            
+            # Calcular periodo de overlap
+            overlap_start = max(saidi_start, clima_start)
+            overlap_end = min(saidi_end, clima_end)
+            
+            if overlap_start > overlap_end:
+                if log_callback:
+                    log_callback("ERROR: Sin overlap entre SAIDI y CLIMA")
+                return None, None
+            
+            overlap_mask = (historico.index >= overlap_start) & (historico.index <= overlap_end)
+            overlap_months = overlap_mask.sum()
+            
+            # Validar overlap mínimo (12 meses)
+            if overlap_months < 12:
+                if log_callback:
+                    log_callback(f"ERROR: Overlap insuficiente ({overlap_months} < 12 meses)")
+                return None, None
+            
+            if log_callback:
+                log_callback(f"SAIDI: {saidi_start.strftime('%Y-%m')} a {saidi_end.strftime('%Y-%m')} ({len(historico)} meses)")
+                log_callback(f"CLIMA: {clima_start.strftime('%Y-%m')} a {clima_end.strftime('%Y-%m')} ({len(climate_data)} meses)")
+                log_callback(f"OVERLAP: {overlap_start.strftime('%Y-%m')} a {overlap_end.strftime('%Y-%m')} ({overlap_months} meses)")
+            
+            # ========== MAPEO AUTOMÁTICO DE COLUMNAS ==========
             exog_vars_config = self.REGIONAL_EXOG_VARS[regional_code]
             
-            climate_column_mapping = {
-                'temp_max': 'temp_max',
-                'humedad_avg': 'humedad_avg',
-                'precip_total': 'precip_total'
-            }
+            # Normalizar nombres disponibles
+            available_cols_normalized = {}
+            for col in climate_data.columns:
+                normalized = col.lower().strip().replace(' ', '_').replace('-', '_')
+                available_cols_normalized[normalized] = col
             
-            # Crear DataFrame de variables exogenas SIN ESCALAR
-            exog_df = pd.DataFrame(index=df_saidi.index)
+            # Mapear cada variable con búsqueda flexible
+            climate_column_mapping = {}
+            
+            for var_code in exog_vars_config.keys():
+                var_normalized = var_code.lower().strip()
+                
+                # Intento 1: Coincidencia exacta
+                if var_normalized in available_cols_normalized:
+                    climate_column_mapping[var_code] = available_cols_normalized[var_normalized]
+                    continue
+                
+                # Intento 2: Coincidencia parcial (al menos 2 partes)
+                var_parts = var_normalized.split('_')
+                best_match = None
+                best_match_score = 0
+                
+                for norm_col, orig_col in available_cols_normalized.items():
+                    matches = sum(1 for part in var_parts if part in norm_col)
+                    if matches > best_match_score:
+                        best_match_score = matches
+                        best_match = orig_col
+                
+                if best_match_score >= 2:
+                    climate_column_mapping[var_code] = best_match
+            
+            if not climate_column_mapping:
+                if log_callback:
+                    log_callback("ERROR: No se pudo mapear ninguna variable")
+                return None, None
+            
+            # ========== PREPARACIÓN DE VARIABLES SIN ESCALADO ==========
+            exog_df = pd.DataFrame(index=historico.index)
             exog_info = {}
             
             for var_code, var_nombre in exog_vars_config.items():
                 climate_col = climate_column_mapping.get(var_code)
                 
-                if climate_col and climate_col in climate_data.columns:
-                    var_series = climate_data[[climate_col]].copy()
-                    var_series.columns = [var_code]
+                if not climate_col or climate_col not in climate_data.columns:
+                    continue
+                
+                try:
+                    # Extraer serie del clima
+                    var_series = climate_data[climate_col].copy()
                     
-                    exog_values = self._align_exog_to_saidi(
-                        var_series, df_saidi, var_code, log_callback
-                    )
+                    # Crear serie alineada (inicialmente vacía)
+                    aligned_series = pd.Series(index=historico.index, dtype=float)
                     
-                    if exog_values is not None:
-                        exog_df[var_code] = exog_values
-                        
-                        exog_info[var_code] = {
-                            'nombre': var_nombre,
-                            'columna_clima': climate_col
-                        }
-                        
+                    # Llenar datos donde hay overlap REAL
+                    for date in historico.index:
+                        if date in var_series.index:
+                            aligned_series[date] = var_series.loc[date]
+                    
+                    # VALIDACIÓN: Cobertura en overlap
+                    overlap_data = aligned_series[overlap_mask]
+                    datos_reales_overlap = overlap_data.notna().sum()
+                    overlap_pct = (datos_reales_overlap / overlap_months) * 100
+                    
+                    # RECHAZAR si cobertura < 80%
+                    if overlap_pct < 80:
                         if log_callback:
-                            log_callback(f"  {var_nombre} preparada")
+                            log_callback(f"X RECHAZADA {var_code}: cobertura {overlap_pct:.1f}% < 80%")
+                        continue
+                    
+                    # VALIDACIÓN: Varianza en overlap
+                    var_std = overlap_data.std()
+                    
+                    if pd.isna(var_std) or var_std == 0:
+                        if log_callback:
+                            log_callback(f"X RECHAZADA {var_code}: varianza = 0")
+                        continue
+                    
+                    # Forward-fill para fechas futuras
+                    aligned_series = aligned_series.fillna(method='ffill')
+                    
+                    # Backward-fill (máx 3 meses) para fechas pasadas
+                    aligned_series = aligned_series.fillna(method='bfill', limit=3)
+                    
+                    # Si AÚN hay NaN, rellenar con media del overlap
+                    if aligned_series.isnull().any():
+                        mean_overlap = overlap_data.mean()
+                        aligned_series = aligned_series.fillna(mean_overlap)
+                    
+                    # VERIFICACIÓN FINAL
+                    final_nan = aligned_series.isnull().sum()
+                    if final_nan > 0:
+                        if log_callback:
+                            log_callback(f"X RECHAZADA {var_code}: {final_nan} NaN finales")
+                        continue
+                    
+                    # ===== GUARDAR EN ESCALA ORIGINAL =====
+                    exog_df[var_code] = aligned_series
+                    
+                    exog_info[var_code] = {
+                        'nombre': var_nombre,
+                        'columna_clima': climate_col,
+                        'correlacion': self._get_correlation_for_var(var_code, regional_code),
+                        'scaled': False,  # CRÍTICO
+                        'datos_reales_overlap': int(datos_reales_overlap),
+                        'overlap_coverage_pct': float(overlap_pct),
+                        'varianza_overlap': float(var_std)
+                    }
+                    
+                    if log_callback:
+                        log_callback(f"✓ {var_code} -> ACEPTADA ({overlap_pct:.1f}% cobertura, escala original)")
+                        
+                except Exception as e:
+                    if log_callback:
+                        log_callback(f"X ERROR {var_code}: {e}")
+                    continue
             
-            exog_df = exog_df.dropna(how='all')
-            exog_df = exog_df.interpolate(method='linear', limit_direction='both')
-            
-            if exog_df.empty:
+            # VALIDACIÓN FINAL
+            if exog_df.empty or exog_df.shape[1] == 0:
+                if log_callback:
+                    log_callback("ERROR: Ninguna variable aceptada")
                 return None, None
             
-            # NO ESCALAR AQUI - se escalara despues en el flujo principal
+            if log_callback:
+                log_callback("=" * 60)
+                log_callback(f"✓ Variables preparadas: {len(exog_df.columns)}")
+                log_callback("  ESCALA: ORIGINAL (sin StandardScaler)")
+                log_callback("  Rangos:")
+                for col in exog_df.columns:
+                    log_callback(f"    - {col}: [{exog_df[col].min():.2f}, {exog_df[col].max():.2f}]")
+                log_callback("=" * 60)
+            
             return exog_df, exog_info if exog_info else None
             
         except Exception as e:
             if log_callback:
-                log_callback(f"Error preparando variables exogenas: {str(e)}")
+                log_callback(f"ERROR CRÍTICO: {str(e)}")
             return None, None
     
     def _align_exog_to_saidi(self,
@@ -1143,3 +1343,164 @@ class ValidationService:
                 print(f"Error eliminando archivo temporal: {e}")
             finally:
                 self.plot_file_path = None
+
+    def _diagnose_exog_coverage(self, 
+                      serie_saidi: pd.Series, 
+                      exog_df: pd.DataFrame,
+                      log_callback) -> bool:
+        """
+        Diagnosticar cobertura temporal de variables exógenas
+        COPIADO DE OptimizationService para consistencia
+        
+        Valida:
+        1. Índices coinciden exactamente
+        2. No hay NaN en ninguna columna
+        3. No hay valores infinitos
+        4. Variables tienen varianza > 0
+        
+        Args:
+            serie_saidi: Serie temporal SAIDI
+            exog_df: DataFrame con variables exógenas
+            log_callback: Función para logging
+        
+        Returns:
+            bool: True si pasa todas las validaciones
+        """
+        try:
+            saidi_start = serie_saidi.index[0]
+            saidi_end = serie_saidi.index[-1]
+            exog_start = exog_df.index[0]
+            exog_end = exog_df.index[-1]
+            
+            if log_callback:
+                log_callback("=" * 60)
+                log_callback("DIAGNOSTICO DE COBERTURA EXOGENA")
+                log_callback("=" * 60)
+                log_callback(f"SAIDI: {saidi_start.strftime('%Y-%m')} a {saidi_end.strftime('%Y-%m')} ({len(serie_saidi)} obs)")
+                log_callback(f"EXOG:  {exog_start.strftime('%Y-%m')} a {exog_end.strftime('%Y-%m')} ({len(exog_df)} obs)")
+            
+            # 1. Verificar que los índices coinciden EXACTAMENTE
+            if not exog_df.index.equals(serie_saidi.index):
+                if log_callback:
+                    log_callback("ADVERTENCIA: Indices no coinciden exactamente")
+                
+                # Verificar fechas faltantes
+                missing_in_exog = [d for d in serie_saidi.index if d not in exog_df.index]
+                
+                if missing_in_exog:
+                    pct_missing = len(missing_in_exog) / len(serie_saidi) * 100
+                    
+                    if log_callback:
+                        log_callback(f"Fechas SAIDI faltantes en EXOG: {len(missing_in_exog)} ({pct_missing:.1f}%)")
+                    
+                    # CRÍTICO: Si falta >20% de fechas, rechazar
+                    if pct_missing > 20:
+                        if log_callback:
+                            log_callback("ERROR CRITICO: >20% de fechas faltantes")
+                            log_callback("Las variables exogenas NO cubren suficiente periodo historico")
+                        return False
+            
+            # 2. Verificar que NO hay NaN en ninguna columna
+            if exog_df.isnull().any().any():
+                nan_cols = exog_df.columns[exog_df.isnull().any()].tolist()
+                
+                if log_callback:
+                    log_callback("ERROR: Columnas con NaN encontradas:")
+                    for col in nan_cols:
+                        nan_count = exog_df[col].isnull().sum()
+                        pct_nan = (nan_count / len(exog_df)) * 100
+                        log_callback(f"  - {col}: {nan_count} NaN ({pct_nan:.1f}%)")
+                    log_callback("Variables exogenas deben estar completamente rellenas")
+                
+                return False
+            
+            # 3. Verificar valores infinitos
+            if np.isinf(exog_df.values).any():
+                if log_callback:
+                    log_callback("ERROR: Variables exogenas contienen valores infinitos")
+                return False
+            
+            # 4. Verificar que hay varianza en las variables
+            zero_variance_vars = []
+            for col in exog_df.columns:
+                if exog_df[col].std() == 0:
+                    zero_variance_vars.append(col)
+            
+            if zero_variance_vars:
+                if log_callback:
+                    log_callback("ADVERTENCIA: Variables con varianza cero:")
+                    for var in zero_variance_vars:
+                        log_callback(f"  - {var}")
+                    log_callback("Estas variables no aportan informacion al modelo")
+                # No rechazar por esto, solo advertir
+            
+            if log_callback:
+                log_callback("✓ Cobertura temporal y calidad de datos OK")
+                log_callback("=" * 60)
+            
+            return True
+            
+        except Exception as e:
+            if log_callback:
+                log_callback(f"ERROR durante diagnostico: {e}")
+            return False
+    
+    def _get_correlation_for_var(self, var_code: str, regional_code: str) -> float:
+        """
+        Obtener correlación documentada de una variable específica
+        ACTUALIZADO con correlaciones REALES de OptimizationService
+        
+        Args:
+            var_code: Código de la variable (ej: 'realfeel_min')
+            regional_code: Código de la regional (ej: 'SAIDI_O')
+        
+        Returns:
+            float: Correlación documentada o 0.0 si no existe
+        """
+        # Correlaciones REALES documentadas por regional
+        correlations = {
+            'SAIDI_O': {  # Ocaña
+                'realfeel_min': 0.689,              # *** FUERTE
+                'windchill_avg': 0.520,             # ** MODERADA-FUERTE
+                'dewpoint_avg': 0.470,              # ** MODERADA-FUERTE
+                'windchill_max': 0.464,             # ** MODERADA-FUERTE
+                'dewpoint_min': 0.456,              # ** MODERADA-FUERTE
+                'precipitation_max_daily': 0.452,
+                'precipitation_avg_daily': 0.438,
+            },
+            
+            'SAIDI_C': {  # Cúcuta
+                'realfeel_avg': 0.573,              # ** MODERADA-FUERTE
+                'pressure_rel_avg': -0.358,         # Negativa
+                'wind_speed_max': 0.356,
+                'pressure_abs_avg': -0.356,         # Negativa
+            },
+            
+            'SAIDI_T': {  # Tibú
+                'realfeel_avg': 0.906,              # *** MUY FUERTE
+                'wind_dir_avg': -0.400,             # Negativa
+                'uv_index_avg': 0.385,
+                'heat_index_avg': 0.363,
+                'temperature_min': 0.352,
+                'windchill_min': 0.340,
+                'temperature_avg': 0.338,
+                'pressure_rel_avg': -0.330,         # Negativa
+            },
+            
+            'SAIDI_A': {  # Aguachica
+                'uv_index_max': 0.664,              # *** FUERTE
+                'days_with_rain': 0.535,            # ** MODERADA-FUERTE
+            },
+            
+            'SAIDI_P': {  # Pamplona
+                'precipitation_total': 0.577,       # ** MODERADA-FUERTE
+                'precipitation_avg_daily': 0.552,
+                'realfeel_min': 0.344,
+            },
+        }
+        
+        # Buscar correlación específica
+        if regional_code in correlations and var_code in correlations[regional_code]:
+            return correlations[regional_code][var_code]
+        
+        return 0.0

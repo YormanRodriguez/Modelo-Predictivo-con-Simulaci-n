@@ -499,7 +499,32 @@ class AppController(QObject):
 
     def _on_simulation_configured(self, simulation_config, regional_code, climate_data):
         """Callback cuando el usuario configura la simulación"""
-        # Ejecutar predicción con la configuración
+        
+        # VERIFICAR que simulation_config tenga la estructura correcta:
+        # {
+        #     'enabled': True,
+        #     'scenario_name': 'calor_extremo', 
+        #     'intensity_adjustment': 1.2,       
+        #     'alcance_meses': 3,
+        #     'percentiles': {...},
+        #     'regional_code': 'SAIDI_O',
+        #     'summary': {...}
+        # }
+        
+        # Si el diálogo aún envía la estructura antigua, convertirla:
+        if 'escenario' in simulation_config and 'scenario_name' not in simulation_config:
+            # CONVERSIÓN DE FORMATO ANTIGUO A NUEVO
+            simulation_config['scenario_name'] = simulation_config.pop('escenario')
+        
+        if 'slider_adjustment' in simulation_config and 'dias_base' in simulation_config:
+            # Calcular intensity_adjustment desde parámetros antiguos
+            slider_adj = simulation_config.pop('slider_adjustment')
+            dias_base = simulation_config.pop('dias_base')
+            
+            dias_simulados = dias_base + slider_adj
+            simulation_config['intensity_adjustment'] = dias_simulados / dias_base if dias_base > 0 else 1.0
+        
+        # Ejecutar predicción con configuración actualizada
         self._execute_prediction(regional_code, climate_data, simulation_config)
 
     def _execute_prediction(self, regional_code, climate_data, simulation_config):

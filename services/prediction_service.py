@@ -27,12 +27,12 @@ class PredictionService:
 
     # Mapeo de regionales a sus transformaciones optimas
     REGIONAL_TRANSFORMATIONS = {
-        "SAIDI_O": "original",  # Ocana - Box-Cox
-        "SAIDI_C": "original",  # Cucuta - Original
-        "SAIDI_A": "original",  # Aguachica - Original
-        "SAIDI_P": "boxcox",  # Pamplona - Box-Cox
-        "SAIDI_T": "sqrt",  # Tibu - Sqrt
-        "SAIDI_Cens": "original",  # Cens - Original
+        "SAIDI_O": "original",
+        "SAIDI_C": "original",
+        "SAIDI_A": "original",
+        "SAIDI_P": "boxcox",
+        "SAIDI_T": "sqrt",
+        "SAIDI_Cens": "original",
     }
 
     REGIONAL_ORDERS = {
@@ -771,12 +771,12 @@ class PredictionService:
             regional_code = simulation_config["regional_code"]
 
             # Aplicar simulacion a valores SIN ESCALAR
+            dias_simulados = dias_base + slider_adjustment
+            intensity_adjustment = dias_simulados / dias_base if dias_base > 0 else 1.0
             exog_simulated = self.simulation_service.apply_simulation(
                 exog_forecast=exog_forecast_original,
-                escenario=escenario,
-                slider_adjustment=slider_adjustment,
-                dias_base=dias_base,
-                alcance_meses=alcance_meses,
+                scenario_name=escenario,  
+                intensity_adjustment=intensity_adjustment, 
                 percentiles=percentiles,
                 regional_code=regional_code,
             )
