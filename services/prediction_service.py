@@ -857,108 +857,122 @@ class PredictionService:
                 log_callback(f"ERROR: {str(e)}")
             raise Exception(f"Error en prediccion: {str(e)}")
 
+    
     def _apply_climate_simulation(
         self, exog_forecast_original, simulation_config, log_callback=None
     ):
         """
-        Aplicar simulacion climatica a variables SIN ESCALAR
-        Luego escalar el resultado
-
+        Aplicar simulación climática a variables SIN ESCALAR
+        CORREGIDO: Manejo correcto de la estructura de simulation_config
+        
         Args:
-            exog_forecast_original: DataFrame SIN ESCALAR con variables exogenas
-            simulation_config: Configuracion de simulacion
-            log_callback: Funcion para logging
-
+            exog_forecast_original: DataFrame SIN ESCALAR con variables exógenas
+            simulation_config: Dict con configuración de simulación
+            log_callback: Función para logging
+        
         Returns:
-            DataFrame ESCALADO con simulacion aplicada
+            DataFrame con simulación aplicada (sin escalar para SARIMAX)
         """
         try:
+            # Validar que la simulación esté habilitada
             if not simulation_config.get("enabled", False):
-                # Si no hay simulacion, solo escalar y retornar
-                if self.exog_scaler is not None:
-                    return pd.DataFrame(
-                        self.exog_scaler.transform(exog_forecast_original),
-                        index=exog_forecast_original.index,
-                        columns=exog_forecast_original.columns,
-                    )
+                if log_callback:
+                    log_callback("Simulación NO habilitada, usando valores originales")
                 return exog_forecast_original
-
+            
             if log_callback:
-                log_callback("Aplicando simulacion climatica a variables exogenas...")
+                log_callback("=" * 60)
+                log_callback("APLICANDO SIMULACIÓN CLIMÁTICA")
+                log_callback("=" * 60)
                 log_callback("   Entrada: valores originales SIN ESCALAR")
-
-            escenario = simulation_config["escenario"]
-            slider_adjustment = simulation_config["slider_adjustment"]
-            dias_base = simulation_config["dias_base"]
-            alcance_meses = simulation_config["alcance_meses"]
-            percentiles = simulation_config["percentiles"]
-            regional_code = simulation_config["regional_code"]
-
-            # Aplicar simulacion a valores SIN ESCALAR
+            
+            escenario = simulation_config.get("scenario_name", 
+                        simulation_config.get("escenario", "condiciones_normales"))
+            
+            # Extraer configuración del slider
+            slider_adjustment = simulation_config.get("slider_adjustment", 0)
+            dias_base = simulation_config.get("dias_base", 30)
+            alcance_meses = simulation_config.get("alcance_meses", 3)
+            percentiles = simulation_config.get("percentiles", {})
+            regional_code = simulation_config.get("regional_code", "SAIDI_O")
+            
+            # Validar que tengamos los datos necesarios
+            if not percentiles:
+                if log_callback:
+                    log_callback("ERROR: No hay percentiles disponibles para simulación")
+                    log_callback("Usando valores originales sin simulación")
+                return exog_forecast_original
+            
+            if log_callback:
+                log_callback(f"   Escenario: {escenario}")
+                log_callback(f"   Regional: {regional_code}")
+                log_callback(f"   Slider: {slider_adjustment:+d} días sobre base de {dias_base}")
+                log_callback(f"   Alcance: {alcance_meses} mes(es)")
+            
+            # Calcular factor de intensidad
             dias_simulados = dias_base + slider_adjustment
             intensity_adjustment = dias_simulados / dias_base if dias_base > 0 else 1.0
-            exog_simulated = self.simulation_service.apply_simulation(
-                exog_forecast=exog_forecast_original,
-                scenario_name=escenario,  
-                intensity_adjustment=intensity_adjustment, 
-                percentiles=percentiles,
-                regional_code=regional_code,
-            )
-
+            
             if log_callback:
-                log_callback(f"   Simulacion aplicada a {alcance_meses} mes(es)")
-                log_callback(f"   Escenario: {escenario}")
-                log_callback(
-                    f"   Ajuste: {slider_adjustment:+d} dias sobre base de {dias_base}"
+                log_callback(f"   Intensidad calculada: {intensity_adjustment:.2f}x")
+            
+            # ========== APLICAR SIMULACIÓN ==========
+            try:
+                exog_simulated = self.simulation_service.apply_simulation(
+                    exog_forecast=exog_forecast_original,
+                    scenario_name=escenario,
+                    intensity_adjustment=intensity_adjustment,
+                    alcance_meses=alcance_meses,
+                    percentiles=percentiles,
+                    regional_code=regional_code
                 )
-
-                # Mostrar cambios en el primer mes
-                if alcance_meses >= 1:
-                    log_callback("   Cambios en primer mes:")
-                    for col in exog_simulated.columns:
-                        original_val = exog_forecast_original.iloc[0][col]
-                        simulated_val = exog_simulated.iloc[0][col]
-                        change_pct = (
-                            (simulated_val - original_val) / original_val
-                        ) * 100
-                        log_callback(
-                            f"     - {col}: {original_val:.2f} -> {simulated_val:.2f} ({change_pct:+.1f}%)"
-                        )
-
-            # ESCALAR despues de simular
-            if self.exog_scaler is not None:
-                exog_simulated_scaled = pd.DataFrame(
-                    self.exog_scaler.transform(exog_simulated),
-                    index=exog_simulated.index,
-                    columns=exog_simulated.columns,
-                )
-
+                
                 if log_callback:
-                    log_callback("   Variables simuladas escaladas para el modelo")
-                    log_callback("   Salida: valores ESCALADOS listos para prediccion")
-
-                return exog_simulated_scaled
-
-            if log_callback:
-                log_callback(
-                    "   ADVERTENCIA: No hay scaler, retornando simulacion sin escalar"
-                )
-
-            return exog_simulated
-
+                    log_callback("   ✓ Simulación aplicada correctamente")
+                    
+                    # Mostrar cambios en el primer mes
+                    if alcance_meses >= 1 and len(exog_simulated) > 0:
+                        log_callback("\n   📊 Cambios en primer mes:")
+                        for col in exog_simulated.columns:
+                            try:
+                                original_val = exog_forecast_original.iloc[0][col]
+                                simulated_val = exog_simulated.iloc[0][col]
+                                
+                                if original_val != 0:
+                                    change_pct = ((simulated_val - original_val) / original_val) * 100
+                                else:
+                                    change_pct = 0
+                                
+                                log_callback(
+                                    f"     - {col}: {original_val:.2f} → {simulated_val:.2f} "
+                                    f"({change_pct:+.1f}%)"
+                                )
+                            except Exception as e:
+                                log_callback(f"     - {col}: Error mostrando cambio: {e}")
+                    
+                    log_callback("\n   Salida: valores SIMULADOS (escala original)")
+                    log_callback("=" * 60)
+                
+                return exog_simulated
+                
+            except Exception as sim_error:
+                if log_callback:
+                    log_callback(f"ERROR en apply_simulation: {str(sim_error)}")
+                    import traceback
+                    log_callback(traceback.format_exc())
+                
+                # Fallback: retornar valores originales
+                if log_callback:
+                    log_callback("FALLBACK: Usando valores originales sin simulación")
+                return exog_forecast_original
+            
         except Exception as e:
             if log_callback:
-                log_callback(f"ERROR aplicando simulacion: {str(e)}")
+                log_callback(f"ERROR CRÍTICO en _apply_climate_simulation: {str(e)}")
                 import traceback
-
                 log_callback(traceback.format_exc())
-            # En caso de error, solo escalar y retornar sin simulacion
-            if self.exog_scaler is not None:
-                return pd.DataFrame(
-                    self.exog_scaler.transform(exog_forecast_original),
-                    index=exog_forecast_original.index,
-                    columns=exog_forecast_original.columns,
-                )
+            
+            # En caso de error total, retornar valores originales
             return exog_forecast_original
 
     def _prepare_exogenous_variables(
