@@ -660,28 +660,45 @@ class AppController(QObject):
                 climate_data = self.get_climate_data_for_regional(regional_code)
                 self.view.log_message(f"✓ Datos climáticos disponibles para {regional_nombre}")
                 
-                # NUEVO: Si la simulación está habilitada, abrir diálogo
+                # ========== CORREGIDO: Si la simulación está habilitada, abrir diálogo ==========
                 if getattr(self.view, 'enable_simulation_checkbox', None) and \
                 self.view.enable_simulation_checkbox.isChecked():
                     
                     # Obtener mes de validación (último mes histórico)
                     df_prepared = self.model.get_excel_data_for_analysis()
                     if df_prepared is not None and 'Fecha' in df_prepared.columns:
-                        ultimo_mes = pd.to_datetime(df_prepared['Fecha'].iloc[-1]).month
+                        try:
+                            ultimo_mes = pd.to_datetime(df_prepared['Fecha'].iloc[-1]).month
+                        except Exception:
+                            ultimo_mes = datetime.now().month
                     else:
                         ultimo_mes = datetime.now().month
                     
                     self.view.log_message("🌦️ Simulación climática habilitada para validación")
                     self.view.log_message("   Abriendo configurador de escenarios...")
                     
-                    # Abrir diálogo de configuración
-                    dialog = ClimateSimulationDialog(
+                    # ========== USAR EL MISMO FORMATO QUE run_prediction ==========
+                    from dataclasses import dataclass
+                    
+                    @dataclass
+                    class SimulationConfig:
+                        climate_data: any
+                        mes_prediccion: int
+                        regional_code: str
+                        regional_nombre: str
+                        mode: str = "validation"
+                    
+                    # Crear configuración
+                    config = SimulationConfig(
                         climate_data=climate_data,
                         mes_prediccion=ultimo_mes,
                         regional_code=regional_code,
                         regional_nombre=regional_nombre,
-                        parent=self.view
+                        mode="validation"
                     )
+                    
+                    # Abrir diálogo con el MISMO formato que run_prediction
+                    dialog = ClimateSimulationDialog(config, parent=self.view)
                     
                     # Conectar señales
                     dialog.simulation_accepted.connect(

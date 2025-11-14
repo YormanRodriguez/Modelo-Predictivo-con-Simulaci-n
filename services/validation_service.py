@@ -169,38 +169,36 @@ class ValidationService:
             
             # Detectar si hay simulacion
             simulation_applied = simulation_config and simulation_config.get('enabled', False)
-            
+
             if log_callback:
                 log_callback(f"Iniciando validacion con parametros: order={order}, seasonal_order={seasonal_order}")
                 log_callback(f"Regional: {regional_code} - Transformacion: {transformation.upper()}")
                 
                 if simulation_applied:
                     log_callback("=" * 60)
-                    log_callback("VALIDACIÓN CON SIMULACIÓN CLIMÁTICA")
+                    log_callback(" VALIDACIÓN CON SIMULACIÓN CLIMÁTICA")
                     log_callback("=" * 60)
                     
                     summary = simulation_config.get('summary', {})
                     log_callback(f"Escenario: {summary.get('escenario', 'N/A')}")
-                    log_callback(f"Alcance: {summary.get('alcance_meses', 'N/A')} meses")
-                    log_callback(f"Días base: {summary.get('dias_base', 'N/A')}")
-                    log_callback(f"Ajuste: {summary.get('slider_adjustment', 0):+d} días")
+                    log_callback(f"Alcance: {simulation_config.get('alcance_meses', 'N/A')} meses")
+                    log_callback(f"Días base: {simulation_config.get('dias_base', 'N/A')}")
+                    log_callback(f"Ajuste: {simulation_config.get('slider_adjustment', 0):+d} días")
                     log_callback(f"Total días simulados: {summary.get('dias_simulados', 'N/A')}")
                     
                     # Mostrar variables que se modificarán
-                    log_callback("\nVariables a modificar:")
-                    changes = summary.get('percentage_changes', {})
-                    var_names = {
-                        'temp_max': 'Temperatura máxima',
-                        'humedad_avg': 'Humedad relativa',
-                        'precip_total': 'Precipitación total'
-                    }
-                    for var, change_pct in changes.items():
-                        var_name = var_names.get(var, var)
-                        arrow = "↑" if change_pct > 0 else "↓" if change_pct < 0 else "→"
-                        log_callback(f"   {arrow} {var_name}: {change_pct:+.1f}%")
+                    if 'variables_afectadas' in summary:
+                        log_callback("\nVariables climáticas a modificar:")
+                        vars_afectadas = summary['variables_afectadas']
+                        for var_code, var_info in vars_afectadas.items():
+                            change = var_info.get('cambio_porcentual', 0)
+                            arrow = "↑" if change > 0 else "↓" if change < 0 else "→"
+                            log_callback(f"   {arrow} {var_info['nombre']}: {change:+.1f}%")
                     
                     log_callback("")
-                    log_callback("NOTA: Validación bajo condiciones climáticas HIPOTÉTICAS")
+                    log_callback("  NOTA: Validación bajo condiciones climáticas HIPOTÉTICAS")
+                    log_callback("   Las métricas reflejan el comportamiento del modelo")
+                    log_callback("   bajo el escenario simulado, NO el clima real histórico")
                     log_callback("=" * 60)
                 else:
                     log_callback("Modo: Validacion estandar (sin simulacion)")
@@ -344,37 +342,71 @@ class ValidationService:
             # Preparar variables exogenas para entrenamiento y validacion
             exog_train = None
             exog_test = None
-            
+
             if exog_df is not None:
-                exog_train = exog_df.loc[datos_entrenamiento_original.index]
-                
-                # AQUI ESTA LA DIFERENCIA: Si hay simulacion, aplicarla a exog_test
-                if simulation_applied:
-                    if log_callback:
-                        log_callback("Preparando variables exogenas para validacion con simulacion...")
+                try:
+                    # Extraer variables para entrenamiento (sin escalar)
+                    exog_train = exog_df.loc[datos_entrenamiento_original.index]
                     
-                    # Obtener variables SIN ESCALAR para el periodo de validacion
-                    exog_test_original = exog_df.loc[datos_validacion_original.index]
-                    
-                    # Aplicar simulacion (retorna ESCALADO)
-                    exog_test = self._apply_climate_simulation(
-                        exog_test_original, simulation_config, log_callback
-                    )
-                    
-                    if log_callback:
-                        summary = simulation_config.get('summary', {})
-                        log_callback("Simulacion aplicada a periodo de validacion:")
-                        log_callback(f"  - Escenario: {summary.get('escenario', 'N/A')}")
-                        log_callback(f"  - Periodos afectados: {len(exog_test)}")
-                else:
-                    # Sin simulacion: usar directamente
-                    exog_test = exog_df.loc[datos_validacion_original.index]
-                
-                if log_callback:
-                    log_callback(f"Variables exogenas de entrenamiento: {len(exog_train)} periodos")
-                    log_callback(f"Variables exogenas de validacion: {len(exog_test)} periodos")
+                    # ========== NUEVO: Aplicar simulación a periodo de validación ==========
                     if simulation_applied:
-                        log_callback("  (con simulacion climatica aplicada)")
+                        if log_callback:
+                            log_callback("=" * 60)
+                            log_callback("PREPARANDO VALIDACIÓN CON SIMULACIÓN CLIMÁTICA")
+                            log_callback("=" * 60)
+                        
+                        # Obtener variables SIN ESCALAR para el periodo de validación
+                        exog_test_original = exog_df.loc[datos_validacion_original.index]
+                        
+                        if log_callback:
+                            log_callback("Variables de validación ANTES de simulación:")
+                            log_callback(f"  Periodo: {exog_test_original.index[0].strftime('%Y-%m')} a {exog_test_original.index[-1].strftime('%Y-%m')}")
+                            log_callback(f"  Variables: {len(exog_test_original.columns)}")
+                            log_callback(f"  Shape: {exog_test_original.shape}")
+                        
+                        # Aplicar simulación (retorna en escala original)
+                        exog_test = self._apply_climate_simulation(
+                            exog_test_original, simulation_config, log_callback
+                        )
+                        
+                        if log_callback:
+                            summary = simulation_config.get('summary', {})
+                            log_callback("\n✓ Simulación aplicada a periodo de validación:")
+                            log_callback(f"  - Escenario: {summary.get('escenario', 'N/A')}")
+                            log_callback(f"  - Alcance: {simulation_config.get('alcance_meses', 'N/A')} meses")
+                            log_callback(f"  - Días simulados: {summary.get('dias_simulados', 'N/A')}")
+                            log_callback(f"  - Periodos afectados: {len(exog_test)}")
+                            log_callback("=" * 60)
+                    else:
+                        # Sin simulación: usar directamente (sin escalar)
+                        exog_test = exog_df.loc[datos_validacion_original.index]
+                        
+                        if log_callback:
+                            log_callback("Variables de validación SIN simulación (escala original)")
+                    
+                    # Validación de dimensiones
+                    if log_callback:
+                        log_callback("\nVariables exógenas preparadas:")
+                        log_callback(f"  - Entrenamiento: {len(exog_train)} periodos x {exog_train.shape[1]} variables")
+                        log_callback(f"  - Validación: {len(exog_test)} periodos x {exog_test.shape[1]} variables")
+                        if simulation_applied:
+                            log_callback("  - Modo: CON SIMULACIÓN CLIMÁTICA")
+                        else:
+                            log_callback("  - Modo: SIN SIMULACIÓN")
+                        log_callback("  - Escala: ORIGINAL (SARIMAX normaliza internamente)")
+                    
+                except Exception as e:
+                    if log_callback:
+                        log_callback(f"ERROR preparando variables exógenas: {str(e)}")
+                        import traceback
+                        log_callback(traceback.format_exc())
+                    
+                    # Fallback: desactivar exógenas
+                    exog_train = None
+                    exog_test = None
+                    
+                    if log_callback:
+                        log_callback("ADVERTENCIA: Variables exógenas desactivadas por error")
             
             # Entrenar modelo con datos TRANSFORMADOS
             try:
@@ -450,15 +482,17 @@ class ValidationService:
             metricas['composite_score'] = composite_score
             metricas['stability_score'] = stability_score
             metricas['complexity'] = complexity_penalty
-            
+
             if log_callback:
                 log_callback("=" * 60)
                 if simulation_applied:
                     log_callback("METRICAS DE VALIDACION CON SIMULACION CLIMATICA")
                     summary = simulation_config.get('summary', {})
-                    log_callback(f"Escenario: {summary.get('escenario', 'N/A')}")
+                    log_callback(f"Escenario simulado: {summary.get('escenario', 'N/A')}")
+                    log_callback(f"Alcance: {simulation_config.get('alcance_meses', 'N/A')} meses")
                 else:
                     log_callback("METRICAS DEL MODELO (Calculadas como OptimizationService)")
+                
                 log_callback("=" * 60)
                 log_callback(f"RMSE: {metricas['rmse']:.4f} minutos")
                 log_callback(f"MAE: {metricas['mae']:.4f} minutos")
@@ -469,6 +503,7 @@ class ValidationService:
                 log_callback(f"Complejidad del modelo: {complexity_penalty} parametros")
                 log_callback(f"Composite Score: {composite_score:.4f}")
                 
+                # Interpretación de precisión
                 precision = metricas['precision_final']
                 if precision >= 60:
                     interpretacion = "EXCELENTE - Predicciones muy confiables"
@@ -478,19 +513,26 @@ class ValidationService:
                     interpretacion = "ACEPTABLE - Predicciones moderadamente confiables"
                 else:
                     interpretacion = "LIMITADO - Modelo poco confiable"
-                    
+                
                 log_callback(f"INTERPRETACION: {interpretacion}")
                 log_callback(f"Validacion: {pct_validacion*100:.0f}% de datos como test ({n_test} meses)")
                 
                 if simulation_applied:
                     log_callback("")
-                    log_callback("NOTA: Metricas bajo condiciones climaticas simuladas")
-                    log_callback("      Los valores reales pueden diferir si el clima no sigue el escenario")
+                    log_callback(" ADVERTENCIA: Métricas bajo condiciones climáticas SIMULADAS")
+                    log_callback("   Los valores reflejan el desempeño del modelo bajo el escenario:")
+                    log_callback(f"   '{summary.get('escenario', 'N/A')}' con {summary.get('dias_simulados', 'N/A')} días")
+                    log_callback("   Los valores reales pueden DIFERIR significativamente")
+                    log_callback("   si el clima no sigue este patrón hipotético")
                 
                 if exog_info:
                     log_callback("\nVariables exogenas utilizadas en validacion:")
                     for var_code, var_data in exog_info.items():
-                        log_callback(f"  - {var_data['nombre']}")
+                        correlacion_str = f" (r={var_data['correlacion']:.3f})" if var_data.get('correlacion', 0) != 0 else ""
+                        log_callback(f"  - {var_data['nombre']}{correlacion_str}")
+                    
+                    if simulation_applied:
+                        log_callback("Estas variables fueron MODIFICADAS según el escenario simulado")
                 
                 log_callback("=" * 60)
             
@@ -551,89 +593,122 @@ class ValidationService:
                 log_callback(f"ERROR: {str(e)}")
             raise Exception(f"Error en validacion: {str(e)}")
     
-    def _apply_climate_simulation(self, exog_forecast_original, simulation_config, log_callback=None):
+    def _apply_climate_simulation(
+    self, exog_forecast_original, simulation_config, log_callback=None
+    ):
         """
-        Aplicar simulacion climatica a variables SIN ESCALAR (IDENTICO a PredictionService)
-        Luego escalar el resultado
+        Aplicar simulación climática a variables SIN ESCALAR
+        CORREGIDO: Manejo correcto de la estructura de simulation_config
+        IDÉNTICO a PredictionService para consistencia
+        
+        Args:
+            exog_forecast_original: DataFrame SIN ESCALAR con variables exógenas
+            simulation_config: Dict con configuración de simulación
+            log_callback: Función para logging
+        
+        Returns:
+            DataFrame con simulación aplicada (sin escalar para SARIMAX)
         """
         try:
-            if not simulation_config.get('enabled', False):
-                # Si no hay simulacion, solo escalar y retornar
-                if self.exog_scaler is not None:
-                    return pd.DataFrame(
-                        self.exog_scaler.transform(exog_forecast_original),
-                        index=exog_forecast_original.index,
-                        columns=exog_forecast_original.columns
-                    )
+            # Validar que la simulación esté habilitada
+            if not simulation_config.get("enabled", False):
+                if log_callback:
+                    log_callback("Simulación NO habilitada, usando valores originales")
                 return exog_forecast_original
             
             if log_callback:
-                log_callback("Aplicando simulacion climatica a variables exogenas...")
+                log_callback("=" * 60)
+                log_callback("APLICANDO SIMULACIÓN CLIMÁTICA EN VALIDACIÓN")
+                log_callback("=" * 60)
                 log_callback("   Entrada: valores originales SIN ESCALAR")
             
-            escenario = simulation_config['escenario']
-            slider_adjustment = simulation_config['slider_adjustment']
-            dias_base = simulation_config['dias_base']
-            alcance_meses = simulation_config['alcance_meses']
-            percentiles = simulation_config['percentiles']
-            regional_code = simulation_config['regional_code']
+            escenario = simulation_config.get("scenario_name", 
+                        simulation_config.get("escenario", "condiciones_normales"))
             
-            # Aplicar simulacion a valores SIN ESCALAR
-            exog_simulated = self.simulation_service.apply_simulation(
-                exog_forecast=exog_forecast_original,
-                escenario=escenario,
-                slider_adjustment=slider_adjustment,
-                dias_base=dias_base,
-                alcance_meses=alcance_meses,
-                percentiles=percentiles,
-                regional_code=regional_code
-            )
+            # Extraer configuración del slider
+            slider_adjustment = simulation_config.get("slider_adjustment", 0)
+            dias_base = simulation_config.get("dias_base", 30)
+            alcance_meses = simulation_config.get("alcance_meses", 3)
+            percentiles = simulation_config.get("percentiles", {})
+            regional_code = simulation_config.get("regional_code", "SAIDI_O")
+            
+            # Validar que tengamos los datos necesarios
+            if not percentiles:
+                if log_callback:
+                    log_callback("ERROR: No hay percentiles disponibles para simulación")
+                    log_callback("Usando valores originales sin simulación")
+                return exog_forecast_original
             
             if log_callback:
-                log_callback(f"   Simulacion aplicada a {alcance_meses} mes(es)")
                 log_callback(f"   Escenario: {escenario}")
-                log_callback(f"   Ajuste: {slider_adjustment:+d} dias sobre base de {dias_base}")
-                
-                # Mostrar cambios en el primer mes
-                if alcance_meses >= 1:
-                    log_callback("   Cambios en primer mes:")
-                    for col in exog_simulated.columns:
-                        original_val = exog_forecast_original.iloc[0][col]
-                        simulated_val = exog_simulated.iloc[0][col]
-                        change_pct = ((simulated_val - original_val) / original_val) * 100
-                        log_callback(f"     - {col}: {original_val:.2f} -> {simulated_val:.2f} ({change_pct:+.1f}%)")
+                log_callback(f"   Regional: {regional_code}")
+                log_callback(f"   Slider: {slider_adjustment:+d} días sobre base de {dias_base}")
+                log_callback(f"   Alcance: {alcance_meses} mes(es)")
             
-            # ESCALAR despues de simular
-            if self.exog_scaler is not None:
-                exog_simulated_scaled = pd.DataFrame(
-                    self.exog_scaler.transform(exog_simulated),
-                    index=exog_simulated.index,
-                    columns=exog_simulated.columns
+            # Calcular factor de intensidad
+            dias_simulados = dias_base + slider_adjustment
+            intensity_adjustment = dias_simulados / dias_base if dias_base > 0 else 1.0
+            
+            if log_callback:
+                log_callback(f"   Intensidad calculada: {intensity_adjustment:.2f}x")
+            
+            # ========== APLICAR SIMULACIÓN ==========
+            try:
+                exog_simulated = self.simulation_service.apply_simulation(
+                    exog_forecast=exog_forecast_original,
+                    scenario_name=escenario,
+                    intensity_adjustment=intensity_adjustment,
+                    alcance_meses=alcance_meses,
+                    percentiles=percentiles,
+                    regional_code=regional_code
                 )
                 
                 if log_callback:
-                    log_callback("   Variables simuladas escaladas para el modelo")
-                    log_callback("   Salida: valores ESCALADOS listos para validacion")
+                    log_callback("   ✓ Simulación aplicada correctamente en validación")
+                    
+                    # Mostrar cambios en el primer mes
+                    if alcance_meses >= 1 and len(exog_simulated) > 0:
+                        log_callback("\n   📊 Cambios en primer mes (validación):")
+                        for col in exog_simulated.columns:
+                            try:
+                                original_val = exog_forecast_original.iloc[0][col]
+                                simulated_val = exog_simulated.iloc[0][col]
+                                
+                                if original_val != 0:
+                                    change_pct = ((simulated_val - original_val) / original_val) * 100
+                                else:
+                                    change_pct = 0
+                                
+                                log_callback(
+                                    f"     - {col}: {original_val:.2f} → {simulated_val:.2f} "
+                                    f"({change_pct:+.1f}%)"
+                                )
+                            except Exception as e:
+                                log_callback(f"     - {col}: Error mostrando cambio: {e}")
+                    
+                    log_callback("\n   Salida: valores SIMULADOS (escala original)")
+                    log_callback("=" * 60)
                 
-                return exog_simulated_scaled
-            
-            if log_callback:
-                log_callback("   ADVERTENCIA: No hay scaler, retornando simulacion sin escalar")
-            
-            return exog_simulated
+                return exog_simulated
+                
+            except Exception as sim_error:
+                if log_callback:
+                    log_callback(f"ERROR en apply_simulation: {str(sim_error)}")
+                    import traceback
+                    log_callback(traceback.format_exc())
+                
+                # Fallback: retornar valores originales
+                if log_callback:
+                    log_callback("FALLBACK: Usando valores originales sin simulación")
+                return exog_forecast_original
             
         except Exception as e:
             if log_callback:
-                log_callback(f"ERROR aplicando simulacion: {str(e)}")
+                log_callback(f"ERROR CRÍTICO en _apply_climate_simulation: {str(e)}")
                 import traceback
                 log_callback(traceback.format_exc())
-            # En caso de error, solo escalar y retornar sin simulacion
-            if self.exog_scaler is not None:
-                return pd.DataFrame(
-                    self.exog_scaler.transform(exog_forecast_original),
-                    index=exog_forecast_original.index,
-                    columns=exog_forecast_original.columns
-                )
+            
+            # En caso de error total, retornar valores originales
             return exog_forecast_original
     
     def _get_transformation_for_regional(self, regional_code: Optional[str]) -> str:
@@ -1075,20 +1150,20 @@ class ValidationService:
             return 0.0
     
     def _generar_grafica_validacion(self, 
-                                   datos_entrenamiento: pd.Series, 
-                                   datos_validacion: pd.Series, 
-                                   predicciones_validacion: pd.Series,
-                                   col_saidi: str, 
-                                   order: Tuple, 
-                                   seasonal_order: Tuple, 
-                                   metricas: Dict, 
-                                   pct_validacion: float,
-                                   transformation: str,
-                                   exog_info: Optional[Dict] = None,
-                                   simulation_config: Optional[Dict] = None) -> Optional[str]:
+                               datos_entrenamiento: pd.Series, 
+                               datos_validacion: pd.Series, 
+                               predicciones_validacion: pd.Series,
+                               col_saidi: str, 
+                               order: Tuple, 
+                               seasonal_order: Tuple, 
+                               metricas: Dict, 
+                               pct_validacion: float,
+                               transformation: str,
+                               exog_info: Optional[Dict] = None,
+                               simulation_config: Optional[Dict] = None) -> Optional[str]:
         """
-        Generar grafica de validacion con metricas alineadas y soporte para simulacion
-        """
+        Generar grafica de validacion con metricas alineadas y soporte COMPLETO para simulacion
+        ACTUALIZADO: Incluye visualización diferenciada para escenarios climáticos simulado"""
         try:
             if datos_entrenamiento.empty or datos_validacion.empty or predicciones_validacion.empty:
                 return None
@@ -1121,21 +1196,30 @@ class ValidationService:
                     label=f"Datos Reales de Validacion ({int(pct_validacion*100)}% - {len(datos_validacion)} obs.)", 
                     color="navy", linewidth=3, linestyle=':', marker='s', markersize=7)
             
-            # Predicciones del modelo con etiqueta segun simulacion
+            # ========== PREDICCIONES CON ETIQUETA SEGÚN SIMULACIÓN ==========
             if simulation_applied:
                 summary = simulation_config.get('summary', {})
-                exog_label = f" [SIMULADO: {summary.get('escenario', 'N/A')}]"
+                escenario_icon = "🌡️"
+                escenario_name = summary.get('escenario', 'N/A')
+                exog_label = f" [{escenario_icon} SIMULADO: {escenario_name}]"
                 pred_color = "red"
+                pred_linestyle = "-"
+                pred_linewidth = 3.5
             elif exog_info:
                 exog_label = " [+EXOG]"
                 pred_color = "orange"
+                pred_linestyle = "-"
+                pred_linewidth = 3
             else:
                 exog_label = ""
                 pred_color = "orange"
+                pred_linestyle = "-"
+                pred_linewidth = 3
             
             plt.plot(fechas_validacion_extendidas, valores_prediccion_extendidos, 
                     label=f"Predicciones del Modelo ({transformation.upper()}){exog_label}", 
-                    color=pred_color, linewidth=3, marker='^', markersize=7, zorder=5)
+                    color=pred_color, linewidth=pred_linewidth, linestyle=pred_linestyle,
+                    marker='^', markersize=7, zorder=5)
             
             # Etiquetas de valores - datos de entrenamiento
             for x, y in zip(datos_entrenamiento.index, datos_entrenamiento.values):
@@ -1170,7 +1254,7 @@ class ValidationService:
                         ha='center', va='center', color='gray', fontsize=10, weight='bold',
                         bbox=dict(boxstyle='round,pad=0.3', facecolor='lightgray', alpha=0.9, edgecolor='gray'))
             
-            # Cuadro de metricas 
+            # ========== CUADRO DE METRICAS ==========
             info_metricas = (f"METRICAS VALIDACION\n"
                             f"RMSE: {metricas['rmse']:.3f} | MAE: {metricas['mae']:.3f}\n"
                             f"MAPE: {metricas['mape']:.1f}% | R2: {metricas['r2_score']:.3f}\n"
@@ -1180,29 +1264,29 @@ class ValidationService:
                     fontsize=10, verticalalignment='top', 
                     bbox=dict(boxstyle='round,pad=0.5', facecolor='lightblue', alpha=0.9, edgecolor='navy'))
             
-            # Cuadro de estabilidad y complejidad
+            # ========== CUADRO DE ESTABILIDAD Y COMPLEJIDAD ==========
             stability = metricas.get('stability_score', 0)
             complexity = metricas.get('complexity', 0)
             composite = metricas.get('composite_score', 0)
             
             info_estabilidad = (f"ESTABILIDAD & COMPLEJIDAD\n"
-                               f"Stability Score: {stability:.1f}/100\n"
-                               f"Complejidad: {complexity} params\n"
-                               f"Composite Score: {composite:.3f}")
+                            f"Stability Score: {stability:.1f}/100\n"
+                            f"Complejidad: {complexity} params\n"
+                            f"Composite Score: {composite:.3f}")
             
             plt.text(0.01, 0.09, info_estabilidad, transform=plt.gca().transAxes, 
                     fontsize=9, verticalalignment='top',
                     bbox=dict(boxstyle='round,pad=0.4', facecolor='wheat', alpha=0.9, edgecolor='orange'))
             
-            # Cuadro de parametros del modelo con info de simulacion
+            # ========== CUADRO DE PARAMETROS DEL MODELO ==========
             info_parametros = (f"PARAMETROS + {transformation.upper()}\n"
-                              f"order = {order} | seasonal = {seasonal_order}\n"
-                              f"Train: {len(datos_entrenamiento)} | Valid: {len(datos_validacion)}")
+                            f"order = {order} | seasonal = {seasonal_order}\n"
+                            f"Train: {len(datos_entrenamiento)} | Valid: {len(datos_validacion)}")
             
             if simulation_applied:
                 summary = simulation_config.get('summary', {})
-                info_parametros += f"\nSIMULACION: {summary.get('escenario', 'N/A')}"
-                info_parametros += f"\nAlcance: {summary.get('alcance_meses', 'N/A')} meses"
+                info_parametros += f"\n🌡️ SIMULACION: {summary.get('escenario', 'N/A')}"
+                info_parametros += f"\nAlcance: {simulation_config.get('alcance_meses', 'N/A')} meses"
             elif exog_info:
                 info_parametros += f"\nVariables exogenas: {len(exog_info)}"
             
@@ -1210,7 +1294,26 @@ class ValidationService:
                     fontsize=9, verticalalignment='top', horizontalalignment='right',
                     bbox=dict(boxstyle='round,pad=0.4', facecolor='lightgreen', alpha=0.9, edgecolor='green'))
             
-            # Indicador de calidad 
+            # ========== NUEVO: CUADRO DE INFORMACIÓN DE SIMULACIÓN ==========
+            if simulation_applied:
+                summary = simulation_config.get('summary', {})
+                escenario = summary.get('escenario', 'N/A')
+                dias_simulados = summary.get('dias_simulados', 'N/A')
+                alcance = simulation_config.get('alcance_meses', 'N/A')
+                
+                info_simulacion = (f"🌡️ SIMULACIÓN CLIMÁTICA\n"
+                                f"Escenario: {escenario}\n"
+                                f"Días simulados: {dias_simulados}\n"
+                                f"Alcance: {alcance} mes(es)\n"
+                                f"⚠️ Condiciones HIPOTÉTICAS")
+                
+                plt.text(0.985, 0.30, info_simulacion, transform=plt.gca().transAxes, 
+                        fontsize=9, verticalalignment='top', horizontalalignment='right',
+                        bbox=dict(boxstyle='round,pad=0.5', facecolor='#FFEBEE', alpha=0.95, 
+                                edgecolor='#F44336', linewidth=2),
+                        color='darkred', weight='bold')
+            
+            # ========== INDICADOR DE CALIDAD ==========
             precision = metricas['precision_final']
             if precision >= 60:
                 interpretacion = "EXCELENTE"
@@ -1235,7 +1338,7 @@ class ValidationService:
                     bbox=dict(boxstyle='round,pad=0.5', facecolor=color_interp, alpha=0.8, edgecolor='black'),
                     color='black')
             
-            # Configurar ejes
+            # ========== CONFIGURAR EJES ==========
             ax = plt.gca()
             
             if not datos_entrenamiento.empty and not datos_validacion.empty:
@@ -1275,13 +1378,13 @@ class ValidationService:
                 ax.set_xticks(fechas_mensuales)
                 ax.set_xticklabels(labels_mensuales, rotation=45, ha='right', fontsize=9)
             
-            # Titulo con info de simulacion
-            # Titulo con info de simulacion
+            # ========== TITULO CON INFO DE SIMULACION ==========
             title_text = f"Validacion Modelo: SARIMAX{order}x{seasonal_order} + {transformation.upper()}"
+            
             if simulation_applied:
                 summary = simulation_config.get('summary', {})
                 escenario_name = summary.get('escenario', 'N/A').upper()
-                title_text += f" [ SIMULACIÓN: {escenario_name}]"
+                title_text += f" [🌡️ SIMULACIÓN: {escenario_name}]"
             elif exog_info:
                 title_text += " [+EXOG]"
             
@@ -1291,38 +1394,41 @@ class ValidationService:
             plt.ylabel("SAIDI (minutos)", fontsize=14, weight='bold')
             
             plt.legend(fontsize=11, loc='upper center', bbox_to_anchor=(0.25, -0.08), 
-                      ncol=2, frameon=True, shadow=True, fancybox=True)
+                    ncol=2, frameon=True, shadow=True, fancybox=True)
             
             plt.grid(True, alpha=0.4, linestyle='-', linewidth=0.8)
             
             plt.tight_layout()
             plt.subplots_adjust(top=0.93, bottom=0.35, left=0.038, right=0.787)
             
-            # Nota al pie 
+            # ========== NOTA AL PIE CON INFO DE SIMULACION ==========
             footer_text = f"Transformacion: {transformation.upper()} - Precision calculada como OptimizationService"
             footer_color = 'lightyellow'
             footer_edge_color = 'darkblue'
             footer_text_color = 'darkblue'
+            footer_linewidth = 1
             
             if simulation_applied:
                 summary = simulation_config.get('summary', {})
                 escenario = summary.get('escenario', 'N/A').upper()
                 dias = summary.get('dias_simulados', 'N/A')
+                alcance = simulation_config.get('alcance_meses', 'N/A')
                 
-                footer_text = f"  VALIDACIÓN CON SIMULACIÓN CLIMÁTICA - Escenario: {escenario} ({dias} días)"
-                footer_text += " | Métricas bajo condiciones HIPOTÉTICAS"
+                footer_text = f"🌡️ VALIDACIÓN CON SIMULACIÓN CLIMÁTICA - Escenario: {escenario} ({dias} días, {alcance} meses)"
+                footer_text += " | Métricas bajo condiciones HIPOTÉTICAS simuladas"
                 footer_color = '#FFEBEE'
                 footer_edge_color = '#F44336'
                 footer_text_color = 'darkred'
+                footer_linewidth = 2
             elif exog_info:
                 footer_text += f" - Con {len(exog_info)} variables exogenas"
             
             footer_text += f" - Validacion: {metricas['validation_pct']:.0f}% test"
             
             plt.figtext(0.5, 0.02, footer_text, 
-                       ha='center', fontsize=12, style='italic', color=footer_text_color, weight='bold',
-                       bbox=dict(boxstyle='round,pad=0.4', facecolor=footer_color, alpha=0.8, 
-                                edgecolor=footer_edge_color, linewidth=2 if simulation_applied else 1))
+                    ha='center', fontsize=12, style='italic', color=footer_text_color, weight='bold',
+                    bbox=dict(boxstyle='round,pad=0.4', facecolor=footer_color, alpha=0.9, 
+                                edgecolor=footer_edge_color, linewidth=footer_linewidth))
             
             plt.savefig(plot_path, dpi=100, bbox_inches='tight', facecolor='white', edgecolor='none')
             plt.close(fig)
