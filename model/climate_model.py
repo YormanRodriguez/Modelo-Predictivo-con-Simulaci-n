@@ -125,7 +125,14 @@ class ClimateModel(QObject):
         self._climate_info = {}  # Diccionario: regional_code -> info
 
     def load_climate_file(self, regional_code: str, file_path: str) -> bool:
-        """Cargar archivo climático mensual para una regional específica Soporta CSV y Excel (.xlsx, .xls). Args: regional_code: Código de regional (SAIDI_C, SAIDI_O, etc.), file_path: Ruta del archivo CSV o Excel."""
+        """
+        Cargar archivo climático mensual para una regional específica Soporta CSV y Excel (.xlsx, .xls).
+
+        Args:
+        regional_code: Código de regional (SAIDI_C, SAIDI_O, etc.),
+        file_path: Ruta del archivo CSV o Excel.
+
+        """
         try:
             # Validaciones iniciales
             if not self._validate_initial_conditions(regional_code, file_path):
@@ -300,7 +307,7 @@ class ClimateModel(QObject):
         return {"valid": True}
 
     def _process_climate_data(self, df: pd.DataFrame, regional_code: str) -> pd.DataFrame | None:
-        """Procesar y limpiar datos climáticos mensuales. VERSIÓN CORREGIDA: Extrae TODAS las variables definidas en CLIMATE_COLUMNS."""
+        """Procesar y limpiar datos climáticos mensuales."""
         try:
             df_clean = df.copy()
 
@@ -680,7 +687,12 @@ class ClimateModel(QObject):
         print("\n" + "="*80)
 
     def get_compatibility_summary(self) -> dict[str, Any]:
-        """Obtener resumen de compatibilidad de todas las regionales cargadas Returns: Dict con resumen general de compatibilidad."""
+        """
+        Obtener resumen de compatibilidad de todas las regionales cargadas.
+
+        Returns: Dict con resumen general de compatibilidad.
+
+        """
         summary = {
             "regionales": {},
             "overall_stats": {
@@ -721,7 +733,16 @@ class ClimateModel(QObject):
         return summary
 
     def export_compatibility_report(self, output_path: str = "climate_compatibility_report.txt") -> bool:
-        """Exportar reporte de compatibilidad a archivo de texto Args: output_path: Ruta del archivo de salida. Returns:True si se exportó exitosamente."""
+        """
+        Exportar reporte de compatibilidad a archivo de texto.
+
+        Args:
+            output_path: Ruta del archivo de salida.
+
+        Returns:
+            True si se exportó exitosamente.
+
+        """
         try:
             with Path(output_path).open("w", encoding="utf-8") as f:  # ✓ Path.open()
                 f.write("="*80 + "\n")
