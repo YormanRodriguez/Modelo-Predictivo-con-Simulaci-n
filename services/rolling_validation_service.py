@@ -199,18 +199,16 @@ class RollingValidationService:
             return self.default_order, self.default_seasonal_order
     
     def run_comprehensive_validation(self,
-                                     file_path: Optional[str] = None,
-                                     df_prepared: Optional[pd.DataFrame] = None,
-                                     order: Optional[Tuple] = None,
-                                     seasonal_order: Optional[Tuple] = None,
-                                     regional_code: Optional[str] = None,
-                                     climate_data: Optional[pd.DataFrame] = None,
-                                     validation_months: int = 6,
-                                     progress_callback=None,
-                                     log_callback=None) -> Dict[str, Any]:
-        """
-        Ejecutar análisis completo de validación temporal
-        """
+                                 file_path: Optional[str] = None,
+                                 df_prepared: Optional[pd.DataFrame] = None,
+                                 order: Optional[Tuple] = None,
+                                 seasonal_order: Optional[Tuple] = None,
+                                 regional_code: Optional[str] = None,
+                                 climate_data: Optional[pd.DataFrame] = None,
+                                 validation_months: int = 6,
+                                 progress_callback=None,
+                                 log_callback=None) -> Dict[str, Any]:
+        """Ejecutar análisis completo de validación temporal."""
         try:
             if order is None or seasonal_order is None:
                 order_regional, seasonal_regional = self._get_orders_for_regional(regional_code)
@@ -266,7 +264,7 @@ class RollingValidationService:
                 log_callback(f"Datos preparados: {len(data_original)} observaciones")
                 log_callback(f"Transformación aplicada: {transform_info}")
             
-            # 1️ ROLLING FORECAST
+            # ROLLING FORECAST
             if progress_callback:
                 progress_callback(10, "Ejecutando Rolling Forecast...")
             
@@ -276,7 +274,7 @@ class RollingValidationService:
                 validation_months, progress_callback, log_callback
             )
             
-            # 2️ TIME SERIES CROSS-VALIDATION
+            # 2TIME SERIES CROSS-VALIDATION
             if progress_callback:
                 progress_callback(40, "Ejecutando Time Series CV...")
             
@@ -286,7 +284,7 @@ class RollingValidationService:
                 progress_callback, log_callback
             )
             
-            # 3️ ANÁLISIS DE ESTABILIDAD DE PARÁMETROS
+            # ANÁLISIS DE ESTABILIDAD DE PARÁMETROS
             if progress_callback:
                 progress_callback(60, "Analizando estabilidad de parámetros...")
             
@@ -296,7 +294,7 @@ class RollingValidationService:
                 progress_callback, log_callback
             )
             
-            # 4️ BACKTESTING MULTI-HORIZONTE
+            # BACKTESTING MULTI-HORIZONTE
             if progress_callback:
                 progress_callback(80, "Ejecutando backtesting...")
             
@@ -306,20 +304,9 @@ class RollingValidationService:
                 progress_callback, log_callback
             )
 
-            # 5️ PRECISIÓN SPLIT ÚNICO (Comparable con prediction_service)
-            if progress_callback:
-                progress_callback(85, "Calculando precisión comparable...")
-            
-            split_precision = self._calcular_precision_split_unico(
-                data_original, data_transformed_series, exog_df,
-                order, seasonal_order, transformation,
-                log_callback
-            )
-            
-            # DIAGNÓSTICO FINAL
+            # DIAGNÓSTICO FINAL (sin split_precision)
             final_diagnosis = self._generate_final_diagnosis(
-                rolling_results, cv_results, param_stability, backtesting_results,
-                split_precision  
+                rolling_results, cv_results, param_stability, backtesting_results
             )
             
             if progress_callback:
@@ -341,11 +328,8 @@ class RollingValidationService:
                 log_callback(f"Calidad del Modelo: {final_diagnosis['model_quality']}")
                 log_callback(f"Nivel de Confianza: {final_diagnosis['confidence_level']:.1f}%")
                 log_callback(f"Recomendación: {final_diagnosis['recommendation']}")
-                log_callback("\nCOMPARACIÓN DE PRECISIONES:")
-                log_callback(f"Precisión Rolling Forecast: {rolling_results['precision']:.1f}% (validación temporal estricta)")
-                log_callback(f"Precisión Split Único: {split_precision['precision']:.1f}% (comparable con Predicción)")
-                log_callback("La precisión rolling es más conservadora y robusta")
-                log_callback("La precisión split único es la referencia del servicio de predicción")
+                log_callback(f"\nPrecisión Rolling Forecast: {rolling_results['precision']:.1f}%")
+                log_callback("(Validación temporal walk-forward - Gold standard)")
                 
                 if final_diagnosis['limitations']:
                     log_callback("\nLimitaciones identificadas:")
@@ -387,9 +371,7 @@ class RollingValidationService:
                             validation_months: int,
                             progress_callback=None,
                             log_callback=None) -> Dict[str, Any]:
-        """
-        Implementar Rolling Forecast (Walk-Forward Validation)
-        """
+        """Implementar Rolling Forecast (Walk-Forward Validation)."""
         if log_callback:
             log_callback("\n ROLLING FORECAST - Walk-Forward Validation")
             log_callback(f"Validando últimos {validation_months} meses")
@@ -1009,171 +991,19 @@ class RollingValidationService:
             'backtest_points': len(backtest_points)
         }
 
-    def _calcular_precision_split_unico(self,
-                                    data_original: pd.Series,
-                                    data_transformed: pd.Series,
-                                    exog_df: Optional[pd.DataFrame],
-                                    order: Tuple,
-                                    seasonal_order: Tuple,
-                                    transformation: str,
-                                    log_callback=None) -> Dict[str, Any]:
-        """
-        Calcular precisión con split único train/test (comparable con prediction_service)
-        
-        Usa el MISMO método que prediction_service._calcular_metricas_modelo()
-        para obtener una métrica de precisión comparable.
-        
-        
-        Returns:
-            dict con: precision, mape, rmse, mae, r2_score
-        """
-        try:
-            # Determinar porcentaje de validación (igual que prediction_service)
-            if len(data_original) >= 60:
-                pct_validacion = 0.30
-            elif len(data_original) >= 36:
-                pct_validacion = 0.25
-            else:
-                pct_validacion = 0.20
-            
-            n_test = max(6, int(len(data_original) * pct_validacion))
-            
-            # Split train/test
-            train_original = data_original[:-n_test]
-            test_original = data_original[-n_test:]
-            
-            train_transformed = data_transformed[:-n_test]
-            
-            # Preparar exógenas SIN ESCALAR
-            exog_train = None
-            exog_test = None
-            
-            if exog_df is not None:
-                if hasattr(self, 'exog_scaler') and self.exog_scaler is not None:
-                    # Si existe scaler pero NO se aplicó transform, está OK
-                    if log_callback:
-                        log_callback("   ✓ Variables exógenas verificadas: SIN ESCALAR")
-                
-                try:
-                    # Extraer subconjuntos con validación estricta
-                    train_index = train_original.index
-                    test_index = test_original.index
-                    
-                    # Verificar que todas las fechas existen
-                    missing_train = [idx for idx in train_index if idx not in exog_df.index]
-                    missing_test = [idx for idx in test_index if idx not in exog_df.index]
-                    
-                    if missing_train or missing_test:
-                        if log_callback:
-                            log_callback(f"    Faltan fechas en exógenas: {len(missing_train)} train, {len(missing_test)} test")
-                        return {'precision': 0.0, 'mape': 100.0, 'rmse': 0.0, 'mae': 0.0, 'r2_score': 0.0}
-                    
-                    # Extraer con .loc para garantizar alineación
-                    exog_train = exog_df.loc[train_index].copy()
-                    exog_test = exog_df.loc[test_index].copy()
-                    
-                    # Verificar dimensiones
-                    if len(exog_train) != len(train_original) or len(exog_test) != n_test:
-                        if log_callback:
-                            log_callback("    Dimensiones incorrectas en exógenas")
-                        return {'precision': 0.0, 'mape': 100.0, 'rmse': 0.0, 'mae': 0.0, 'r2_score': 0.0}
-                    
-                    # Verificar NaN
-                    if exog_train.isnull().any().any() or exog_test.isnull().any().any():
-                        if log_callback:
-                            log_callback("    NaN detectados en exógenas")
-                        return {'precision': 0.0, 'mape': 100.0, 'rmse': 0.0, 'mae': 0.0, 'r2_score': 0.0}
-                    
-                except Exception as e:
-                    if log_callback:
-                        log_callback(f"    Error preparando exógenas: {e}")
-                    return {'precision': 0.0, 'mape': 100.0, 'rmse': 0.0, 'mae': 0.0, 'r2_score': 0.0}
-            
-            # Entrenar modelo con exógenas SIN ESCALAR
-            model = SARIMAX(
-                train_transformed,
-                exog=exog_train,  # EN ESCALA ORIGINAL
-                order=order,
-                seasonal_order=seasonal_order,
-                enforce_stationarity=False,
-                enforce_invertibility=False
-            )
-            results = model.fit(
-                disp=False,
-                method='lbfgs',
-                maxiter=100,
-                low_memory=True
-            )
-            
-            # Predicción
-            pred = results.get_forecast(steps=n_test, exog=exog_test)
-            pred_mean_transformed = pred.predicted_mean.values
-            
-            # Revertir transformación
-            pred_mean_original = self._inverse_transformation(
-                pred_mean_transformed, transformation
-            )
-            
-            # Calcular métricas EN ESCALA ORIGINAL
-            test_values = test_original.values
-            pred_values = pred_mean_original
-            
-            rmse = np.sqrt(mean_squared_error(test_values, pred_values))
-            mae = np.mean(np.abs(test_values - pred_values))
-            
-            epsilon = 1e-8
-            mape = np.mean(np.abs((test_values - pred_values) / 
-                                (test_values + epsilon))) * 100
-            
-            ss_res = np.sum((test_values - pred_values) ** 2)
-            ss_tot = np.sum((test_values - np.mean(test_values)) ** 2)
-            r2_score = 1 - (ss_res / (ss_tot + epsilon))
-            
-            # Precisión final (mismo cálculo que prediction_service)
-            precision = max(0, min(100, (1 - mape/100) * 100))
-            
-            if log_callback:
-                log_callback("")
-                log_callback(" PRECISIÓN SPLIT ÚNICO (Referencia Comparable)")
-                log_callback(f"   Split: {len(train_original)} train / {n_test} test")
-                log_callback(f"   Precisión: {precision:.1f}%")
-                log_callback(f"   MAPE: {mape:.1f}%")
-                log_callback(f"   RMSE: {rmse:.4f} min")
-                log_callback(f"   R²: {r2_score:.4f}")
-                if exog_train is not None:
-                    log_callback(f"   Variables exógenas: {exog_train.shape[1]} (sin escalar)")
-            
-            return {
-                'precision': precision,
-                'mape': mape,
-                'rmse': rmse,
-                'mae': mae,
-                'r2_score': r2_score,
-                'n_test': n_test,
-                'n_train': len(train_original)
-            }
-            
-        except Exception as e:
-            if log_callback:
-                log_callback(f" Error calculando precisión split único: {str(e)}")
-            return {
-                'precision': 0.0,
-                'mape': 100.0,
-                'rmse': 0.0,
-                'mae': 0.0,
-                'r2_score': 0.0,
-                'n_test': 0,
-                'n_train': 0
-            }
-
     def _generate_final_diagnosis(self,
-                                  rolling_results: Dict,
-                                  cv_results: Dict,
-                                  param_stability: Dict,
-                                  backtesting_results: Dict,
-                                  split_precision: Dict) -> Dict[str, Any]: 
+                              rolling_results: Dict,
+                              cv_results: Dict,
+                              param_stability: Dict,
+                              backtesting_results: Dict) -> Dict[str, Any]:
         """
         Generar diagnóstico final integrado
+        
+        Integra los resultados de las 4 metodologías principales:
+        - Rolling Forecast (gold standard)
+        - Cross-Validation
+        - Parameter Stability
+        - Backtesting Multi-Horizonte
         """
         # Criterios de calidad
         rolling_rmse = rolling_results['rmse']
@@ -1252,8 +1082,7 @@ class RollingValidationService:
                 'cv_stability': score_cv,
                 'parameter_stability': score_params,
                 'degradation': score_degradation
-            },
-            'split_precision': split_precision  
+            }
         }
     
     def _get_transformation_for_regional(self, regional_code: Optional[str]) -> str:
@@ -1824,15 +1653,15 @@ class RollingValidationService:
             return data
     
     def _generate_comprehensive_plots(self,
-                                     rolling_results: Dict,
-                                     cv_results: Dict,
-                                     param_stability: Dict,
-                                     backtesting_results: Dict,
-                                     final_diagnosis: Dict,
-                                     order: Tuple,
-                                     seasonal_order: Tuple,
-                                     transformation: str,
-                                     exog_info: Optional[Dict]) -> Optional[str]:
+                                 rolling_results: Dict,
+                                 cv_results: Dict,
+                                 param_stability: Dict,
+                                 backtesting_results: Dict,
+                                 final_diagnosis: Dict,
+                                 order: Tuple,
+                                 seasonal_order: Tuple,
+                                 transformation: str,
+                                 exog_info: Optional[Dict]) -> Optional[str]:
         """
         Generar panel de gráficas comprehensivo
         """
@@ -1866,7 +1695,7 @@ class RollingValidationService:
                 error_pct = (error / actual * 100) if actual > 0 else 0
                 if error_pct > 20:
                     ax1.scatter(date, predictions[i], color='orange', s=150, marker='X', 
-                              edgecolors='darkred', linewidths=2, zorder=5)
+                            edgecolors='darkred', linewidths=2, zorder=5)
             
             ax1.set_title('Rolling Forecast - Walk-Forward Validation', fontsize=13, fontweight='bold')
             ax1.set_xlabel('Fecha', fontsize=10)
@@ -1971,8 +1800,8 @@ class RollingValidationService:
             if optimal_h in horizons:
                 opt_idx = horizons.index(optimal_h)
                 ax4.scatter(optimal_h, precisions[opt_idx], color='green', s=250, 
-                          marker='*', edgecolors='darkgreen', linewidths=2, zorder=5,
-                          label=f'Óptimo: {optimal_h}m')
+                        marker='*', edgecolors='darkgreen', linewidths=2, zorder=5,
+                        label=f'Óptimo: {optimal_h}m')
             
             # Zona roja (precisión < 75%)
             ax4.axhspan(0, 75, alpha=0.1, color='red', label='No confiable')
@@ -1982,7 +1811,7 @@ class RollingValidationService:
             color = 'tab:red'
             ax4_twin.set_ylabel('RMSE (min)', color=color, fontsize=10)
             line2 = ax4_twin.plot(horizons, rmses, 's--', color=color, linewidth=2, 
-                                 markersize=6, label='RMSE')
+                                markersize=6, label='RMSE')
             ax4_twin.tick_params(axis='y', labelcolor=color)
             
             ax4.set_title('Backtesting - Degradación por Horizonte', fontsize=13, fontweight='bold')
@@ -1992,7 +1821,7 @@ class RollingValidationService:
             labels = [L.get_label() for L in lines]
             ax4.legend(lines, labels, fontsize=9, loc='lower left')
             
-            # Panel 5: Diagnóstico Completo
+            # ✅ Panel 5: Diagnóstico Completo (SIN split_precision)
             ax5 = plt.subplot(2, 3, 5)
             ax5.axis('off')
             
@@ -2012,28 +1841,29 @@ class RollingValidationService:
                 quality_color = 'red'
             
             diagnosis_text = f"""
-DIAGNÓSTICO FINAL
-{'=' * 45}
+    DIAGNÓSTICO FINAL
+    {'=' * 45}
 
-Calidad del Modelo: {quality}
-Nivel de Confianza: {confidence:.1f}%
+    Calidad del Modelo: {quality}
+    Nivel de Confianza: {confidence:.1f}%
 
-RECOMENDACIÓN:
-{recommendation}
+    RECOMENDACIÓN:
+    {recommendation}
 
-MÉTRICAS CLAVE:
-• Rolling Forecast RMSE: {rolling_results['rmse']:.2f} min
-• Precisión Rolling: {rolling_results['precision']:.1f}% (walk-forward)
-• Precisión Split Único: {final_diagnosis['split_precision']['precision']:.1f}% [REF]
-• CV Stability Score: {cv_results['cv_stability_score']:.1f}/100
-• Parameter Stability: {param_stability['overall_stability_score']:.1f}/100
-• Horizonte óptimo: {backtesting_results['optimal_horizon']} meses
-• Degradación: {backtesting_results['degradation_rate']:.2f}% por mes
+    MÉTRICAS CLAVE:
+    • Rolling Forecast RMSE: {rolling_results['rmse']:.2f} min
+    • Precisión Rolling: {rolling_results['precision']:.1f}%
+    • CV Stability Score: {cv_results['cv_stability_score']:.1f}/100
+    • Parameter Stability: {param_stability['overall_stability_score']:.1f}/100
+    • Horizonte óptimo: {backtesting_results['optimal_horizon']} meses
+    • Degradación: {backtesting_results['degradation_rate']:.2f}% por mes
 
-NOTA: La precisión split único es comparable con el
-servicio de predicción. Rolling es más conservadora.
+    NOTA: Rolling Forecast (walk-forward) es el gold
+    standard para validación temporal de series de tiempo.
+    Simula exactamente cómo funcionará el modelo en
+    producción con datos futuros no vistos.
 
-"""
+    """
             
             if limitations:
                 diagnosis_text += "LIMITACIONES IDENTIFICADAS:\n"
@@ -2104,11 +1934,11 @@ servicio de predicción. Rolling es más conservadora.
             # Nota al pie
             footer_text = f'Generado: {datetime.now().strftime("%Y-%m-%d %H:%M")} | Rolling Forecast + CV + Parameter Stability + Backtesting'
             plt.figtext(0.5, 0.01, footer_text,
-                       ha='center', fontsize=9, style='italic', color='darkblue',
-                       bbox=dict(boxstyle='round,pad=0.4', facecolor='lightyellow', alpha=0.7))
+                    ha='center', fontsize=9, style='italic', color='darkblue',
+                    bbox=dict(boxstyle='round,pad=0.4', facecolor='lightyellow', alpha=0.7))
             
             plt.savefig(plot_path, dpi=100, bbox_inches='tight', 
-                       facecolor='white', edgecolor='none')
+                    facecolor='white', edgecolor='none')
             plt.close(fig)
             
             self.plot_file_path = plot_path
@@ -2116,8 +1946,10 @@ servicio de predicción. Rolling es más conservadora.
             
         except Exception as e:
             print(f"Error generando gráficas: {e}")
+            import traceback
+            traceback.print_exc()
             return None
-    
+        
     def cleanup_plot_file(self):
         """Limpiar archivo temporal de gráfica"""
         if self.plot_file_path and os.path.exists(self.plot_file_path):
