@@ -76,7 +76,7 @@ class PlotViewerDialog(QDialog):
                 background-color: #f5f5f5;
             }
             QPushButton {
-                background-color: #4CAF50;
+                background-color: #7AD300;
                 color: white;
                 border: none;
                 border-radius: 6px;
@@ -86,10 +86,10 @@ class PlotViewerDialog(QDialog):
                 min-height: 30px;
             }
             QPushButton:hover {
-                background-color: #45a049;
+                background-color: #7cb942;
             }
             QPushButton:pressed {
-                background-color: #3d8b40;
+                background-color: #53ad47;
             }
         """)
 
@@ -234,7 +234,7 @@ class MainWindow(QMainWindow):
         header_widget.setStyleSheet("""
             QWidget {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                    stop:0 #2196F3, stop:1 #1976D2);
+                    stop:0 #7AD300, stop:1 #53ad47);
                 border-radius: 10px;
             }
         """)
@@ -255,7 +255,7 @@ class MainWindow(QMainWindow):
 
     def _create_data_group(self):
         """Crear grupo de carga de datos SAIDI."""
-        data_group = self.create_styled_group("1. Cargar Datos SAIDI", "#4CAF50")
+        data_group = self.create_styled_group("1. Cargar Datos SAIDI", "#7AD300")
         data_layout = QVBoxLayout(data_group)
         data_layout.setSpacing(10)
 
@@ -293,7 +293,7 @@ class MainWindow(QMainWindow):
 
         regional_label = QLabel("Seleccione Regional:")
         regional_label.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
-        regional_label.setStyleSheet("color: #2196F3;")
+        regional_label.setStyleSheet("color: #000000;")
         regional_selector_layout.addWidget(regional_label)
 
         self.regional_combo = QComboBox()
@@ -303,14 +303,14 @@ class MainWindow(QMainWindow):
         self.regional_combo.setStyleSheet("""
             QComboBox {
                 background-color: white;
-                border: 2px solid #2196F3;
+                border: 2px solid #7AD300;
                 border-radius: 8px;
                 padding: 8px 12px;
                 font-weight: bold;
                 color: #333;
             }
             QComboBox:hover {
-                border-color: #1976D2;
+                border-color: #53ad47;
                 background-color: #f5f5f5;
             }
             QComboBox::drop-down {
@@ -321,7 +321,7 @@ class MainWindow(QMainWindow):
                 image: none;
                 border-left: 5px solid transparent;
                 border-right: 5px solid transparent;
-                border-top: 6px solid #2196F3;
+                border-top: 6px solid #7AD300;
                 margin-right: 8px;
             }
         """)
@@ -332,11 +332,11 @@ class MainWindow(QMainWindow):
         self.regional_info_label.setWordWrap(True)
         self.regional_info_label.setStyleSheet("""
             QLabel {
-                background-color: #E3F2FD;
+                background-color: #f0f9e6;
                 padding: 8px;
                 border-radius: 6px;
-                border-left: 4px solid #2196F3;
-                color: #1565C0;
+                border-left: 4px solid #7AD300;
+                color: #289e48;
                 font-size: 10px;
             }
         """)
@@ -347,7 +347,7 @@ class MainWindow(QMainWindow):
 
     def _create_climate_group(self):
         """Crear grupo de carga de datos climáticos."""
-        climate_group = self.create_styled_group("2. Cargar Datos Climáticos", "#FF9800")
+        climate_group = self.create_styled_group("2. Cargar Datos Climáticos", "#53ad47")
         climate_layout = QVBoxLayout(climate_group)
         climate_layout.setSpacing(8)
 
@@ -355,11 +355,11 @@ class MainWindow(QMainWindow):
         climate_info.setWordWrap(True)
         climate_info.setStyleSheet("""
             QLabel {
-                background-color: #FFF3E0;
+                background-color: #f5f9f2;
                 padding: 10px;
                 border-radius: 6px;
-                border-left: 4px solid #FF9800;
-                color: #E65100;
+                border-left: 4px solid #53ad47;
+                color: #289e48;
                 font-size: 10px;
                 font-style: italic;
             }
@@ -373,11 +373,11 @@ class MainWindow(QMainWindow):
         self.climate_progress_label.setWordWrap(True)
         self.climate_progress_label.setStyleSheet("""
             QLabel {
-                background-color: #E8F5E9;
+                background-color: #f0f9e6;
                 padding: 8px;
                 border-radius: 6px;
-                border-left: 4px solid #4CAF50;
-                color: #2E7D32;
+                border-left: 4px solid #7AD300;
+                color: #289e48;
                 font-size: 10px;
                 font-weight: bold;
             }
@@ -420,7 +420,7 @@ class MainWindow(QMainWindow):
         regional_layout.setContentsMargins(0, 0, 0, 0)
         regional_layout.setSpacing(8)
 
-        btn = QPushButton(f" {nombre}")
+        btn = QPushButton(f"{nombre}")
         btn.setMinimumHeight(42)
         btn.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
         btn.setProperty("regional_code", code)
@@ -428,20 +428,20 @@ class MainWindow(QMainWindow):
         btn.clicked.connect(lambda _checked, c=code: self.on_climate_load_clicked(c))
         btn.setStyleSheet("""
             QPushButton {
-                background-color: #FF9800;
+                background-color: #53ad47;
                 text-align: left;
                 padding-left: 12px;
                 border-radius: 6px;
             }
             QPushButton:hover {
-                background-color: #F57C00;
+                background-color: #289e48;
             }
             QPushButton:pressed {
-                background-color: #E65100;
+                background-color: #7cb942;
             }
         """)
 
-        status_label = QLabel(" 0 ")
+        status_label = QLabel("0")
         status_label.setFixedWidth(30)
         status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         status_label.setStyleSheet("font-size: 18px;")
@@ -456,7 +456,7 @@ class MainWindow(QMainWindow):
 
     def _create_simulation_group(self):
         """Crear grupo de simulación climática."""
-        simulation_group = self.create_styled_group(" Simulación Climática", "#9C27B0")
+        simulation_group = self.create_styled_group("Simulación Climática", "#000000")
         simulation_layout = QVBoxLayout(simulation_group)
         simulation_layout.setSpacing(10)
 
@@ -471,16 +471,16 @@ class MainWindow(QMainWindow):
             QCheckBox::indicator {
                 width: 20px;
                 height: 20px;
-                border: 2px solid #9C27B0;
+                border: 2px solid #000000;
                 border-radius: 4px;
                 background-color: white;
             }
             QCheckBox::indicator:checked {
-                background-color: #9C27B0;
+                background-color: #7AD300;
                 image: url(none);
             }
             QCheckBox::indicator:hover {
-                border-color: #7B1FA2;
+                border-color: #7AD300;
             }
         """)
         self.enable_simulation_checkbox.stateChanged.connect(self.on_simulation_checkbox_changed)
@@ -489,19 +489,19 @@ class MainWindow(QMainWindow):
         # Descripción
         simulation_desc = QLabel(
             "Cuando esté habilitado, podrá configurar escenarios climáticos "
-            "hipotéticos ( soleado,  lluvioso,  tormentoso,  ola de calor) "
+            "hipotéticos (soleado, lluvioso, tormentoso, ola de calor) "
             "antes de ejecutar predicción o validación SAIDI.\n\n"
-            "• Predicción: Afecta las proyecciones futuras\n"
-            "• Validación: Evalúa sensibilidad del modelo a cambios climáticos",
+            "- Predicción: Afecta las proyecciones futuras\n"
+            "- Validación: Evalúa sensibilidad del modelo a cambios climáticos",
         )
         simulation_desc.setWordWrap(True)
         simulation_desc.setStyleSheet("""
             QLabel {
-                background-color: #F3E5F5;
+                background-color: #f5f5f5;
                 padding: 10px;
                 border-radius: 6px;
-                border-left: 4px solid #9C27B0;
-                color: #4A148C;
+                border-left: 4px solid #808080;
+                color: #333;
                 font-size: 10px;
                 font-style: italic;
             }
@@ -514,10 +514,10 @@ class MainWindow(QMainWindow):
         self.simulation_status_label.setVisible(False)
         self.simulation_status_label.setStyleSheet("""
             QLabel {
-                background-color: #E1BEE7;
+                background-color: #f0f9e6;
                 padding: 8px;
                 border-radius: 6px;
-                color: #6A1B9A;
+                color: #289e48;
                 font-size: 10px;
                 font-weight: bold;
             }
@@ -528,15 +528,15 @@ class MainWindow(QMainWindow):
 
     def _create_analysis_group(self):
         """Crear grupo de análisis SAIDI."""
-        analysis_group = self.create_styled_group("3. Análisis SAIDI", "#2196F3")
+        analysis_group = self.create_styled_group("3. Análisis SAIDI", "#000000")
         analysis_layout = QVBoxLayout(analysis_group)
         analysis_layout.setSpacing(8)
 
         analysis_buttons = [
-            (" Generar Predicción", "predict_button", "#2196F3"),
-            (" Optimizar Parámetros", "optimize_button", "#9C27B0"),
-            (" Validar Modelo", "validate_button", "#00BCD4"),
-            (" Generar Informe de Validación", "report_button", "#FF6B6B"),
+            ("Generar Predicción", "predict_button", "#7AD300"),
+            ("Optimizar Parámetros", "optimize_button", "#53ad47"),
+            ("Validar Modelo", "validate_button", "#289e48"),
+            ("Generar Informe de Validación", "report_button", "#7cb942"),
         ]
 
         for text, attr_name, color in analysis_buttons:
@@ -573,13 +573,13 @@ class MainWindow(QMainWindow):
         self.export_excel_button.setEnabled(False)
         self.export_excel_button.setStyleSheet("""
             QPushButton {
-                background-color: #607D8B;
+                background-color: #808080;
                 color: white;
                 border-radius: 6px;
                 padding: 8px 12px;
             }
             QPushButton:hover {
-                background-color: #546E7A;
+                background-color: #666666;
             }
             QPushButton:disabled {
                 background-color: #BDBDBD;
@@ -591,7 +591,7 @@ class MainWindow(QMainWindow):
 
     def _create_progress_group(self):
         """Crear grupo de progreso."""
-        progress_group = self.create_styled_group("Progreso", "#757575")
+        progress_group = self.create_styled_group("Progreso", "#808080")
         progress_layout = QVBoxLayout(progress_group)
         progress_layout.setSpacing(8)
 
@@ -638,7 +638,7 @@ class MainWindow(QMainWindow):
         layout.setSpacing(12)
 
         # Información del archivo SAIDI
-        self.excel_info_group = self.create_styled_group("Información del Archivo SAIDI", "#4CAF50")
+        self.excel_info_group = self.create_styled_group("Información del Archivo SAIDI", "#7AD300")
         excel_info_layout = QVBoxLayout(self.excel_info_group)
 
         self.excel_details_label = QLabel("Cargue un archivo Excel para ver detalles")
@@ -658,7 +658,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.excel_info_group)
 
         # Información de datos climáticos
-        self.climate_info_group = self.create_styled_group("Información de Datos Climáticos", "#FF9800")
+        self.climate_info_group = self.create_styled_group("Información de Datos Climáticos", "#53ad47")
         climate_info_layout = QVBoxLayout(self.climate_info_group)
 
         self.climate_details_label = QLabel("Cargue archivos climáticos para ver detalles")
@@ -678,7 +678,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.climate_info_group)
 
         # Log de consola (expandible)
-        log_group = self.create_styled_group("Log de Consola", "#2196F3")
+        log_group = self.create_styled_group("Log de Consola", "#000000")
         log_layout = QVBoxLayout(log_group)
 
         self.console_log = QTextEdit()
@@ -689,7 +689,7 @@ class MainWindow(QMainWindow):
 
         log_buttons_layout = QHBoxLayout()
 
-        self.clear_log_button = QPushButton(" Limpiar Log")
+        self.clear_log_button = QPushButton("Limpiar Log")
         self.clear_log_button.setMinimumHeight(36)
         self.clear_log_button.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
         self.clear_log_button.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -709,7 +709,7 @@ class MainWindow(QMainWindow):
             }
 
             QPushButton {
-                background-color: #4CAF50;
+                background-color: #7AD300;
                 color: white;
                 border: none;
                 border-radius: 6px;
@@ -719,11 +719,11 @@ class MainWindow(QMainWindow):
             }
 
             QPushButton:hover {
-                background-color: #45a049;
+                background-color: #7cb942;
             }
 
             QPushButton:pressed {
-                background-color: #3d8b40;
+                background-color: #53ad47;
             }
 
             QPushButton:disabled {
@@ -736,7 +736,7 @@ class MainWindow(QMainWindow):
                 border-radius: 6px;
                 background-color: #ffffff;
                 padding: 8px;
-                selection-background-color: #2196F3;
+                selection-background-color: #7AD300;
             }
 
             QProgressBar {
@@ -750,7 +750,7 @@ class MainWindow(QMainWindow):
 
             QProgressBar::chunk {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #4CAF50, stop:1 #66BB6A);
+                    stop:0 #7AD300, stop:1 #53ad47);
                 border-radius: 5px;
             }
 
@@ -794,8 +794,8 @@ class MainWindow(QMainWindow):
         if state == Qt.CheckState.Checked.value:
             self.simulation_status_label.setText(
                 "Simulación habilitada\n"
-                "  • Predicción: Se abrirá configurador antes de predecir\n"
-                "  • Validación: Se abrirá configurador antes de validar",
+                "- Predicción: Se abrirá configurador antes de predecir\n"
+                "- Validación: Se abrirá configurador antes de validar",
             )
             self.simulation_status_label.setVisible(True)
             self.log_message("Simulación climática HABILITADA")
@@ -836,11 +836,11 @@ class MainWindow(QMainWindow):
             )
             self.climate_progress_label.setStyleSheet("""
                 QLabel {
-                    background-color: #C8E6C9;
+                    background-color: #f0f9e6;
                     padding: 8px;
                     border-radius: 6px;
-                    border-left: 4px solid #4CAF50;
-                    color: #1B5E20;
+                    border-left: 4px solid #7AD300;
+                    color: #289e48;
                     font-size: 10px;
                     font-weight: bold;
                 }
@@ -851,11 +851,11 @@ class MainWindow(QMainWindow):
             )
             self.climate_progress_label.setStyleSheet("""
                 QLabel {
-                    background-color: #FFF9C4;
+                    background-color: #fffbe6;
                     padding: 8px;
                     border-radius: 6px;
-                    border-left: 4px solid #FDD835;
-                    color: #F57F17;
+                    border-left: 4px solid #808080;
+                    color: #666;
                     font-size: 10px;
                     font-weight: bold;
                 }
@@ -867,16 +867,16 @@ class MainWindow(QMainWindow):
             self.climate_details_label.setText("No hay datos climáticos cargados")
             return
 
-        details = "<div style='font-size: 11px;'><b style='color: #FF6F00; font-size: 12px;'>DATOS CLIMÁTICOS CARGADOS:</b><br><br>"
+        details = "<div style='font-size: 11px;'><b style='color: #53ad47; font-size: 12px;'>DATOS CLIMÁTICOS CARGADOS:</b><br><br>"
 
         for info in climate_summary.values():
             if info:
-                details += "<div style='margin-bottom: 12px; padding: 8px; background-color: #fff; border-left: 3px solid #FF9800; border-radius: 4px;'>"
-                details += f"<b style='color: #FF6F00;'> {info['regional_name']}:</b><br>"
-                details += f"<span style='color: #666;'> Archivo: <b>{info['file_name']}</b></span><br>"
-                details += f"<span style='color: #666;'> Registros: <b>{info['total_records']:,}</b></span><br>"
-                details += f"<span style='color: #666;'> Período: <b>{info['date_range']['start'].strftime('%Y-%m-%d')}</b> a <b>{info['date_range']['end'].strftime('%Y-%m-%d')}</b></span><br>"
-                details += f"<span style='color: #666;'>✓ Completitud: <b style='color: #4CAF50;'>{info['avg_completeness']:.1f}%</b></span>"
+                details += "<div style='margin-bottom: 12px; padding: 8px; background-color: #fff; border-left: 3px solid #53ad47; border-radius: 4px;'>"
+                details += f"<b style='color: #289e48;'>{info['regional_name']}:</b><br>"
+                details += f"<span style='color: #666;'>Archivo: <b>{info['file_name']}</b></span><br>"
+                details += f"<span style='color: #666;'>Registros: <b>{info['total_records']:,}</b></span><br>"
+                details += f"<span style='color: #666;'>Período: <b>{info['date_range']['start'].strftime('%Y-%m-%d')}</b> a <b>{info['date_range']['end'].strftime('%Y-%m-%d')}</b></span><br>"
+                details += f"<span style='color: #666;'>Completitud: <b style='color: #7AD300;'>{info['avg_completeness']:.1f}%</b></span>"
                 details += "</div>"
 
         details += "</div>"
@@ -889,7 +889,7 @@ class MainWindow(QMainWindow):
             self.enable_simulation_checkbox.setToolTip(
                 "Habilite para configurar escenarios climáticos antes de predecir",
             )
-            self.log_message("✓ Simulación climática disponible")
+            self.log_message("Simulación climática disponible")
 
     def on_regional_changed(self, regional_text):
         """Callback cuando cambia la selección de regional."""
@@ -898,7 +898,7 @@ class MainWindow(QMainWindow):
                 codigo = regional_text.split("(")[1].split(")")[0]
                 self.log_message(f"Regional seleccionada: {regional_text}")
                 self.regional_selected.emit(codigo)
-                self.regional_info_label.setText(f"✓ Trabajando con: {regional_text}")
+                self.regional_info_label.setText(f"Trabajando con: {regional_text}")
             else:
                 self.log_message(f"Regional seleccionada: {regional_text}")
 
@@ -920,7 +920,7 @@ class MainWindow(QMainWindow):
             self.regional_combo.setCurrentIndex(0)
             first_regional = regionales_list[0]
             self.regional_info_label.setText(
-                f"✓ Trabajando con: {first_regional['nombre']} ({first_regional['codigo']})",
+                f"Trabajando con: {first_regional['nombre']} ({first_regional['codigo']})",
             )
 
     def hide_regional_selector(self):
@@ -933,19 +933,19 @@ class MainWindow(QMainWindow):
     def log_message(self, message):
         """Agregar mensaje al log de consola."""
         timestamp = datetime.datetime.now(tz=datetime.UTC).strftime("%H:%M:%S")
-        self.console_log.append(f'<span style="color: #2196F3;">[{timestamp}]</span> {message}')
+        self.console_log.append(f'<span style="color: #7AD300;">[{timestamp}]</span> {message}')
         self.console_log.ensureCursorVisible()
 
     def log_error(self, message):
         """Agregar mensaje de error al log."""
         timestamp = datetime.datetime.now(tz=datetime.UTC).strftime("%H:%M:%S")
-        self.console_log.append(f'<span style="color: #888;">[{timestamp}]</span> <span style="color: #f44336; font-weight: bold;">ERROR:</span> {message}')
+        self.console_log.append(f'<span style="color: #888;">[{timestamp}]</span> <span style="color: #d32f2f; font-weight: bold;">ERROR:</span> {message}')
         self.console_log.ensureCursorVisible()
 
     def log_success(self, message):
         """Agregar mensaje de éxito al log."""
         timestamp = datetime.datetime.now(tz=datetime.UTC).strftime("%H:%M:%S")
-        self.console_log.append(f'<span style="color: #888;">[{timestamp}]</span> <span style="color: #4CAF50; font-weight: bold;">ÉXITO:</span> {message}')
+        self.console_log.append(f'<span style="color: #888;">[{timestamp}]</span> <span style="color: #7AD300; font-weight: bold;">ÉXITO:</span> {message}')
         self.console_log.ensureCursorVisible()
 
     def clear_console_log(self):
@@ -955,14 +955,14 @@ class MainWindow(QMainWindow):
 
     def on_excel_loaded(self, file_info):
         """Callback cuando se carga un archivo Excel."""
-        self.file_info_label.setText(f" {file_info.get('file_name', 'Archivo cargado')}")
+        self.file_info_label.setText(f"{file_info.get('file_name', 'Archivo cargado')}")
         self.file_info_label.setStyleSheet("""
             QLabel {
-                background-color: #E8F5E9;
+                background-color: #f0f9e6;
                 padding: 10px;
                 border-radius: 6px;
-                border-left: 4px solid #4CAF50;
-                color: #2E7D32;
+                border-left: 4px solid #7AD300;
+                color: #289e48;
                 font-size: 11px;
                 font-weight: bold;
             }
@@ -992,22 +992,22 @@ class MainWindow(QMainWindow):
 
         details = "<div style='font-size: 11px;'>"
         details += "<div style='padding: 10px; background-color: #fff; border-radius: 6px; margin-bottom: 8px;'>"
-        details += f"<b style='color: #4CAF50; font-size: 12px;'> Archivo:</b> <span style='color: #333;'>{file_info.get('file_name', 'N/A')}</span><br>"
-        details += f"<b style='color: #2196F3;'> Dimensiones:</b> <span style='color: #333;'>{file_info.get('rows', 0):,} filas x {file_info.get('columns', 0)} columnas</span><br>"
+        details += f"<b style='color: #7AD300; font-size: 12px;'>Archivo:</b> <span style='color: #333;'>{file_info.get('file_name', 'N/A')}</span><br>"
+        details += f"<b style='color: #000000;'>Dimensiones:</b> <span style='color: #333;'>{file_info.get('rows', 0):,} filas x {file_info.get('columns', 0)} columnas</span><br>"
 
         if is_regional:
-            details += "<b style='color: #FF9800;'> Formato:</b> <span style='color: #333; font-weight: bold;'>Regional (multi-columna)</span><br>"
-            details += f"<b style='color: #9C27B0;'> Regionales:</b> <span style='color: #333;'>{len(file_info.get('available_regionales', []))}</span><br>"
+            details += "<b style='color: #53ad47;'>Formato:</b> <span style='color: #333; font-weight: bold;'>Regional (multi-columna)</span><br>"
+            details += f"<b style='color: #289e48;'>Regionales:</b> <span style='color: #333;'>{len(file_info.get('available_regionales', []))}</span><br>"
         else:
-            details += "<b style='color: #FF9800;'> Formato:</b> <span style='color: #333; font-weight: bold;'>Tradicional (columna única)</span><br>"
+            details += "<b style='color: #53ad47;'>Formato:</b> <span style='color: #333; font-weight: bold;'>Tradicional (columna única)</span><br>"
 
         details += "</div>"
 
-        details += "<div style='padding: 10px; background-color: #f9f9f9; border-radius: 6px; border-left: 3px solid #2196F3;'>"
-        details += "<b style='color: #2196F3;'> Período:</b><br>"
+        details += "<div style='padding: 10px; background-color: #f9f9f9; border-radius: 6px; border-left: 3px solid #7AD300;'>"
+        details += "<b style='color: #289e48;'>Período:</b><br>"
         details += f"<span style='color: #666;'>Desde: <b>{file_info.get('date_range', {}).get('start', 'N/A')}</b></span><br>"
         details += f"<span style='color: #666;'>Hasta: <b>{file_info.get('date_range', {}).get('end', 'N/A')}</b></span><br>"
-        details += f"<span style='color: #4CAF50; font-weight: bold;'>✓ Contiene SAIDI: {'Sí' if file_info.get('has_saidi', False) else 'No'}</span>"
+        details += f"<span style='color: #7AD300; font-weight: bold;'>Contiene SAIDI: {'Sí' if file_info.get('has_saidi', False) else 'No'}</span>"
         details += "</div>"
 
         details += "</div>"
@@ -1029,7 +1029,7 @@ class MainWindow(QMainWindow):
 
     def update_status(self, message):
         """Actualizar barra de estado."""
-        self.status_bar.showMessage(f"✓ {message}")
+        self.status_bar.showMessage(f"{message}")
 
     def show_progress(self, *, visible: bool = True):
         """Mostrar/ocultar barra de progreso."""
@@ -1081,18 +1081,18 @@ class MainWindow(QMainWindow):
                 # Cambiar estilo para indicar que está activo
                 self.export_excel_button.setStyleSheet("""
                     QPushButton {
-                        background-color: #4CAF50;
+                        background-color: #7AD300;
                         color: white;
                         border-radius: 6px;
                         padding: 8px 12px;
                         font-weight: bold;
                     }
                     QPushButton:hover {
-                        background-color: #45a049;
+                        background-color: #7cb942;
                         transform: scale(1.02);
                     }
                     QPushButton:pressed {
-                        background-color: #3d8b40;
+                        background-color: #53ad47;
                     }
                 """)
             else:
