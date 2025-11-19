@@ -8,7 +8,7 @@ import os
 import tempfile
 from datetime import datetime
 from typing import Dict, Any, Optional
-from reportlab.lib.pagesizes import  A4
+from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import inch
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_JUSTIFY, TA_CENTER
@@ -365,11 +365,10 @@ class ValidationReportService:
         elements.append(Paragraph(results_text + interpretation, self.styles['JustifiedBody']))
         elements.append(Spacer(1, 0.2*inch))
         
-        
+        # Insertar gráfica de rolling forecast
         plot_file = result.get('plot_file')
         if plot_file and os.path.exists(plot_file):
             try:
-                # Extraer solo la sección de Rolling Forecast (cuadrante superior izquierdo)
                 rolling_plot = self._extract_plot_section(plot_file, 'rolling_forecast')
                 if rolling_plot:
                     img = Image(rolling_plot, width=5*inch, height=3.5*inch)
@@ -380,8 +379,8 @@ class ValidationReportService:
                         self.styles['Normal']
                     )
                     elements.append(caption)
-            except Exception as e:
-                self.log_callback(f"Error en gráfica CV: {str(e)}")
+            except Exception:
+                pass
         
         return elements
     
@@ -461,6 +460,7 @@ class ValidationReportService:
         elements.append(Paragraph(results_text + interpretation, self.styles['JustifiedBody']))
         elements.append(Spacer(1, 0.2*inch))
         
+        # Insertar gráfica de CV
         plot_file = result.get('plot_file')
         if plot_file and os.path.exists(plot_file):
             try:
@@ -474,8 +474,8 @@ class ValidationReportService:
                         self.styles['Normal']
                     )
                     elements.append(caption)
-            except Exception as e:
-                self.log_callback(f"Error en gráfica CV: {str(e)}")
+            except Exception:
+                pass
         
         return elements
     
@@ -567,6 +567,7 @@ class ValidationReportService:
         elements.append(Paragraph(results_text + interpretation, self.styles['JustifiedBody']))
         elements.append(Spacer(1, 0.2*inch))
         
+        # Insertar gráfica de estabilidad de parámetros
         plot_file = result.get('plot_file')
         if plot_file and os.path.exists(plot_file):
             try:
@@ -661,6 +662,7 @@ class ValidationReportService:
         elements.append(Paragraph(results_text + interpretation, self.styles['JustifiedBody']))
         elements.append(Spacer(1, 0.2*inch))
         
+        # Insertar gráfica de backtesting
         plot_file = result.get('plot_file')
         if plot_file and os.path.exists(plot_file):
             try:
@@ -698,8 +700,7 @@ class ValidationReportService:
             img = PILImage.open(plot_file)
             width, height = img.size
             
-            # Definir coordenadas de recorte según sección (basado en tu layout 2x3)
-            # La imagen parece tener 3 columnas y 2 filas
+            # Definir coordenadas de recorte según sección (basado en layout 2x3)
             col_width = width // 3
             row_height = height // 2
             
@@ -720,7 +721,10 @@ class ValidationReportService:
             
             # Guardar en archivo temporal
             temp_dir = tempfile.gettempdir()
-            temp_file = os.path.join(temp_dir, f'section_{section}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.png')
+            temp_file = os.path.join(
+                temp_dir, 
+                f'section_{section}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.png'
+            )
             cropped.save(temp_file, 'PNG')
             
             return temp_file
@@ -833,7 +837,7 @@ class ValidationReportService:
         elements.append(Paragraph(intro_text, self.styles['JustifiedBody']))
         elements.append(Spacer(1, 0.2*inch))
         
-        # Insertar la gráfica si está disponible
+        # Insertar la gráfica completa
         plot_file = result.get('plot_file')
         
         if plot_file and os.path.exists(plot_file):
@@ -847,13 +851,13 @@ class ValidationReportService:
                 elements.append(Spacer(1, 0.1*inch))
                 
                 caption = Paragraph(
-                    "<i>Figura 1: Panel de validación temporal completa con los seis componentes del análisis integrado.</i>",
+                    "<i>Figura 6.1: Panel de validación temporal completa con los seis componentes del análisis integrado.</i>",
                     self.styles['Normal']
                 )
                 elements.append(caption)
                 
             except Exception:
-                error_text = "<i>Error al cargar la gráfica</i>"
+                error_text = "<i>Error al cargar la gráfica integrada</i>"
                 elements.append(Paragraph(error_text, self.styles['Normal']))
         else:
             no_plot_text = "<i>Gráfica no disponible en el resultado del análisis.</i>"
