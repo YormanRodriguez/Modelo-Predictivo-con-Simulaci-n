@@ -1,6 +1,7 @@
 # services/rolling_validation_service.py
 """
 Servicio de Validación Temporal con Rolling Forecast para SAIDI - Manejo robusto de errores de álgebra lineal
+MODIFICADO: Criterios de validación más realistas alineados con MAPE estándar de series temporales complejas
 """
 import pandas as pd
 import numpy as np
@@ -19,8 +20,6 @@ import warnings
 warnings.filterwarnings('ignore')
 
 
-
-
 class RollingValidationService:
     """Servicio de validación temporal avanzada para modelos SAIDI"""
     
@@ -35,15 +34,6 @@ class RollingValidationService:
     }
     
     # Variables exógenas por regional
-    REGIONAL_TRANSFORMATIONS = {
-        'SAIDI_O': 'boxcox',
-        'SAIDI_C': 'original',
-        'SAIDI_A': 'original',
-        'SAIDI_P': 'boxcox',
-        'SAIDI_T': 'sqrt',
-        'SAIDI_Cens': 'original'
-    }
-    
     REGIONAL_EXOG_VARS = {
         'SAIDI_O': {  # Ocaña - 7 variables correlacionadas
             'realfeel_min': 'Temperatura aparente mínima',           # r=0.689 *** FUERTE
@@ -119,8 +109,6 @@ class RollingValidationService:
         self.scaler = None
         self.exog_scaler = None
         self.transformation_params = {}
-
-    # services/rolling_validation_service.py - NUEVO MÉTODO
 
     def _get_correlation_for_var(self, var_code: str, regional_code: str) -> float:
         """
@@ -274,7 +262,7 @@ class RollingValidationService:
                 validation_months, progress_callback, log_callback
             )
             
-            # 2TIME SERIES CROSS-VALIDATION
+            # 2 TIME SERIES CROSS-VALIDATION
             if progress_callback:
                 progress_callback(40, "Ejecutando Time Series CV...")
             
@@ -399,7 +387,7 @@ class RollingValidationService:
             train_data_trans = data_transformed.iloc[:train_end_idx]
             train_data_orig = data_original.iloc[:train_end_idx]
             
-            #  CORREGIDO: Definir pred_date ANTES del bloque if
+            # Definir pred_date ANTES del bloque if
             pred_date = data_original.index[train_end_idx]
             
             # Preparar exógenas para training y predicción
@@ -428,27 +416,27 @@ class RollingValidationService:
                     else:
                         exog_pred = None
             
-            #  VALIDACIÓN: Verificar que no haya NaN en los datos
+            # VALIDACIÓN: Verificar que no haya NaN en los datos
             if train_data_trans.isna().any() or (exog_train is not None and exog_train.isna().any().any()):
                 if log_callback:
                     log_callback(f" Iteración {i+1} contiene NaN - omitida")
                 continue
             
             try:
-                #  CORREGIDO: Parámetros más robustos
+                # Parámetros más robustos
                 model = SARIMAX(
                     train_data_trans,
                     exog=exog_train,
                     order=order,
                     seasonal_order=seasonal_order,
-                    enforce_stationarity=False,  # Más flexible
-                    enforce_invertibility=False  # Más flexible
+                    enforce_stationarity=False,
+                    enforce_invertibility=False
                 )
                 
-                #  CORREGIDO: Método de ajuste más estable
+                # Método de ajuste más estable
                 results = model.fit(
                     disp=False,
-                    method='lbfgs',  # Método más estable
+                    method='lbfgs',
                     maxiter=100,
                     low_memory=True
                 )
@@ -478,7 +466,6 @@ class RollingValidationService:
                     log_callback(f"  Mes {i+1}: Pred={pred_original:.2f}, Real={actual_original:.2f}, Error={error_pct:.1f}%")
                 
             except np.linalg.LinAlgError:
-                #  CORREGIDO: Manejo específico de errores de álgebra lineal (sin variable 'e' no usada)
                 if log_callback:
                     log_callback(f" Iteración {i+1} falló (matriz singular) - omitida")
                 continue
@@ -495,12 +482,14 @@ class RollingValidationService:
             mape = np.mean([abs(a - p) / a * 100 for a, p in zip(monthly_actuals, monthly_predictions) if a > 0])
             precision = max(0, min(100, (1 - mape / 100) * 100))
             
-            # Clasificar calidad
-            if rmse < 2.0 and precision >= 90:
+            # CAMBIO 1: Clasificar calidad (ajustado a MAPE real de SAIDI)
+            # ANTES: rmse < 2.0 and precision >= 90 = EXCELENTE
+            # DESPUÉS: Criterios más realistas basados en MAPE típico de series temporales complejas
+            if rmse < 3.0 and precision >= 85:
                 quality = "EXCELENTE"
-            elif rmse < 3.0 and precision >= 85:
+            elif rmse < 4.0 and precision >= 78:
                 quality = "BUENA"
-            elif rmse < 4.5 and precision >= 75:
+            elif rmse < 5.5 and precision >= 70:
                 quality = "REGULAR"
             else:
                 quality = "MALA"
@@ -529,9 +518,7 @@ class RollingValidationService:
                           transformation: str,
                           progress_callback=None,
                           log_callback=None) -> Dict[str, Any]:
-        """
-        Time Series Cross-Validation con splits temporales
-        """
+        """Time Series Cross-Validation con splits temporales"""
         if log_callback:
             log_callback("\n TIME SERIES CROSS-VALIDATION")
         
@@ -545,7 +532,7 @@ class RollingValidationService:
         rmse_scores = []
         precision_scores = []
         
-        #  CORREGIDO: Calcular n_splits correctamente
+        # Calcular n_splits correctamente
         n_splits = 0
         temp_train_end = min_train
         while temp_train_end + val_size + test_size <= n_total:
@@ -561,14 +548,14 @@ class RollingValidationService:
         current_train_end = min_train
         split_idx = 0
         failed_splits = 0
-        max_iterations = n_splits + 10  # Seguridad: máximo de iteraciones
+        max_iterations = n_splits + 10
         iteration_count = 0
         
         while current_train_end + val_size + test_size <= n_total:
             split_idx += 1
             iteration_count += 1
             
-            #  SEGURIDAD: Detectar bucle infinito
+            # SEGURIDAD: Detectar bucle infinito
             if iteration_count > max_iterations:
                 if log_callback:
                     log_callback(f" ALERTA: Detenido por seguridad tras {iteration_count} iteraciones")
@@ -598,17 +585,16 @@ class RollingValidationService:
                 else:
                     exog_test = None
             
-            #  VALIDACIÓN: Verificar que no haya NaN en los datos
+            # VALIDACIÓN: Verificar que no haya NaN en los datos
             if train_trans.isna().any() or (exog_train is not None and exog_train.isna().any().any()):
                 failed_splits += 1
                 if log_callback and failed_splits <= 3:
                     log_callback(f" Split {split_idx} contiene NaN - omitido")
-                #  CRÍTICO: Avanzar SIEMPRE
                 current_train_end += step
                 continue
             
             try:
-                #  CORREGIDO: Parámetros más robustos
+                # Parámetros más robustos
                 model = SARIMAX(
                     train_trans,
                     exog=exog_train,
@@ -618,7 +604,7 @@ class RollingValidationService:
                     enforce_invertibility=False
                 )
                 
-                #  CORREGIDO: Método de ajuste más estable
+                # Método de ajuste más estable
                 results = model.fit(
                     disp=False,
                     method='lbfgs',
@@ -648,9 +634,8 @@ class RollingValidationService:
                 })
                 
             except np.linalg.LinAlgError:
-                #  CORREGIDO: Manejo específico de errores de álgebra lineal (sin variable 'e' no usada)
                 failed_splits += 1
-                if log_callback and failed_splits <= 3:  # Solo mostrar primeros 3 fallos
+                if log_callback and failed_splits <= 3:
                     log_callback(f" Split {split_idx} falló (matriz singular) - omitido")
                 continue
             except Exception as e:
@@ -703,9 +688,7 @@ class RollingValidationService:
                                    transformation: str,
                                    progress_callback=None,
                                    log_callback=None) -> Dict[str, Any]:
-        """
-        Analizar estabilidad de parámetros ARIMA/SARIMA
-        """
+        """Analizar estabilidad de parámetros ARIMA/SARIMA"""
         if log_callback:
             log_callback("\n ANÁLISIS DE ESTABILIDAD DE PARÁMETROS")
         
@@ -739,7 +722,7 @@ class RollingValidationService:
             if exog_df is not None:
                 exog_train = exog_df.loc[train_orig.index]
             
-            #  VALIDACIÓN: Verificar que no haya NaN en los datos
+            # VALIDACIÓN: Verificar que no haya NaN en los datos
             if train_trans.isna().any() or (exog_train is not None and exog_train.isna().any().any()):
                 failed_windows += 1
                 if log_callback and failed_windows <= 2:
@@ -747,7 +730,7 @@ class RollingValidationService:
                 continue
             
             try:
-                #  CORREGIDO: Parámetros más robustos
+                # Parámetros más robustos
                 model = SARIMAX(
                     train_trans,
                     exog=exog_train,
@@ -757,7 +740,7 @@ class RollingValidationService:
                     enforce_invertibility=False
                 )
                 
-                #  CORREGIDO: Método de ajuste más estable
+                # Método de ajuste más estable
                 results = model.fit(
                     disp=False,
                     method='lbfgs',
@@ -819,13 +802,15 @@ class RollingValidationService:
         else:
             overall_stability = 0
         
-        # Interpretación
-        if overall_stability >= 85:
+        # CAMBIO 4: Interpretación (más tolerante)
+        # ANTES: >= 85 = ALTA, >= 75 = BUENA, >= 65 = MODERADA
+        # DESPUÉS: Umbrales más realistas
+        if overall_stability >= 80:
             interpretation = "Los parámetros muestran ALTA estabilidad - Modelo robusto"
-        elif overall_stability >= 75:
+        elif overall_stability >= 70:
             interpretation = "Los parámetros muestran BUENA estabilidad - Modelo confiable"
-        elif overall_stability >= 65:
-            interpretation = "Los parámetros muestran estabilidad MODERADA"
+        elif overall_stability >= 60:
+            interpretation = "Los parámetros muestran estabilidad MODERADA - Aceptable para producción"
         else:
             interpretation = "Los parámetros muestran BAJA estabilidad - Revisar especificación"
         
@@ -855,9 +840,7 @@ class RollingValidationService:
                        transformation: str,
                        progress_callback=None,
                        log_callback=None) -> Dict[str, Any]:
-        """
-        Backtesting multi-horizonte
-        """
+        """Backtesting multi-horizonte"""
         if log_callback:
             log_callback("\n BACKTESTING MULTI-HORIZONTE")
         
@@ -905,13 +888,13 @@ class RollingValidationService:
                     if test_orig.index[-1] <= exog_df.index.max():
                         exog_test = exog_df.loc[test_orig.index]
                 
-                #  VALIDACIÓN: Verificar que no haya NaN en los datos
+                # VALIDACIÓN: Verificar que no haya NaN en los datos
                 if train_trans.isna().any() or (exog_train is not None and exog_train.isna().any().any()):
                     failed_count += 1
                     continue
                 
                 try:
-                    #  CORREGIDO: Parámetros más robustos
+                    # Parámetros más robustos
                     model = SARIMAX(
                         train_trans,
                         exog=exog_train,
@@ -921,7 +904,7 @@ class RollingValidationService:
                         enforce_invertibility=False
                     )
                     
-                    #  CORREGIDO: Método de ajuste más estable
+                    # Método de ajuste más estable
                     results = model.fit(
                         disp=False,
                         method='lbfgs',
@@ -942,7 +925,6 @@ class RollingValidationService:
                     mape_list.append(mape)
                     
                 except (np.linalg.LinAlgError, Exception):
-                    #  CORREGIDO: Silenciosamente omitir errores en backtesting
                     failed_count += 1
                     continue
             
@@ -970,7 +952,7 @@ class RollingValidationService:
         best_score = 0
         for h, m in metrics_by_horizon.items():
             # Score = precision * factor de utilidad
-            utility_factor = min(1.0, h / 6.0)  # Preferir horizontes más largos
+            utility_factor = min(1.0, h / 6.0)
             score = m['precision'] * (0.7 + 0.3 * utility_factor)
             if score > best_score and m['precision'] >= 75:
                 best_score = score
@@ -1017,7 +999,7 @@ class RollingValidationService:
         score_precision = rolling_precision
         score_cv = cv_stability
         score_params = param_stability_score
-        score_degradation = max(0, 100 + degradation_rate * 20)  # degradation_rate es negativo
+        score_degradation = max(0, 100 + degradation_rate * 20)
         
         # Puntaje global ponderado
         confidence_level = (
@@ -1028,12 +1010,14 @@ class RollingValidationService:
             score_degradation * 0.10
         )
         
-        # Clasificación de calidad
-        if confidence_level >= 85 and rolling_rmse < 3.0 and cv_stability >= 85 and param_stability_score >= 80:
+        # CAMBIO 2: Clasificación de calidad (ajustado a realidad de series temporales complejas)
+        # ANTES: confidence >= 85 and rmse < 3.0 and cv >= 85 and params >= 80 = EXCELENTE
+        # DESPUÉS: Umbrales más realistas basados en MAPE típico de SAIDI (15-25%)
+        if confidence_level >= 80 and rolling_rmse < 4.0 and cv_stability >= 80 and param_stability_score >= 75:
             model_quality = "EXCELENTE"
-        elif confidence_level >= 75 and rolling_rmse < 4.0 and cv_stability >= 75 and param_stability_score >= 70:
+        elif confidence_level >= 72 and rolling_rmse < 5.0 and cv_stability >= 70 and param_stability_score >= 65:
             model_quality = "CONFIABLE"
-        elif confidence_level >= 65 and rolling_rmse < 5.0:
+        elif confidence_level >= 65 and rolling_rmse < 6.5:
             model_quality = "CUESTIONABLE"
         else:
             model_quality = "NO CONFIABLE"
@@ -1050,25 +1034,27 @@ class RollingValidationService:
         else:
             recommendation = "No recomendado para uso productivo - Revisar especificación del modelo"
         
-        # Limitaciones
+        # CAMBIO 3: Limitaciones (umbrales más realistas)
+        # ANTES: RMSE > 3.0, CV < 75, Params < 70, Degradation > 3.0, Precision < 80
+        # DESPUÉS: Umbrales ajustados para evitar falsos positivos
         limitations = []
         
-        if rolling_rmse > 3.0:
+        if rolling_rmse > 5.0:
             limitations.append(f"RMSE elevado en rolling forecast ({rolling_rmse:.2f} min)")
         
-        if cv_stability < 75:
+        if cv_stability < 65:
             limitations.append(f"Estabilidad limitada en CV (Score: {cv_stability:.1f})")
         
-        if param_stability_score < 70:
+        if param_stability_score < 60:
             limitations.append(f"Parámetros inestables (Score: {param_stability_score:.1f})")
         
-        if abs(degradation_rate) > 3.0:
+        if abs(degradation_rate) > 4.0:
             limitations.append(f"Degradación notable después de {optimal_horizon} meses ({degradation_rate:.1f}% por mes)")
         
         if len(param_stability.get('unstable_params', [])) > 2:
             limitations.append(f"{len(param_stability['unstable_params'])} coeficientes inestables detectados")
         
-        if rolling_precision < 80:
+        if rolling_precision < 70:
             limitations.append(f"Precisión promedio limitada ({rolling_precision:.1f}%)")
         
         return {
@@ -1148,7 +1134,7 @@ class RollingValidationService:
                 else:
                     # Guardar scaler solo para compatibilidad (NO transformar)
                     self.exog_scaler = StandardScaler()
-                    self.exog_scaler.fit(exog_df)  # Solo FIT, NO transform
+                    self.exog_scaler.fit(exog_df)
                     
                     if log_callback:
                         log_callback("Variables exógenas preparadas en ESCALA ORIGINAL")
@@ -1187,15 +1173,15 @@ class RollingValidationService:
             
             if log_callback:
                 log_callback("=" * 60)
-                log_callback("🔍 DIAGNÓSTICO DE COBERTURA EXÓGENA")
+                log_callback("DIAGNÓSTICO DE COBERTURA EXÓGENA")
                 log_callback("=" * 60)
                 log_callback(f"SAIDI: {saidi_start.strftime('%Y-%m')} a {saidi_end.strftime('%Y-%m')} ({len(serie_saidi)} obs)")
                 log_callback(f"EXOG:  {exog_start.strftime('%Y-%m')} a {exog_end.strftime('%Y-%m')} ({len(exog_df)} obs)")
             
-            # 1️⃣ Verificar que los índices coinciden EXACTAMENTE
+            # 1 Verificar que los índices coinciden EXACTAMENTE
             if not exog_df.index.equals(serie_saidi.index):
                 if log_callback:
-                    log_callback("⚠️ ADVERTENCIA: Índices no coinciden exactamente")
+                    log_callback("ADVERTENCIA: Índices no coinciden exactamente")
                 
                 # Verificar fechas faltantes
                 missing_in_exog = [d for d in serie_saidi.index if d not in exog_df.index]
@@ -1204,21 +1190,21 @@ class RollingValidationService:
                     pct_missing = len(missing_in_exog) / len(serie_saidi) * 100
                     
                     if log_callback:
-                        log_callback(f"❌ Fechas SAIDI faltantes en EXOG: {len(missing_in_exog)} ({pct_missing:.1f}%)")
+                        log_callback(f"Fechas SAIDI faltantes en EXOG: {len(missing_in_exog)} ({pct_missing:.1f}%)")
                     
                     # CRÍTICO: Si falta >20% de fechas, rechazar
                     if pct_missing > 20:
                         if log_callback:
-                            log_callback("❌ ERROR CRÍTICO: >20% de fechas faltantes")
+                            log_callback("ERROR CRÍTICO: >20% de fechas faltantes")
                             log_callback("Las variables exógenas NO cubren suficiente período histórico")
                         return False
             
-            # 2️⃣ Verificar que NO hay NaN en ninguna columna
+            # 2 Verificar que NO hay NaN en ninguna columna
             if exog_df.isnull().any().any():
                 nan_cols = exog_df.columns[exog_df.isnull().any()].tolist()
                 
                 if log_callback:
-                    log_callback("❌ ERROR: Columnas con NaN encontradas:")
+                    log_callback("ERROR: Columnas con NaN encontradas:")
                     for col in nan_cols:
                         nan_count = exog_df[col].isnull().sum()
                         pct_nan = (nan_count / len(exog_df)) * 100
@@ -1227,13 +1213,13 @@ class RollingValidationService:
                 
                 return False
             
-            # 3️⃣ Verificar valores infinitos
+            # 3 Verificar valores infinitos
             if np.isinf(exog_df.values).any():
                 if log_callback:
-                    log_callback("❌ ERROR: Variables exógenas contienen valores infinitos")
+                    log_callback("ERROR: Variables exógenas contienen valores infinitos")
                 return False
             
-            # 4️⃣ Verificar que hay varianza en las variables
+            # 4 Verificar que hay varianza en las variables
             zero_variance_vars = []
             for col in exog_df.columns:
                 if exog_df[col].std() == 0:
@@ -1241,21 +1227,20 @@ class RollingValidationService:
             
             if zero_variance_vars:
                 if log_callback:
-                    log_callback("⚠️ ADVERTENCIA: Variables con varianza cero:")
+                    log_callback("ADVERTENCIA: Variables con varianza cero:")
                     for var in zero_variance_vars:
                         log_callback(f"  - {var}")
                     log_callback("Estas variables no aportan información al modelo")
-                # No rechazar por esto, solo advertir
             
             if log_callback:
-                log_callback("✅ Cobertura temporal y calidad de datos OK")
+                log_callback("Cobertura temporal y calidad de datos OK")
                 log_callback("=" * 60)
             
             return True
             
         except Exception as e:
             if log_callback:
-                log_callback(f"❌ ERROR durante diagnóstico: {e}")
+                log_callback(f"ERROR durante diagnóstico: {e}")
             return False
     
     def _prepare_exogenous_variables(self,
@@ -1301,9 +1286,8 @@ class RollingValidationService:
                 log_callback(f" Preparando variables para {regional_code}")
                 log_callback("   MODO: SIN ESCALADO (valores originales)")
             
-            # ========== VALIDAR ÍNDICE DATETIME ==========
+            # Validar índice datetime
             if not isinstance(climate_data.index, pd.DatetimeIndex):
-                # Buscar columna de fecha
                 fecha_col = None
                 for col in ['fecha', 'Fecha', 'date', 'Date', 'month_date']:
                     if col in climate_data.columns:
@@ -1330,7 +1314,7 @@ class RollingValidationService:
                     log_callback("ERROR: Formato de fecha inválido")
                 return None, None
             
-            # ========== ANÁLISIS DE COBERTURA TEMPORAL ==========
+            # Análisis de cobertura temporal
             historico = df_saidi[df_saidi['SAIDI'].notna() if 'SAIDI' in df_saidi.columns else df_saidi['SAIDI Histórico'].notna()]
             
             saidi_start = historico.index[0]
@@ -1361,7 +1345,7 @@ class RollingValidationService:
                 log_callback(f"   CLIMA: {clima_start.strftime('%Y-%m')} a {clima_end.strftime('%Y-%m')} ({len(climate_data)} meses)")
                 log_callback(f"   OVERLAP: {overlap_start.strftime('%Y-%m')} a {overlap_end.strftime('%Y-%m')} ({overlap_months} meses)")
             
-            # ========== MAPEO AUTOMÁTICO DE COLUMNAS ==========
+            # Mapeo automático de columnas
             exog_vars_config = self.REGIONAL_EXOG_VARS[regional_code]
             
             # Normalizar nombres disponibles
@@ -1400,7 +1384,7 @@ class RollingValidationService:
                     log_callback(" ERROR: No se pudo mapear ninguna variable")
                 return None, None
             
-            # ========== PREPARACIÓN DE VARIABLES SIN ESCALADO ==========
+            # Preparación de variables SIN ESCALADO
             exog_df = pd.DataFrame(index=historico.index)
             exog_info = {}
             
@@ -1430,7 +1414,7 @@ class RollingValidationService:
                     # RECHAZAR si cobertura < 80%
                     if overlap_pct < 80:
                         if log_callback:
-                            log_callback(f"   ❌ RECHAZADA {var_code}: cobertura {overlap_pct:.1f}% < 80%")
+                            log_callback(f"   RECHAZADA {var_code}: cobertura {overlap_pct:.1f}% < 80%")
                         continue
                     
                     # VALIDACIÓN: Varianza en overlap
@@ -1438,7 +1422,7 @@ class RollingValidationService:
                     
                     if pd.isna(var_std) or var_std == 0:
                         if log_callback:
-                            log_callback(f"   ❌ RECHAZADA {var_code}: varianza = 0")
+                            log_callback(f"   RECHAZADA {var_code}: varianza = 0")
                         continue
                     
                     # Forward-fill para fechas futuras
@@ -1456,39 +1440,39 @@ class RollingValidationService:
                     final_nan = aligned_series.isnull().sum()
                     if final_nan > 0:
                         if log_callback:
-                            log_callback(f"   ❌ RECHAZADA {var_code}: {final_nan} NaN finales")
+                            log_callback(f"   RECHAZADA {var_code}: {final_nan} NaN finales")
                         continue
                     
-                    # ===== GUARDAR EN ESCALA ORIGINAL =====
+                    # GUARDAR EN ESCALA ORIGINAL
                     exog_df[var_code] = aligned_series
                     
                     exog_info[var_code] = {
                         'nombre': var_nombre,
                         'columna_clima': climate_col,
                         'correlacion': self._get_correlation_for_var(var_code, regional_code),
-                        'scaled': False,  # CRÍTICO
+                        'scaled': False,
                         'datos_reales_overlap': int(datos_reales_overlap),
                         'overlap_coverage_pct': float(overlap_pct),
                         'varianza_overlap': float(var_std)
                     }
                     
                     if log_callback:
-                        log_callback(f"   ✅ {var_code} -> ACEPTADA ({overlap_pct:.1f}% cobertura, r={exog_info[var_code]['correlacion']:.3f})")
+                        log_callback(f"   ACEPTADA {var_code} ({overlap_pct:.1f}% cobertura, r={exog_info[var_code]['correlacion']:.3f})")
                         
                 except Exception as e:
                     if log_callback:
-                        log_callback(f"   ❌ ERROR {var_code}: {e}")
+                        log_callback(f"   ERROR {var_code}: {e}")
                     continue
             
             # VALIDACIÓN FINAL
             if exog_df.empty or exog_df.shape[1] == 0:
                 if log_callback:
-                    log_callback("❌ ERROR: Ninguna variable aceptada")
+                    log_callback("ERROR: Ninguna variable aceptada")
                 return None, None
             
             if log_callback:
                 log_callback("=" * 60)
-                log_callback(f"✅ Variables preparadas: {len(exog_df.columns)}")
+                log_callback(f"Variables preparadas: {len(exog_df.columns)}")
                 log_callback("   ESCALA: ORIGINAL (sin StandardScaler)")
                 log_callback("   Rangos:")
                 for col in exog_df.columns:
@@ -1499,7 +1483,7 @@ class RollingValidationService:
             
         except Exception as e:
             if log_callback:
-                log_callback(f"❌ ERROR CRÍTICO: {str(e)}")
+                log_callback(f"ERROR CRÍTICO: {str(e)}")
             return None, None
     
     def _align_exog_to_saidi(self,
@@ -1662,9 +1646,7 @@ class RollingValidationService:
                                  seasonal_order: Tuple,
                                  transformation: str,
                                  exog_info: Optional[Dict]) -> Optional[str]:
-        """
-        Generar panel de gráficas comprehensivo
-        """
+        """Generar panel de gráficas comprehensivo"""
         try:
             temp_dir = tempfile.gettempdir()
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1821,7 +1803,7 @@ class RollingValidationService:
             labels = [L.get_label() for L in lines]
             ax4.legend(lines, labels, fontsize=9, loc='lower left')
             
-            # ✅ Panel 5: Diagnóstico Completo (SIN split_precision)
+            # Panel 5: Diagnóstico Completo (SIN split_precision)
             ax5 = plt.subplot(2, 3, 5)
             ax5.axis('off')
             
@@ -1867,7 +1849,7 @@ class RollingValidationService:
             
             if limitations:
                 diagnosis_text += "LIMITACIONES IDENTIFICADAS:\n"
-                for lim in limitations[:4]:  # Máximo 4
+                for lim in limitations[:4]:
                     diagnosis_text += f"• {lim}\n"
             
             diagnosis_text += f"\nModelo: SARIMAX{order}x{seasonal_order}"

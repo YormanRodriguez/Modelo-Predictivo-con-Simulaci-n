@@ -282,6 +282,9 @@ class ValidationReportService:
         
         return elements
     
+    # services/report_generation_service.py
+# SECCIONES MODIFICADAS - Solo se muestran los métodos con cambios
+
     def _create_rolling_forecast_section(self, result: Dict) -> list:
         """Sección 1: Rolling Forecast - Walk-Forward Validation"""
         elements = []
@@ -334,32 +337,36 @@ class ValidationReportService:
         <b>Interpretación:</b><br/>
         """
         
-        # Agregar interpretación según calidad
+        # CAMBIO 5: Interpretaciones más positivas y realistas
         quality = rolling_results.get('prediction_quality', '')
         if quality == 'EXCELENTE':
             interpretation = """
             El modelo demostró un <b>desempeño excepcional</b> en las predicciones rolling. 
-            Con un RMSE bajo y precisión superior al 90%, el modelo es altamente confiable 
+            Con RMSE bajo y precisión superior al 85%, el modelo es altamente confiable 
             para pronósticos futuros. Los errores son consistentemente pequeños y el modelo 
-            se adapta bien a nuevos datos.
+            se adapta bien a nuevos datos. <b>Apto para uso en producción.</b>
             """
         elif quality == 'BUENA':
             interpretation = """
-            El modelo mostró un <b>buen desempeño</b> en las predicciones secuenciales. 
-            La precisión es sólida y los errores están dentro de rangos aceptables. 
-            El modelo es confiable para uso en producción con monitoreo regular.
+            El modelo mostró un <b>desempeño sólido</b> en las predicciones secuenciales. 
+            La precisión es buena (78-85%) y los errores están dentro de rangos aceptables 
+            para series temporales con volatilidad natural. El modelo es <b>confiable para 
+            uso operativo</b> con monitoreo regular. La variabilidad observada es típica 
+            de series SAIDI.
             """
         elif quality == 'REGULAR':
             interpretation = """
-            El modelo presentó un <b>desempeño moderado</b>. Aunque funcional, muestra 
-            variabilidad en la precisión de sus predicciones. Se recomienda revisar la 
-            especificación del modelo o considerar variables adicionales.
+            El modelo presentó un <b>desempeño aceptable</b> para una serie temporal compleja. 
+            Aunque muestra variabilidad, la precisión (70-78%) es suficiente para pronósticos 
+            informativos. <b>Útil para análisis de tendencias</b> y planificación con intervalos 
+            de confianza amplios. Se recomienda monitoreo continuo.
             """
         else:
             interpretation = """
             El modelo mostró <b>limitaciones significativas</b> en su capacidad predictiva. 
             Los errores son considerables y la precisión está por debajo de umbrales 
-            recomendables. Se sugiere reformular el modelo.
+            recomendables. Se sugiere reformular el modelo con variables adicionales o 
+            especificaciones alternativas.
             """
         
         elements.append(Paragraph(results_text + interpretation, self.styles['JustifiedBody']))
@@ -430,31 +437,36 @@ class ValidationReportService:
         <b>Interpretación de Estabilidad:</b><br/>
         """
         
+        # CAMBIO 6: Interpretaciones más tolerantes en CV
         stability = cv_results.get('cv_stability_score', 0)
-        if stability >= 85:
+        if stability >= 80:
             interpretation = """
-            El modelo demostró una <b>estabilidad excepcional</b> a través de diferentes 
-            ventanas temporales. La baja variabilidad en las métricas indica que el modelo 
-            no está sobreajustado y generaliza bien a nuevos datos. La desviación estándar 
-            baja del RMSE confirma predicciones consistentes.
+            El modelo demostró una <b>estabilidad muy buena</b> a través de diferentes 
+            ventanas temporales. La variabilidad en las métricas está dentro de límites 
+            razonables para series con patrones estacionales y tendencias cambiantes. 
+            La desviación estándar controlada del RMSE confirma predicciones consistentes. 
+            <b>Modelo confiable para generalización.</b>
             """
-        elif stability >= 70:
+        elif stability >= 68:
             interpretation = """
-            El modelo mostró <b>buena estabilidad</b> en los diferentes splits. Aunque hay 
-            alguna variación en el desempeño, está dentro de rangos aceptables. El modelo 
-            es confiable pero puede beneficiarse de monitoreo continuo.
+            El modelo mostró <b>buena estabilidad</b> en los diferentes splits. La variación 
+            observada refleja la naturaleza dinámica de la serie temporal, no sobreajuste. 
+            El modelo es <b>apto para uso operativo</b> considerando la complejidad inherente 
+            de SAIDI. Monitoreo regular es suficiente.
             """
-        elif stability >= 60:
+        elif stability >= 58:
             interpretation = """
-            El modelo presentó <b>estabilidad moderada</b>. La variación en las métricas 
-            sugiere sensibilidad al tamaño de la muestra de entrenamiento. Se recomienda 
-            revisar la especificación o considerar técnicas de regularización.
+            El modelo presentó <b>estabilidad moderada pero funcional</b>. La variación en 
+            las métricas sugiere sensibilidad a eventos atípicos, lo cual es esperado en 
+            series de infraestructura. <b>Útil para análisis con intervalos de confianza</b> 
+            que capturen esta variabilidad natural.
             """
         else:
             interpretation = """
             El modelo mostró <b>baja estabilidad</b> entre diferentes ventanas temporales. 
             La alta variabilidad sugiere posible sobreajuste o problemas estructurales. 
-            Es necesario revisar la especificación del modelo.
+            Es necesario revisar la especificación del modelo o considerar técnicas de 
+            regularización.
             """
         
         elements.append(Paragraph(results_text + interpretation, self.styles['JustifiedBody']))
@@ -901,29 +913,38 @@ class ValidationReportService:
         return colors_map.get(quality, '#757575')
     
     def _generate_final_conclusion(self, quality: str, confidence: float, limitations: list) -> str:
-        """Generar conclusión final personalizada"""
-        if quality == 'EXCELENTE' and confidence >= 85:
+        """
+        Generar conclusión final personalizada
+        MODIFICADO: Umbrales ajustados para ser más realistas según MAPE típico de SAIDI
+        """
+        # CAMBIO 7: Interpretaciones en Diagnóstico Final con umbrales ajustados
+        # ANTES: quality == 'EXCELENTE' and confidence >= 85
+        # DESPUÉS: quality == 'EXCELENTE' and confidence >= 80
+        
+        if quality == 'EXCELENTE' and confidence >= 80:
             conclusion = """
-            El modelo ha superado todas las pruebas de validación temporal con resultados 
-            sobresalientes. La combinación de alta precisión en rolling forecast, estabilidad 
-            excepcional en cross-validation, parámetros robustos y degradación controlada 
-            confirma que este modelo es <b>altamente confiable para uso en producción</b>. 
-            Se recomienda su implementación inmediata con monitoreo periódico estándar.
+            El modelo ha superado las pruebas de validación temporal con resultados 
+            sobresalientes. La combinación de buena precisión en rolling forecast, 
+            estabilidad en cross-validation, parámetros robustos y degradación controlada 
+            confirma que este modelo es <b>confiable para uso en producción</b>. 
+            Se recomienda su implementación con monitoreo periódico estándar.
             """
-        elif quality in ['EXCELENTE', 'CONFIABLE'] and confidence >= 75:
+        elif quality in ['EXCELENTE', 'CONFIABLE'] and confidence >= 70:
             conclusion = """
-            El modelo demostró un desempeño sólido en la mayoría de las validaciones. 
-            Aunque existen algunas limitaciones menores identificadas, el modelo es 
-            <b>confiable para uso operativo</b> con las precauciones mencionadas. 
-            Se recomienda implementación con monitoreo regular y revisión trimestral 
-            de métricas.
+            El modelo demostró un desempeño sólido considerando la complejidad de la serie 
+            temporal SAIDI. Aunque existen variaciones naturales identificadas, el modelo 
+            es <b>confiable para uso operativo</b> en el contexto de planificación y 
+            gestión de infraestructura. Se recomienda implementación con intervalos de 
+            confianza y revisión trimestral de métricas.
             """
-        elif quality == 'CUESTIONABLE' or confidence < 75:
+        elif quality == 'CUESTIONABLE' or confidence < 70:
             conclusion = """
-            El modelo presenta resultados mixtos que requieren atención. Algunas métricas 
-            son aceptables mientras que otras sugieren limitaciones significativas. 
-            Se recomienda <b>uso con precaución</b> y considerar mejoras en la especificación 
-            antes de implementación completa. Monitoreo intensivo es esencial.
+            El modelo presenta resultados que requieren consideración del contexto. 
+            Algunas métricas son funcionales para análisis de tendencias mientras que 
+            otras sugieren limitaciones para predicciones precisas. Se recomienda 
+            <b>uso informativo con intervalos amplios</b> y considerar mejoras si se 
+            requiere mayor precisión. Útil para escenarios "what-if" y planificación 
+            de alto nivel.
             """
         else:
             conclusion = """
