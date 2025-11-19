@@ -108,40 +108,151 @@ class ValidationService:
         self.transformation_params = {}
         self.simulation_service = ClimateSimulationService()
 
-    def _get_orders_for_regional(self, regional_code):
+    def load_optimized_config(self, regional_code: str) -> Optional[Dict[str, Any]]:
         """
-        Obtener ordenes SARIMAX especificos para una regional
+        Cargar configuración optimizada para una regional
+        
+        Lee el archivo JSON generado por OptimizationService y retorna
+        los mejores parámetros encontrados previamente.
         
         Args:
-            regional_code: Codigo de la regional (ej: 'SAIDI_O')
+            regional_code: Código de la regional (ej: 'SAIDI_O')
         
         Returns:
-            tuple: (order, seasonal_order) - Ordenes ARIMA y estacionales
+            Dict con configuración óptima o None si no existe
         """
-        if regional_code and regional_code in self.REGIONAL_ORDERS:
-            config = self.REGIONAL_ORDERS[regional_code]
-            return config['order'], config['seasonal_order']
-        else:
-            # Fallback a valores por defecto si no hay configuracion especifica
+        try:
+            import json
+            from pathlib import Path
+            
+            # Ubicación del archivo de configuración
+            config_file = Path(__file__).parent.parent / 'config' / 'optimized_models.json'
+            
+            if not config_file.exists():
+                print("[LOAD_CONFIG] No existe archivo de configuraciones optimizadas")
+                return None
+            
+            # Cargar configuraciones
+            with open(config_file, 'r', encoding='utf-8') as f:
+                configs = json.load(f)
+            
+            # Buscar configuración de la regional
+            if regional_code not in configs:
+                print(f"[LOAD_CONFIG] No hay configuración optimizada para {regional_code}")
+                return None
+            
+            config = configs[regional_code]
+            
+            print(f"[LOAD_CONFIG] ✓ Configuración cargada para {regional_code}")
+            print(f"[LOAD_CONFIG]   Transformación: {config['transformation']}")
+            print(f"[LOAD_CONFIG]   Order: {config['order']}")
+            print(f"[LOAD_CONFIG]   Seasonal: {config['seasonal_order']}")
+            print(f"[LOAD_CONFIG]   Precisión: {config['precision_final']:.1f}%")
+            print(f"[LOAD_CONFIG]   Optimizado: {config['optimization_date']}")
+            
+            return config
+            
+        except Exception as e:
+            print(f"[LOAD_CONFIG] ERROR cargando configuración: {e}")
+            return None
+
+    def _get_orders_for_regional(self, regional_code):
+        """
+        MÉTODO ACTUALIZADO: Obtener órdenes SARIMAX específicos para una regional
+        
+        Prioriza configuración optimizada sobre defaults hardcodeados.
+        
+        Args:
+            regional_code: Código de la regional (ej: 'SAIDI_O')
+        
+        Returns:
+            tuple: (order, seasonal_order) - Órdenes ARIMA y estacionales
+        """
+        if not regional_code:
             return self.default_order, self.default_seasonal_order
+        
+        # PRIORIDAD 1: Intentar cargar configuración optimizada
+        optimized_config = self.load_optimized_config(regional_code)
+        
+        if optimized_config:
+            order = tuple(optimized_config['order'])
+            seasonal_order = tuple(optimized_config['seasonal_order'])
+            
+            print(f"[ORDERS] Usando parámetros OPTIMIZADOS para {regional_code}")
+            print(f"[ORDERS]   Order: {order}")
+            print(f"[ORDERS]   Seasonal: {seasonal_order}")
+            print(f"[ORDERS]   Precisión documentada: {optimized_config['precision_final']:.1f}%")
+            
+            return order, seasonal_order
+        
+        # PRIORIDAD 2: Usar configuración hardcodeada
+        if regional_code in self.REGIONAL_ORDERS:
+            config = self.REGIONAL_ORDERS[regional_code]
+            order = config['order']
+            seasonal_order = config['seasonal_order']
+            
+            print(f"[ORDERS] Usando parámetros DEFAULT para {regional_code}")
+            print(f"[ORDERS]   Order: {order}")
+            print(f"[ORDERS]   Seasonal: {seasonal_order}")
+            
+            return order, seasonal_order
+        
+        # FALLBACK: Usar valores por defecto genéricos
+        print(f"[ORDERS] Usando parámetros FALLBACK para {regional_code}")
+        print(f"[ORDERS]   Order: {self.default_order}")
+        print(f"[ORDERS]   Seasonal: {self.default_seasonal_order}")
+        
+        return self.default_order, self.default_seasonal_order
     
     def run_validation(self, 
-                      file_path: Optional[str] = None, 
-                      df_prepared: Optional[pd.DataFrame] = None, 
-                      order: Optional[Tuple] = None, 
-                      seasonal_order: Optional[Tuple] = None,
-                      regional_code: Optional[str] = None, 
-                      climate_data: Optional[pd.DataFrame] = None,
-                      simulation_config: Optional[Dict] = None,  
-                      progress_callback = None, 
-                      log_callback = None) -> Dict[str, Any]:
+                  file_path: Optional[str] = None, 
+                  df_prepared: Optional[pd.DataFrame] = None, 
+                  order: Optional[Tuple] = None, 
+                  seasonal_order: Optional[Tuple] = None,
+                  regional_code: Optional[str] = None, 
+                  climate_data: Optional[pd.DataFrame] = None,
+                  simulation_config: Optional[Dict] = None,
+                  progress_callback = None, 
+                  log_callback = None) -> Dict[str, Any]:
         """
         Ejecutar validacion del modelo SARIMAX con transformacion especifica por regional
+        
+        Carga automáticamente parámetros optimizados si existen
+        
+        Args:
+            file_path: Ruta del archivo SAIDI Excel
+            df_prepared: DataFrame de SAIDI ya preparado
+            order: Orden ARIMA (opcional - si None usa el optimizado/default de la regional)
+            seasonal_order: Orden estacional ARIMA (opcional - si None usa el optimizado/default)
+            regional_code: Código de la regional
+            climate_data: DataFrame con datos climáticos mensuales
+            simulation_config: Configuración de simulación climática (opcional)
+            progress_callback: Función para actualizar progreso
+            log_callback: Función para loguear mensajes
         
         Returns:
             Diccionario con resultados de validacion
         """
         try:
+            # ========== NUEVO: CARGAR CONFIGURACIÓN OPTIMIZADA ==========
+            optimized_config = None
+            
+            if regional_code:
+                optimized_config = self.load_optimized_config(regional_code)
+                
+                if optimized_config and log_callback:
+                    log_callback("=" * 80)
+                    log_callback("⚙️  USANDO CONFIGURACIÓN OPTIMIZADA")
+                    log_callback("=" * 80)
+                    log_callback(f"Regional: {regional_code}")
+                    log_callback(f"Transformación: {optimized_config['transformation'].upper()}")
+                    log_callback(f"Order: {optimized_config['order']}")
+                    log_callback(f"Seasonal: {optimized_config['seasonal_order']}")
+                    log_callback(f"Precisión documentada: {optimized_config['precision_final']:.1f}%")
+                    log_callback(f"Optimizado en: {optimized_config['optimization_date']}")
+                    log_callback("=" * 80)
+            
+            # Obtener parámetros (prioriza optimizados > hardcoded > default)
             if order is None or seasonal_order is None:
                 order_regional, seasonal_regional = self._get_orders_for_regional(regional_code)
                 
@@ -150,7 +261,7 @@ class ValidationService:
                 if seasonal_order is None:
                     seasonal_order = seasonal_regional
                 
-                if log_callback and regional_code:
+                if log_callback and regional_code and not optimized_config:
                     regional_nombre = {
                         'SAIDI_O': 'Ocaña',
                         'SAIDI_C': 'Cúcuta',
@@ -160,11 +271,11 @@ class ValidationService:
                         'SAIDI_Cens': 'CENS'
                     }.get(regional_code, regional_code)
                     
-                    log_callback(f"Usando parametros optimizados para regional {regional_nombre}")
+                    log_callback(f"Usando parametros default para regional {regional_nombre}")
                     log_callback(f"   Order: {order}")
                     log_callback(f"   Seasonal Order: {seasonal_order}")
             
-            # Determinar transformacion a usar
+            # Determinar transformacion (prioriza optimizada)
             transformation = self._get_transformation_for_regional(regional_code)
             
             # Detectar si hay simulacion
@@ -176,7 +287,7 @@ class ValidationService:
                 
                 if simulation_applied:
                     log_callback("=" * 60)
-                    log_callback(" VALIDACIÓN CON SIMULACIÓN CLIMÁTICA")
+                    log_callback("🌦️ VALIDACIÓN CON SIMULACIÓN CLIMÁTICA")
                     log_callback("=" * 60)
                     
                     summary = simulation_config.get('summary', {})
@@ -196,7 +307,7 @@ class ValidationService:
                             log_callback(f"   {arrow} {var_info['nombre']}: {change:+.1f}%")
                     
                     log_callback("")
-                    log_callback("  NOTA: Validación bajo condiciones climáticas HIPOTÉTICAS")
+                    log_callback("⚠️  NOTA: Validación bajo condiciones climáticas HIPOTÉTICAS")
                     log_callback("   Las métricas reflejan el comportamiento del modelo")
                     log_callback("   bajo el escenario simulado, NO el clima real histórico")
                     log_callback("=" * 60)
@@ -712,9 +823,36 @@ class ValidationService:
             return exog_forecast_original
     
     def _get_transformation_for_regional(self, regional_code: Optional[str]) -> str:
-        """Obtener la transformacion correspondiente a la regional"""
-        if regional_code and regional_code in self.REGIONAL_TRANSFORMATIONS:
-            return self.REGIONAL_TRANSFORMATIONS[regional_code]
+        """
+        Obtener transformación para la regional
+        
+        Prioriza configuración optimizada sobre defaults hardcodeados.
+        
+        Args:
+            regional_code: Código de la regional (ej: 'SAIDI_O')
+        
+        Returns:
+            str: Tipo de transformación a aplicar
+        """
+        if not regional_code:
+            return 'original'
+        
+        # PRIORIDAD 1: Intentar cargar configuración optimizada
+        optimized_config = self.load_optimized_config(regional_code)
+        
+        if optimized_config:
+            transformation = optimized_config.get('transformation', 'original')
+            print(f"[TRANSFORMATION] Usando transformación OPTIMIZADA: {transformation}")
+            return transformation
+        
+        # PRIORIDAD 2: Usar defaults hardcodeados
+        if regional_code in self.REGIONAL_TRANSFORMATIONS:
+            transformation = self.REGIONAL_TRANSFORMATIONS[regional_code]
+            print(f"[TRANSFORMATION] Usando transformación DEFAULT: {transformation}")
+            return transformation
+        
+        # FALLBACK: Original
+        print("[TRANSFORMATION] Usando transformación FALLBACK: original")
         return 'original'
     
     def _prepare_exogenous_variables(self,

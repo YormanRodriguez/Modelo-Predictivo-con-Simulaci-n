@@ -648,19 +648,33 @@ class AppController(QObject):
             regional_code = self.model.get_selected_regional()
             regional_nombre = self.model.REGIONAL_MAPPING.get(regional_code, regional_code)
             
-            transformation = self.validation_service.REGIONAL_TRANSFORMATIONS.get(
-                regional_code, 'original'
-            )
+            # ========== NUEVO: Intentar cargar configuración optimizada ==========
+            optimized_config = self.validation_service.load_optimized_config(regional_code)
             
-            self.view.log_message(f"Ejecutando validación para: {regional_nombre}")
-            self.view.log_message(f"Transformación asignada: {transformation.upper()}")
+            if optimized_config:
+                self.view.log_message("=" * 60)
+                self.view.log_message("DETECTADA CONFIGURACIÓN OPTIMIZADA")
+                self.view.log_message("=" * 60)
+                self.view.log_message(f"Regional: {regional_nombre}")
+                self.view.log_message(f"Transformación optimizada: {optimized_config['transformation'].upper()}")
+                self.view.log_message(f"Precisión documentada: {optimized_config['precision_final']:.1f}%")
+                self.view.log_message(f"Optimizado en: {optimized_config['optimization_date']}")
+                self.view.log_message("Estos parámetros se usarán automáticamente en la validación")
+                self.view.log_message("=" * 60)
+            else:
+                # Si no hay optimización, mostrar transformación default
+                transformation = self.validation_service.REGIONAL_TRANSFORMATIONS.get(
+                    regional_code, 'original'
+                )
+                self.view.log_message(f"Ejecutando validación para: {regional_nombre}")
+                self.view.log_message(f"Transformación default: {transformation.upper()}")
             
             # Obtener datos climáticos si están disponibles
             if self.are_climate_data_available(regional_code):
                 climate_data = self.get_climate_data_for_regional(regional_code)
                 self.view.log_message(f"✓ Datos climáticos disponibles para {regional_nombre}")
                 
-                # ========== CORREGIDO: Si la simulación está habilitada, abrir diálogo ==========
+                # Si la simulación está habilitada, abrir diálogo
                 if getattr(self.view, 'enable_simulation_checkbox', None) and \
                 self.view.enable_simulation_checkbox.isChecked():
                     
@@ -674,10 +688,10 @@ class AppController(QObject):
                     else:
                         ultimo_mes = datetime.now().month
                     
-                    self.view.log_message("🌦️ Simulación climática habilitada para validación")
-                    self.view.log_message("   Abriendo configurador de escenarios...")
+                    self.view.log_message("Simulación climática habilitada para validación")
+                    self.view.log_message("Abriendo configurador de escenarios...")
                     
-                    # ========== USAR EL MISMO FORMATO QUE run_prediction ==========
+                    # Usar el mismo formato que run_prediction
                     from dataclasses import dataclass
                     
                     @dataclass
@@ -697,7 +711,7 @@ class AppController(QObject):
                         mode="validation"
                     )
                     
-                    # Abrir diálogo con el MISMO formato que run_prediction
+                    # Abrir diálogo
                     dialog = ClimateSimulationDialog(config, parent=self.view)
                     
                     # Conectar señales
@@ -711,7 +725,7 @@ class AppController(QObject):
                     dialog.exec()
                     return
             else:
-                self.view.log_message(f"⚠ Sin datos climáticos para {regional_nombre}")
+                self.view.log_message(f"Sin datos climáticos para {regional_nombre}")
         
         # Si llegamos aquí, ejecutar validación normal (sin simulación)
         self._execute_validation(regional_code, climate_data, None)
@@ -986,11 +1000,48 @@ class AppController(QObject):
         self.view.show_progress(visible=False)
         self.view.update_status("Validacion completada")
         
-        # NUEVO: Detectar si hubo simulación
+        # Detectar si hubo simulación
         model_params = result.get('model_params', {}) if result else {}
         simulation_applied = model_params.get('with_simulation', False)
         
-        if simulation_applied:
+        # ========== NUEVO: Detectar si se usó configuración optimizada ==========
+        regional_code = model_params.get('regional_code')
+        used_optimized = False
+        
+        if regional_code:
+            optimized_config = self.validation_service.load_optimized_config(regional_code)
+            if optimized_config:
+                used_optimized = True
+                
+                # Verificar que los parámetros coincidan
+                order_match = tuple(optimized_config['order']) == model_params.get('order')
+                seasonal_match = tuple(optimized_config['seasonal_order']) == model_params.get('seasonal_order')
+                transform_match = optimized_config['transformation'] == model_params.get('transformation')
+                
+                if order_match and seasonal_match and transform_match:
+                    regional_nombre = self.model.REGIONAL_MAPPING.get(regional_code, regional_code)
+                    
+                    self.view.log_success("=" * 60)
+                    self.view.log_success("✓ VALIDACIÓN CON CONFIGURACIÓN OPTIMIZADA")
+                    self.view.log_success("=" * 60)
+                    self.view.log_message(f"Regional: {regional_nombre}")
+                    self.view.log_message("Parámetros utilizados: OPTIMIZADOS")
+                    self.view.log_message(f"Transformación: {optimized_config['transformation'].upper()}")
+                    self.view.log_message(f"Order: {optimized_config['order']}")
+                    self.view.log_message(f"Seasonal: {optimized_config['seasonal_order']}")
+                    self.view.log_message(f"Precisión esperada (según optimización): {optimized_config['precision_final']:.1f}%")
+                    
+                    if simulation_applied:
+                        self.view.log_message("")
+                        self.view.log_message("NOTA ADICIONAL: Validación bajo simulación climática")
+                        sim_config = result.get('simulation_config', {}) if result else {}
+                        if sim_config:
+                            summary = sim_config.get('summary', {})
+                            self.view.log_message(f"Escenario simulado: {summary.get('escenario', 'N/A')}")
+                    
+                    self.view.log_message("=" * 60)
+        
+        if simulation_applied and not used_optimized:
             self.view.log_success("=" * 60)
             self.view.log_success("VALIDACIÓN CON SIMULACIÓN CLIMÁTICA COMPLETADA")
             self.view.log_success("=" * 60)
@@ -999,14 +1050,14 @@ class AppController(QObject):
             sim_config = result.get('simulation_config', {}) if result else {}
             if sim_config:
                 summary = sim_config.get('summary', {})
-                self.view.log_message(f"📊 Escenario simulado: {summary.get('escenario', 'N/A')}")
-                self.view.log_message(f"📅 Alcance: {summary.get('alcance_meses', 'N/A')} meses")
-                self.view.log_message(f"🌡️ Días simulados: {summary.get('dias_simulados', 'N/A')}")
+                self.view.log_message(f"Escenario simulado: {summary.get('escenario', 'N/A')}")
+                self.view.log_message(f"Alcance: {summary.get('alcance_meses', 'N/A')} meses")
+                self.view.log_message(f"Días simulados: {summary.get('dias_simulados', 'N/A')}")
                 
                 # Mostrar cambios en variables
                 changes = summary.get('percentage_changes', {})
                 if changes:
-                    self.view.log_message("\n🔄 Cambios aplicados a variables:")
+                    self.view.log_message("\nCambios aplicados a variables:")
                     var_names = {
                         'temp_max': 'Temperatura máxima',
                         'humedad_avg': 'Humedad relativa',
@@ -1018,12 +1069,12 @@ class AppController(QObject):
                         self.view.log_message(f"   {arrow} {var_name}: {change_pct:+.1f}%")
                 
                 self.view.log_message("")
-                self.view.log_message("⚠️  IMPORTANTE:")
-                self.view.log_message("   Las métricas reflejan el desempeño del modelo bajo condiciones")
-                self.view.log_message("   climáticas HIPOTÉTICAS del escenario simulado.")
-                self.view.log_message("   Los resultados reales dependerán de las condiciones climáticas efectivas.")
+                self.view.log_message("IMPORTANTE:")
+                self.view.log_message("Las métricas reflejan el desempeño del modelo bajo condiciones")
+                self.view.log_message("climáticas HIPOTÉTICAS del escenario simulado.")
+                self.view.log_message("Los resultados reales dependerán de las condiciones climáticas efectivas.")
                 self.view.log_message("")
-        else:
+        elif not used_optimized and not simulation_applied:
             self.view.log_success("Validación del modelo completada")
         
         if result and 'metrics' in result:
@@ -1052,6 +1103,27 @@ class AppController(QObject):
             self.view.log_message(f"  - MAPE: {metrics.get('mape', 0):.1f}%")
             self.view.log_message(f"  - R2: {metrics.get('r2_score', 0):.3f}")
             
+            # ========== NUEVO: Comparar con precisión optimizada ==========
+            if used_optimized:
+                optimized_config = self.validation_service.load_optimized_config(regional_code)
+                if optimized_config:
+                    expected_precision = optimized_config['precision_final']
+                    actual_precision = metrics.get('precision_final', 0)
+                    difference = actual_precision - expected_precision
+                    
+                    self.view.log_message("")
+                    self.view.log_message("📊 COMPARACIÓN CON OPTIMIZACIÓN:")
+                    self.view.log_message(f"  - Precisión esperada: {expected_precision:.1f}%")
+                    self.view.log_message(f"  - Precisión obtenida: {actual_precision:.1f}%")
+                    
+                    if abs(difference) <= 5:
+                        self.view.log_message(f"  ✓ Diferencia: {difference:+.1f}% (CONSISTENTE)")
+                    elif difference > 0:
+                        self.view.log_message(f"  ✓ Diferencia: {difference:+.1f}% (MEJOR de lo esperado)")
+                    else:
+                        self.view.log_message(f"  ⚠ Diferencia: {difference:+.1f}% (Menor de lo esperado)")
+                        self.view.log_message("     Posible causa: Datos de validación diferentes a optimización")
+            
             # Informacion de validacion
             self.view.log_message("")
             self.view.log_message(f"Datos de entrenamiento: {result.get('training_count', 0)} observaciones")
@@ -1075,8 +1147,6 @@ class AppController(QObject):
                         lower_val = lower_bounds.get(fecha, mean_val)
                         upper_val = upper_bounds.get(fecha, mean_val)
                         
-                        # Mostrar valor predicho y rango del intervalo (sin margenes individuales)
-                        
                         self.view.log_message(
                             f"  - {fecha}: {mean_val:.2f} min "
                             f"[IC: {lower_val:.2f} - {upper_val:.2f}]"
@@ -1086,15 +1156,15 @@ class AppController(QObject):
             precision = metrics.get('precision_final', 0)
             self.view.log_message("")
             if precision >= 90:
-                self.view.log_success("Calidad: EXCELENTE - Predicciones muy confiables")
+                self.view.log_success("Calidad: EXCELENTE - Predicciones muy confiables ⭐⭐⭐")
             elif precision >= 80:
-                self.view.log_success("Calidad: BUENO - Predicciones confiables")
+                self.view.log_success("Calidad: BUENO - Predicciones confiables ⭐⭐")
             elif precision >= 70:
-                self.view.log_message("Calidad: ACEPTABLE - Predicciones moderadamente confiables")
+                self.view.log_message("Calidad: ACEPTABLE - Predicciones moderadamente confiables ⭐")
             elif precision >= 60:
-                self.view.log_message("Calidad: REGULAR - Usar con precaución")
+                self.view.log_message("Calidad: REGULAR - Usar con precaución ⚠️")
             else:
-                self.view.log_error("Calidad: BAJO - Modelo poco confiable")
+                self.view.log_error("Calidad: BAJO - Modelo poco confiable ❌")
             
             # Nota sobre intervalos (solo para referencia)
             if model_params.get('confidence_level'):
