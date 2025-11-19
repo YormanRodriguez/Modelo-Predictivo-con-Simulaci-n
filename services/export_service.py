@@ -1,262 +1,383 @@
 # services/export_service.py - Servicio para exportar predicciones a Excel
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
 import pandas as pd
-import os
-from datetime import datetime
 from openpyxl import Workbook
-from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+
+
+@dataclass
+class RegionalInfo:
+    """Informacion de regional."""
+
+    code: str
+    nombre: str
+
+
+@dataclass
+class ExportConfig:
+    """Configuración para la exportación de predicciones."""
+
+    predictions_dict: dict[str, Any]
+    regional_code: str
+    regional_nombre: str
+    output_dir: Path | None = None
+    include_confidence_intervals: bool = True
+    model_info: dict[str, Any] | None = None
+
 
 class ExportService:
-    """Servicio para exportar predicciones SAIDI a Excel con formato profesional"""
-    
+    """Servicio para exportar predicciones SAIDI a Excel con formato profesional."""
+
     def __init__(self):
         self.last_export_path = None
-    
-    def export_predictions_to_excel(self, predictions_dict, regional_code, 
-                                   regional_nombre, output_dir=None, 
-                                   include_confidence_intervals=True,
-                                   model_info=None):
+
+    def export_predictions_to_excel(self, config: ExportConfig):
         """
-        Exportar predicciones a archivo Excel con formato
-        
+        Exportar predicciones a archivo Excel con formato.
+
         Args:
-            predictions_dict: Diccionario con predicciones {fecha_str: valor o dict}
-            regional_code: Codigo de la regional (ej: 'SAIDI_O')
-            regional_nombre: Nombre completo de la regional (ej: 'Ocana')
-            output_dir: Directorio donde guardar el archivo (opcional)
-            include_confidence_intervals: Incluir intervalos de confianza si existen
-            model_info: Informacion del modelo (opcional)
-        
+            config: Configuración de exportación con predicciones, códigos y opciones
+
         Returns:
             str: Ruta del archivo exportado o None si hay error
+
         """
+        if not config.predictions_dict:
+            raise ValueError("No hay predicciones para exportar")
+
+        return self._export_with_config(config)
+
+    def _export_with_config(self, config: ExportConfig) -> str | None:
+        """Exporta usando configuración interna."""
         try:
-            if not predictions_dict:
-                raise ValueError("No hay predicciones para exportar")
-            
-            # Determinar directorio de salida
-            if output_dir is None:
-                output_dir = os.path.expanduser("~/Desktop")
-            
-            if not os.path.exists(output_dir):
-                os.makedirs(output_dir, exist_ok=True)
-            
-            # Generar nombre de archivo
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            regional_clean = regional_nombre.replace(" ", "_")
-            filename = f"Predicciones_SAIDI_{regional_clean}_{timestamp}.xlsx"
-            filepath = os.path.join(output_dir, filename)
-            
-            # Preparar datos para DataFrame
-            data_rows = []
-            
-            # Determinar si hay intervalos de confianza
-            first_entry = next(iter(predictions_dict.values()))
-            has_intervals = isinstance(first_entry, dict) and 'limite_inferior' in first_entry
-            
-            for fecha_str, entry in predictions_dict.items():
-                if isinstance(entry, dict):
-                    # Formato con intervalos de confianza
-                    valor = entry.get('valor_predicho', entry.get('valor', 0))
-                    
-                    if include_confidence_intervals and has_intervals:
-                        inferior = entry.get('limite_inferior', None)
-                        superior = entry.get('limite_superior', None)
-                        margen = entry.get('margen_error', None)
-                        
-                        data_rows.append({
-                            'Fecha': fecha_str,
-                            f'SAIDI {regional_nombre} Predicho': round(valor, 2),
-                            'Limite Inferior (95%)': round(inferior, 2) if inferior is not None else None,
-                            'Limite Superior (95%)': round(superior, 2) if superior is not None else None,
-                            'Margen de Error': round(margen, 2) if margen is not None else None
-                        })
-                    else:
-                        data_rows.append({
-                            'Fecha': fecha_str,
-                            f'SAIDI {regional_nombre} Predicho': round(valor, 2)
-                        })
-                else:
-                    # Formato simple (solo valor numerico)
-                    data_rows.append({
-                        'Fecha': fecha_str,
-                        f'SAIDI {regional_nombre} Predicho': round(float(entry), 2)
-                    })
-            
-            # Crear DataFrame
-            df = pd.DataFrame(data_rows)
-            
-            # Crear workbook con openpyxl para formato avanzado
-            wb = Workbook()
-            ws = wb.active
-            ws.title = "Predicciones SAIDI"
-            
-            # Estilos
-            header_fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
-            header_font = Font(bold=True, color="FFFFFF", size=12)
-            header_alignment = Alignment(horizontal="center", vertical="center")
-            
-            cell_border = Border(
-                left=Side(style='thin'),
-                right=Side(style='thin'),
-                top=Side(style='thin'),
-                bottom=Side(style='thin')
-            )
-            
-            data_alignment = Alignment(horizontal="center", vertical="center")
-            
-            # Escribir encabezados
-            for col_idx, column in enumerate(df.columns, start=1):
-                cell = ws.cell(row=1, column=col_idx, value=column)
-                cell.fill = header_fill
-                cell.font = header_font
-                cell.alignment = header_alignment
-                cell.border = cell_border
-            
-            # Escribir datos
-            for row_idx, row_data in enumerate(df.values, start=2):
-                for col_idx, value in enumerate(row_data, start=1):
-                    cell = ws.cell(row=row_idx, column=col_idx, value=value)
-                    cell.alignment = data_alignment
-                    cell.border = cell_border
-                    
-                    # Formato numerico para columnas de valores
-                    if col_idx > 1 and value is not None:
-                        cell.number_format = '0.00'
-            
-            # Ajustar ancho de columnas
-            for column in ws.columns:
-                max_length = 0
-                column_letter = column[0].column_letter
-                
-                for cell in column:
-                    try:
-                        if len(str(cell.value)) > max_length:
-                            max_length = len(str(cell.value))
-                    except ValueError as e:
-                        # Manejar específicamente errores de valor
-                        print(f"Error al procesar celda: {e}")
-                        continue
-                    except TypeError as e:
-                        # Manejar errores de tipo
-                        print(f"Error de tipo al procesar celda: {e}")
-                        continue
-                
-                adjusted_width = min(max_length + 2, 30)
-                ws.column_dimensions[column_letter].width = adjusted_width
-            
-            # Agregar informacion del modelo en una hoja separada (opcional)
-            if model_info:
-                ws_info = wb.create_sheet("Informacion del Modelo")
-                
-                info_rows = [
-                    ["Informacion del Modelo de Prediccion", ""],
-                    ["", ""],
-                    ["Regional", regional_nombre],
-                    ["Codigo Regional", regional_code],
-                    ["Fecha de Exportacion", datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
-                    ["", ""],
-                    ["Parametros del Modelo", ""],
-                ]
-                
-                if 'order' in model_info:
-                    info_rows.append(["Order (p,d,q)", str(model_info['order'])])
-                if 'seasonal_order' in model_info:
-                    info_rows.append(["Seasonal Order (P,D,Q,s)", str(model_info['seasonal_order'])])
-                if 'transformation' in model_info:
-                    info_rows.append(["Transformacion", model_info['transformation'].upper()])
-                if 'with_exogenous' in model_info:
-                    info_rows.append(["Variables Exogenas", "SI" if model_info['with_exogenous'] else "NO"])
-                if 'with_simulation' in model_info:
-                    info_rows.append(["Simulacion Climatica", "SI" if model_info['with_simulation'] else "NO"])
-                if 'confidence_level' in model_info:
-                    info_rows.append(["Nivel de Confianza", f"{model_info['confidence_level']*100:.0f}%"])
-                
-                info_rows.append(["", ""])
-                info_rows.append(["Metricas del Modelo", ""])
-                
-                if 'metrics' in model_info and model_info['metrics']:
-                    metrics = model_info['metrics']
-                    if 'rmse' in metrics:
-                        info_rows.append(["RMSE", f"{metrics['rmse']:.4f}"])
-                    if 'mae' in metrics:
-                        info_rows.append(["MAE", f"{metrics['mae']:.4f}"])
-                    if 'mape' in metrics:
-                        info_rows.append(["MAPE", f"{metrics['mape']:.2f}%"])
-                    if 'r2_score' in metrics:
-                        info_rows.append(["R2 Score", f"{metrics['r2_score']:.4f}"])
-                    if 'precision_final' in metrics:
-                        info_rows.append(["Precision Final", f"{metrics['precision_final']:.2f}%"])
-                
-                # Escribir informacion
-                for row_idx, (label, value) in enumerate(info_rows, start=1):
-                    ws_info.cell(row=row_idx, column=1, value=label)
-                    ws_info.cell(row=row_idx, column=2, value=value)
-                    
-                    if label and not value:  # Titulos de seccion
-                        cell = ws_info.cell(row=row_idx, column=1)
-                        cell.font = Font(bold=True, size=11)
-                
-                ws_info.column_dimensions['A'].width = 30
-                ws_info.column_dimensions['B'].width = 25
-            
-            # Guardar archivo
-            wb.save(filepath)
-            
-            self.last_export_path = filepath
-            return filepath
-            
-        except Exception as e:
-            print(f"Error exportando predicciones: {str(e)}")
+            filepath = self._prepare_filepath(config)
+
+            # Si el archivo ya existe, eliminarlo antes de crear uno nuevo
+            if filepath.exists():
+                self._remove_existing_file(filepath)
+
+            df = self._create_dataframe(config)
+            wb = self._create_workbook(df, config)
+
+            if config.model_info:
+                self._add_model_info_sheet(wb, config)
+
+            # Guardar y verificar
+            self._save_and_verify_workbook(wb, filepath)
+
+            self.last_export_path = str(filepath)
+            return str(filepath)
+
+        except (OSError, ValueError) as e:
+            print(f"Error exportando predicciones: {e!s}")
             return None
-    
+
+    def _save_and_verify_workbook(self, wb, filepath):
+        """Guardar workbook y verificar que se creó correctamente."""
+        wb.save(str(filepath))
+
+        if not filepath.exists():
+            msg = f"El archivo no se creó correctamente: {filepath}"
+            raise OSError(msg)
+
+    def _remove_existing_file(self, filepath):
+        """Eliminar archivo existente con manejo de errores."""
+        try:
+            filepath.unlink()
+        except (OSError, PermissionError) as e:
+            print(f"Advertencia al eliminar archivo existente: {e}")
+
+    def _prepare_filepath(self, config: ExportConfig) -> Path:
+        """Prepara el directorio y nombre del archivo."""
+        output_dir = config.output_dir or Path.home() / "Desktop"
+        output_dir = Path(output_dir)
+
+        if not output_dir.exists():
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+        timestamp = datetime.now(tz=UTC).strftime("%Y%m%d_%H%M%S")
+        regional_clean = config.regional_nombre.replace(" ", "_")
+        filename = f"Predicciones_SAIDI_{regional_clean}_{timestamp}.xlsx"
+
+        return output_dir / filename
+
+    def _create_dataframe(self, config: ExportConfig) -> pd.DataFrame:
+        """Crea el DataFrame con las predicciones."""
+        data_rows = []
+        first_entry = next(iter(config.predictions_dict.values()))
+        has_intervals = isinstance(first_entry, dict) and "limite_inferior" in first_entry
+
+        for fecha_str, entry in config.predictions_dict.items():
+            row = self._process_entry(
+                fecha_str,
+                entry,
+                config.regional_nombre,
+                include_ci=config.include_confidence_intervals,
+                has_intervals=has_intervals,
+            )
+            data_rows.append(row)
+
+        return pd.DataFrame(data_rows)
+
+    def _process_entry(self, fecha_str: str, entry: Any, regional_nombre: str, *,
+                      include_ci: bool, has_intervals: bool) -> dict[str, Any]:
+        """Procesa una entrada de predicción individual."""
+        if isinstance(entry, dict):
+            return self._process_dict_entry(
+                fecha_str,
+                entry,
+                regional_nombre,
+                include_ci=include_ci,
+                has_intervals=has_intervals,
+            )
+
+        return {
+            "Fecha": fecha_str,
+            f"SAIDI {regional_nombre} Predicho": round(float(entry), 2),
+        }
+
+    def _process_dict_entry(self, fecha_str: str, entry: dict[str, Any],
+                       regional_nombre: str, *, include_ci: bool,
+                       has_intervals: bool) -> dict[str, Any]:
+        """Procesa entrada en formato diccionario."""
+        valor = entry.get("valor_predicho", entry.get("valor", 0))
+        row = {
+            "Fecha": fecha_str,
+            f"SAIDI {regional_nombre} Predicho": round(valor, 2),
+        }
+
+        if include_ci and has_intervals:
+            self._add_confidence_intervals(row, entry)
+
+        return row
+    def _add_confidence_intervals(self, row: dict[str, Any], entry: dict[str, Any]):
+        """Agrega intervalos de confianza al diccionario de fila."""
+        inferior = entry.get("limite_inferior")
+        superior = entry.get("limite_superior")
+        margen = entry.get("margen_error")
+
+        row["Limite Inferior (95%)"] = round(inferior, 2) if inferior is not None else None
+        row["Limite Superior (95%)"] = round(superior, 2) if superior is not None else None
+        row["Margen de Error"] = round(margen, 2) if margen is not None else None
+
+    def _create_workbook(self, df: pd.DataFrame, config: ExportConfig) -> Workbook:  # noqa: ARG002
+        """Crea el workbook de Excel con formato."""
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Predicciones SAIDI"
+
+        self._write_headers(ws, df)
+        self._write_data(ws, df)
+        self._adjust_column_widths(ws)
+
+        return wb
+
+    def _write_headers(self, ws, df: pd.DataFrame):
+        """Escribe los encabezados con formato."""
+        styles = self._get_header_styles()
+
+        for col_idx, column in enumerate(df.columns, start=1):
+            cell = ws.cell(row=1, column=col_idx, value=column)
+            cell.fill = styles["fill"]
+            cell.font = styles["font"]
+            cell.alignment = styles["alignment"]
+            cell.border = styles["border"]
+
+    def _write_data(self, ws, df: pd.DataFrame):
+        """Escribe los datos con formato."""
+        cell_border = self._get_cell_border()
+        data_alignment = Alignment(horizontal="center", vertical="center")
+
+        for row_idx, row_data in enumerate(df.values, start=2):
+            for col_idx, value in enumerate(row_data, start=1):
+                cell = ws.cell(row=row_idx, column=col_idx, value=value)
+                cell.alignment = data_alignment
+                cell.border = cell_border
+
+                if col_idx > 1 and value is not None:
+                    cell.number_format = "0.00"
+
+    def _adjust_column_widths(self, ws):
+        """Ajusta el ancho de las columnas."""
+        for column in ws.columns:
+            max_length = 0
+            column_letter = column[0].column_letter
+
+            for cell in column:
+                try:
+                    max_length = max(max_length, len(str(cell.value)))
+                except (ValueError, TypeError) as e:
+                    print(f"Error al procesar celda: {e}")
+                    continue
+
+            adjusted_width = min(max_length + 2, 30)
+            ws.column_dimensions[column_letter].width = adjusted_width
+
+    def _add_model_info_sheet(self, wb: Workbook, config: ExportConfig):
+        """Agrega hoja con información del modelo."""
+        ws_info = wb.create_sheet("Informacion del Modelo")
+        info_rows = self._build_model_info_rows(config)
+
+        for row_idx, (label, value) in enumerate(info_rows, start=1):
+            ws_info.cell(row=row_idx, column=1, value=label)
+            ws_info.cell(row=row_idx, column=2, value=value)
+
+            if label and not value:
+                cell = ws_info.cell(row=row_idx, column=1)
+                cell.font = Font(bold=True, size=11)
+
+        ws_info.column_dimensions["A"].width = 30
+        ws_info.column_dimensions["B"].width = 25
+
+    def _build_model_info_rows(self, config: ExportConfig) -> list:
+        """Construye las filas de información del modelo."""
+        info_rows = [
+            ["Informacion del Modelo de Prediccion", ""],
+            ["", ""],
+            ["Regional", config.regional_nombre],
+            ["Codigo Regional", config.regional_code],
+            ["Fecha de Exportacion", datetime.now(tz=UTC).strftime("%Y-%m-%d %H:%M:%S UTC")],
+            ["", ""],
+            ["Parametros del Modelo", ""],
+        ]
+
+        self._add_model_params(info_rows, config.model_info)
+        self._add_model_metrics(info_rows, config.model_info)
+
+        return info_rows
+
+    def _add_model_params(self, info_rows: list, model_info: dict[str, Any]):
+        """Agrega parámetros del modelo a las filas de información."""
+        params_map = {
+            "order": ("Order (p,d,q)", str),
+            "seasonal_order": ("Seasonal Order (P,D,Q,s)", str),
+            "transformation": ("Transformacion", lambda x: x.upper()),
+            "with_exogenous": ("Variables Exogenas", lambda x: "SI" if x else "NO"),
+            "with_simulation": ("Simulacion Climatica", lambda x: "SI" if x else "NO"),
+            "confidence_level": ("Nivel de Confianza", lambda x: f"{x*100:.0f}%"),
+        }
+
+        for key, (label, formatter) in params_map.items():
+            if key in model_info:
+                info_rows.append([label, formatter(model_info[key])])
+
+    def _add_model_metrics(self, info_rows: list, model_info: dict[str, Any]):
+        """Agrega métricas del modelo a las filas de información."""
+        if not model_info.get("metrics"):
+            return
+
+        info_rows.extend([["", ""], ["Metricas del Modelo", ""]])
+
+        metrics = model_info["metrics"]
+        metrics_map = {
+            "rmse": ("RMSE", lambda x: f"{x:.4f}"),
+            "mae": ("MAE", lambda x: f"{x:.4f}"),
+            "mape": ("MAPE", lambda x: f"{x:.2f}%"),
+            "r2_score": ("R2 Score", lambda x: f"{x:.4f}"),
+            "precision_final": ("Precision Final", lambda x: f"{x:.2f}%"),
+        }
+
+        for key, (label, formatter) in metrics_map.items():
+            if key in metrics:
+                info_rows.append([label, formatter(metrics[key])])
+
+    @staticmethod
+    def _get_header_styles() -> dict[str, Any]:
+        """Retorna los estilos para los encabezados."""
+        return {
+            "fill": PatternFill(start_color="366092", end_color="366092", fill_type="solid"),
+            "font": Font(bold=True, color="FFFFFF", size=12),
+            "alignment": Alignment(horizontal="center", vertical="center"),
+            "border": ExportService._get_cell_border(),
+        }
+
+    @staticmethod
+    def _get_cell_border() -> Border:
+        """Retorna el borde para las celdas."""
+        return Border(
+            left=Side(style="thin"),
+            right=Side(style="thin"),
+            top=Side(style="thin"),
+            bottom=Side(style="thin"),
+        )
+
     def get_last_export_path(self):
-        """Obtener la ruta del ultimo archivo exportado"""
+        """Obtener la ruta del ultimo archivo exportado."""
         return self.last_export_path
-    
-    def export_to_custom_location(self, predictions_dict, regional_code, 
-                                  regional_nombre, custom_path,
-                                  include_confidence_intervals=True,
-                                  model_info=None):
+
+    def export_to_custom_location(
+        self,
+        predictions_dict,
+        regional_info: RegionalInfo,
+        custom_path,
+        *,
+        include_confidence_intervals=True,
+        model_info=None,
+    ):
         """
-        Exportar predicciones a una ubicacion especifica
-        
+        Exportar predicciones a una ubicacion especifica.
+
         Args:
             predictions_dict: Diccionario con predicciones
-            regional_code: Codigo de regional
-            regional_nombre: Nombre de regional
+            regional_info: Informacion de la regional (codigo y nombre)
             custom_path: Ruta completa del archivo (incluyendo nombre)
-            include_confidence_intervals: Incluir intervalos
-            model_info: Informacion del modelo
-        
+            include_confidence_intervals: Incluir intervalos (keyword-only)
+            model_info: Informacion del modelo (keyword-only)
+
         Returns:
             str: Ruta del archivo o None
+
         """
+        if not predictions_dict:
+            raise ValueError("No hay predicciones para exportar")
+
         try:
-            directory = os.path.dirname(custom_path)
-            
-            if directory and not os.path.exists(directory):
-                os.makedirs(directory, exist_ok=True)
-            
-            # Temporalmente cambiar output_dir
-            temp_dir = directory if directory else os.path.dirname(custom_path)
-            
-            result_path = self.export_predictions_to_excel(
+            custom_path_obj = Path(custom_path)
+
+            # Si el archivo existe, eliminarlo primero para evitar conflictos
+            if custom_path_obj.exists():
+                try:
+                    custom_path_obj.unlink()
+                except (OSError, PermissionError) as e:
+                    print(f"Advertencia: No se pudo eliminar archivo existente: {e}")
+
+            # Crear configuración
+            config = ExportConfig(
                 predictions_dict=predictions_dict,
-                regional_code=regional_code,
-                regional_nombre=regional_nombre,
-                output_dir=temp_dir,
+                regional_code=regional_info.code,
+                regional_nombre=regional_info.nombre,
+                output_dir=custom_path_obj.parent,
                 include_confidence_intervals=include_confidence_intervals,
-                model_info=model_info
+                model_info=model_info,
             )
-            
-            if result_path and custom_path != result_path:
-                # Renombrar al nombre deseado
-                os.rename(result_path, custom_path)
-                self.last_export_path = custom_path
-                return custom_path
-            
-            return result_path
-            
-        except Exception as e:
-            print(f"Error exportando a ubicacion personalizada: {str(e)}")
+
+            # Generar el archivo temporal con nombre automático
+            temp_result = self._export_with_config(config)
+
+            if not temp_result:
+                return None
+
+            # Renombrar al nombre deseado por el usuario
+            temp_path = Path(temp_result)
+
+            if temp_path.exists() and temp_path != custom_path_obj:
+                try:
+                    # Mover/renombrar al nombre final deseado
+                    temp_path.rename(custom_path_obj)
+                    self.last_export_path = str(custom_path_obj)
+                    return str(custom_path_obj)
+                except (OSError, PermissionError) as e:
+                    print(f"Error al renombrar archivo: {e}")
+                    # Si falla el renombre, al menos devolver la ruta temporal
+                    return temp_result
+            else:
+                # Si ya tiene el nombre correcto o no existe temp
+                return temp_result
+
+        except (OSError, ValueError) as e:
+            print(f"Error exportando a ubicacion personalizada: {e!s}")
             return None

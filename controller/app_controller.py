@@ -288,7 +288,7 @@ class AppController(QObject):
         # Si llegamos aquí, ejecutar predicción normal (sin simulación)
         self._execute_prediction(regional_code, climate_data, None)
     def export_predictions_to_excel(self):
-        """Exportar predicciones a Excel con validación completa"""
+        """Exportar predicciones a Excel con validación completa."""
         try:
             if not hasattr(self, 'last_prediction_result') or not self.last_prediction_result:
                 self.view.log_error("No hay predicciones disponibles para exportar")
@@ -365,10 +365,13 @@ class AppController(QObject):
             
             self.view.update_progress(60, "Escribiendo archivo Excel...")
             
+            # IMPORTAR RegionalInfo y crear objeto
+            from services.export_service import RegionalInfo
+            regional_info = RegionalInfo(code=regional_code, nombre=regional_nombre)
+            
             saved_path = export_service.export_to_custom_location(
                 predictions_dict=predictions,
-                regional_code=regional_code,
-                regional_nombre=regional_nombre,
+                regional_info=regional_info,  # Usar objeto RegionalInfo
                 custom_path=filepath,
                 include_confidence_intervals=True,
                 model_info=model_info
@@ -394,19 +397,19 @@ class AppController(QObject):
                 
                 self.view.log_message("\nContenido del archivo:")
                 self.view.log_message("  • Hoja 1: Predicciones SAIDI")
-                self.view.log_message("Fecha y valores predichos")
+                self.view.log_message("    - Fecha y valores predichos")
                 if has_intervals:
-                    self.view.log_message("Intervalos de confianza (95%)")
-                    self.view.log_message("- Márgenes de error")
+                    self.view.log_message("    - Intervalos de confianza (95%)")
+                    self.view.log_message("    - Márgenes de error")
                 self.view.log_message("  • Hoja 2: Información del Modelo")
-                self.view.log_message("- Parámetros SARIMAX")
-                self.view.log_message("- Transformación aplicada")
-                self.view.log_message("- Métricas de precisión")
+                self.view.log_message("    - Parámetros SARIMAX")
+                self.view.log_message("    - Transformación aplicada")
+                self.view.log_message("    - Métricas de precisión")
                 
                 if model_params.get('with_exogenous'):
-                    self.view.log_message("- Variables exógenas utilizadas")
+                    self.view.log_message("    - Variables exógenas utilizadas")
                 if model_params.get('with_simulation'):
-                    self.view.log_message("- Simulación climática aplicada")
+                    self.view.log_message("    - Simulación climática aplicada")
                 self.view.log_message("=" * 60)
                 
                 # Mensaje de éxito con opción de abrir
@@ -426,6 +429,7 @@ class AppController(QObject):
                 # Botones
                 open_btn = msg.addButton("Abrir Archivo", QMessageBox.ButtonRole.AcceptRole)
                 open_folder_btn = msg.addButton("Abrir Carpeta", QMessageBox.ButtonRole.ActionRole)
+                msg.addButton(QMessageBox.StandardButton.Close)
                 
                 msg.exec()
                 
