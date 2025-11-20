@@ -77,8 +77,8 @@ class RollingValidationService:
 
     REGIONAL_ORDERS = {
         'SAIDI_O': {
-            'order': (4, 1, 3),
-            'seasonal_order': (1, 1, 4, 12)
+            'order': (3, 1, 6),
+            'seasonal_order': (3, 1, 0, 12)
         },
         'SAIDI_C': {
             'order': (3, 1, 2),
