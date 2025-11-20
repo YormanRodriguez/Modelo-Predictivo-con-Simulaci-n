@@ -18,9 +18,10 @@ from typing import Any, ClassVar
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
 from scipy import stats
-from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_squared_error
+from sklearn.preprocessing import StandardScaler
 from statsmodels.tsa.statespace.sarimax import SARIMAX
+
 from services.climate_simulation_service import ClimateSimulationService
 from services.export_service import ExportService
 from services.uncertainty_service import UncertaintyService
@@ -819,19 +820,25 @@ class PredictionService:
 
             # Generar grafica con intervalos de confianza
             plot_path = self._generar_grafica(
-                historico,
-                pred_mean,
-                faltantes,
-                df,
-                col_saidi,
-                order,
-                seasonal_order,
-                metricas,
-                transformation,
-                exog_info,
-                simulation_config if simulation_applied else None,
-                lower_bound,
-                upper_bound,
+                data_config={
+                    "historico": historico,
+                    "pred_mean": pred_mean,
+                    "faltantes": faltantes,
+                    "df": df,
+                    "col_saidi": col_saidi,
+                },
+                model_config={
+                    "order": order,
+                    "seasonal_order": seasonal_order,
+                    "metricas": metricas,
+                    "transformation": transformation,
+                },
+                pred_config={
+                    "exog_info": exog_info,
+                    "simulation_config": simulation_config,
+                    "lower_bound": lower_bound,
+                    "upper_bound": upper_bound,
+                },
             )
 
             if progress_callback:
@@ -1884,19 +1891,19 @@ class PredictionService:
             )
 
             return {
-                'rmse': rmse,
-                'mae': mae,
-                'mape': mape,
-                'r2_score': r2_score,
-                'precision_final': precision_final,
-                'aic': results.aic,
-                'bic': results.bic,
-                'composite_score': composite_score,
-                'n_params': complexity_penalty,
-                'n_test': n_test,
-                'stability_score': stability_score,
-                'validation_pct': pct_validacion * 100,
-                'exog_scaled': False  # CRÍTICO: Marcar que NO están escaladas
+                "rmse": rmse,
+                "mae": mae,
+                "mape": mape,
+                "r2_score": r2_score,
+                "precision_final": precision_final,
+                "aic": results.aic,
+                "bic": results.bic,
+                "composite_score": composite_score,
+                "n_params": complexity_penalty,
+                "n_test": n_test,
+                "stability_score": stability_score,
+                "validation_pct": pct_validacion * 100,
+                "exog_scaled": False,  # CRÍTICO: Marcar que NO están escaladas
             }
 
         except Exception as e:
@@ -1964,7 +1971,6 @@ class PredictionService:
             # Manejo específico de errores esperados en operaciones numéricas
             print(f"Error al calcular stability score: {e}")
             return 0.0
-
 
     def _generar_grafica(
         self,
