@@ -545,10 +545,12 @@ class PredictionService:
             )
             metricas = self._calcular_metricas_modelo(
                 historico_original_series,
-                order,
-                seasonal_order,
-                transformation,
-                exog_df,  # Sin escalar
+                {
+                    "order": order,
+                    "seasonal_order": seasonal_order,
+                    "transformation": transformation,
+                },
+                exog_df,
             )
 
             if metricas and log_callback:
@@ -1717,10 +1719,10 @@ class PredictionService:
         return np.power(data * lambda_param + 1, 1 / lambda_param)
 
     def _calcular_metricas_modelo(
-    self, serie_original, order, seasonal_order, transformation, exog_df=None,
+    self, serie_original, model_params, exog_df=None,
     ):
         """
-        Calcular métricas del modelo .
+        Calcular métricas del modelo.
 
         CAMBIOS CRÍTICOS:
         1. Usa train/test split adaptativo (20-30% según cantidad de datos)
@@ -1730,9 +1732,7 @@ class PredictionService:
 
         Args:
             serie_original: Serie temporal SAIDI en escala original
-            order: Parámetros (p,d,q) del modelo
-            seasonal_order: Parámetros estacionales (P,D,Q,s)
-            transformation: Tipo de transformación aplicada
+            model_params: Diccionario con order, seasonal_order, transformation
             exog_df: DataFrame con variables exógenas EN ESCALA ORIGINAL (opcional)
 
         Returns:
@@ -1740,176 +1740,241 @@ class PredictionService:
 
         """
         try:
-            # Calcular porcentaje de validación adaptativo (IGUAL que OptimizationService)
-            n_obs = len(serie_original)
-            comparcion_mayor = 60
-            comparcion_menor = 36
-            if n_obs >= comparcion_mayor:
-                pct_validacion = 0.30
-            elif n_obs >= comparcion_menor:
-                pct_validacion = 0.25
-            else:
-                pct_validacion = 0.20
+            order = model_params["order"]
+            seasonal_order = model_params["seasonal_order"]
+            transformation = model_params["transformation"]
 
-            n_test = max(6, int(n_obs * pct_validacion))
-
-            # Dividir en train/test
-            train_original = serie_original[:-n_test]
-            test_original = serie_original[-n_test:]
-
-            train_maximo = 12
-            if len(train_original) < train_maximo:
+            # Calcular porcentaje de validación y dividir datos
+            split_data = self._preparar_train_test_split(serie_original)
+            if split_data is None:
                 return None
 
-            # Aplicar transformación a SAIDI
-            self.scaler = None
-            self.transformation_params = {}
+            train_original = split_data["train_original"]
+            test_original = split_data["test_original"]
+            n_test = split_data["n_test"]
+            pct_validacion = split_data["pct_validacion"]
 
-            train_transformed, _ = self._apply_transformation(
-                train_original.values, transformation,
-            )
-            train_transformed_series = pd.Series(
-                train_transformed, index=train_original.index,
+            # Aplicar transformación
+            train_transformed_series = self._aplicar_transformacion_train(
+                train_original, transformation,
             )
 
-            # CORREGIDO: Preparar exógenas SIN ESCALAR con validación estricta
-            exog_train = None
-            exog_test = None
-
-            if exog_df is not None:
-                try:
-                    train_index = train_original.index
-                    test_index = test_original.index
-
-                    # VALIDACIÓN 1: Verificar que exog_df contiene TODAS las fechas
-                    missing_train = [idx for idx in train_index if idx not in exog_df.index]
-                    missing_test = [idx for idx in test_index if idx not in exog_df.index]
-
-                    if missing_train or missing_test:
-                        # Rechazar: faltan fechas
-                        print(f"[METRICAS] Rechazado: faltan {len(missing_train)} fechas train, {len(missing_test)} test")
-                        return None
-
-                    # VALIDACIÓN 2: Extraer subconjuntos con .loc (garantiza alineación)
-                    exog_train = exog_df.loc[train_index].copy()
-                    exog_test = exog_df.loc[test_index].copy()
-
-                    # VALIDACIÓN 3: Verificar que NO hay NaN
-                    if exog_train.isnull().any().any() or exog_test.isnull().any().any():
-                        print("[METRICAS] Rechazado: NaN en exógenas")
-                        return None
-
-                    # VALIDACIÓN 4: Verificar dimensiones correctas
-                    if len(exog_train) != len(train_original) or len(exog_test) != n_test:
-                        print("[METRICAS] Rechazado: dimensiones incorrectas")
-                        return None
-
-                    # VALIDACIÓN 5: Verificar que no hay infinitos
-                    if np.isinf(exog_train.values).any() or np.isinf(exog_test.values).any():
-                        print("[METRICAS] Rechazado: infinitos en exógenas")
-                        return None
-
-                    # NOTA: NO ESCALAR - exog_train y exog_test permanecen en escala original
-
-                except Exception as e:
-                    print(f"[METRICAS] Error preparando exógenas: {e}")
-                    return None
-
-            # Entrenar modelo con exógenas SIN ESCALAR
-            try:
-                model = SARIMAX(
-                    train_transformed_series,
-                    exog=exog_train,  # EN ESCALA ORIGINAL
-                    order=order,
-                    seasonal_order=seasonal_order,
-                    enforce_stationarity=True,
-                    enforce_invertibility=True,
-                )
-
-                # Fit con maxiter limitado
-                results = model.fit(disp=False, maxiter=50)
-
-            except Exception as e:
-                print(f"[METRICAS] Error en fit: {e}")
+            # Preparar variables exógenas
+            exog_result = self._preparar_exogenas_metricas(
+                exog_df, train_original, test_original, n_test,
+            )
+            if exog_result is None and exog_df is not None:
                 return None
 
-            # Predecir en test
-            try:
-                pred = results.get_forecast(steps=n_test, exog=exog_test)
-                pred_mean_transformed = pred.predicted_mean
+            exog_train = exog_result["exog_train"] if exog_result else None
+            exog_test = exog_result["exog_test"] if exog_result else None
 
-            except Exception as e:
-                print(f"[METRICAS] Error en forecast: {e}")
+            # Entrenar modelo
+            results = self._entrenar_modelo_metricas(
+                train_transformed_series, exog_train, order, seasonal_order,
+            )
+            if results is None:
                 return None
 
-            # Revertir transformación
-            try:
-                pred_mean_original = self._inverse_transformation(
-                    pred_mean_transformed.values, transformation,
-                )
-            except Exception as e:
-                print(f"[METRICAS] Error invirtiendo transformación: {e}")
+            # Predecir y evaluar
+            pred_mean_original = self._predecir_y_revertir(
+                results, n_test, exog_test, transformation,
+            )
+            if pred_mean_original is None:
                 return None
 
-            # Calcular métricas en escala original
-            test_values = test_original.values
-            pred_values = pred_mean_original
-
-            # RMSE (Root Mean Squared Error)
-            rmse = np.sqrt(mean_squared_error(test_values, pred_values))
-
-            # MAE (Mean Absolute Error)
-            mae = np.mean(np.abs(test_values - pred_values))
-
-            # MAPE (Mean Absolute Percentage Error)
-            epsilon = 1e-8
-            mape = np.mean(np.abs((test_values - pred_values) /
-                                (test_values + epsilon))) * 100
-
-            # R² Score
-            ss_res = np.sum((test_values - pred_values) ** 2)
-            ss_tot = np.sum((test_values - np.mean(test_values)) ** 2)
-            r2_score = 1 - (ss_res / (ss_tot + epsilon))
-
-            # Precisión final (inversa del MAPE)
-            precision_final = max(0.0, min(100.0, (1 - mape/100) * 100))
-
-            # VALIDACIÓN: Verificar que métricas son válidas
-            if np.isnan(precision_final) or np.isinf(precision_final):
-                return None
-
-            if np.isnan(rmse) or np.isinf(rmse):
-                return None
-
-            # Penalización por complejidad del modelo
-            complexity_penalty = sum(order) + sum(seasonal_order[:3])
-            composite_score = rmse + (complexity_penalty * 0.05)
-
-            # NUEVO: Score de estabilidad (como OptimizationService)
-            stability_score = self._calculate_stability_score(
-                test_values, pred_values, precision_final, mape,
+            # Calcular todas las métricas
+            metricas = self._calcular_todas_metricas(
+                test_original.values,
+                pred_mean_original,
+                results,
+                {"order": order, "seasonal_order": seasonal_order},
+                {"n_test": n_test, "pct_validacion": pct_validacion},
             )
 
-            return {
-                "rmse": rmse,
-                "mae": mae,
-                "mape": mape,
-                "r2_score": r2_score,
-                "precision_final": precision_final,
-                "aic": results.aic,
-                "bic": results.bic,
-                "composite_score": composite_score,
-                "n_params": complexity_penalty,
-                "n_test": n_test,
-                "stability_score": stability_score,
-                "validation_pct": pct_validacion * 100,
-                "exog_scaled": False,  # CRÍTICO: Marcar que NO están escaladas
-            }
-
-        except Exception as e:
+        except (ValueError, TypeError, KeyError) as e:
             print(f"Error calculando metricas: {e}")
             return None
+        else:
+            return metricas
 
+    def _preparar_train_test_split(self, serie_original):
+        """Preparar división train/test con porcentaje adaptativo."""
+        n_obs = len(serie_original)
+        comparcion_mayor = 60
+        comparcion_menor = 36
+
+        if n_obs >= comparcion_mayor:
+            pct_validacion = 0.30
+        elif n_obs >= comparcion_menor:
+            pct_validacion = 0.25
+        else:
+            pct_validacion = 0.20
+
+        n_test = max(6, int(n_obs * pct_validacion))
+        train_original = serie_original[:-n_test]
+        test_original = serie_original[-n_test:]
+
+        train_maximo = 12
+        if len(train_original) < train_maximo:
+            return None
+
+        return {
+            "train_original": train_original,
+            "test_original": test_original,
+            "n_test": n_test,
+            "pct_validacion": pct_validacion,
+        }
+
+    def _aplicar_transformacion_train(self, train_original, transformation):
+        """Aplicar transformación a datos de entrenamiento."""
+        self.scaler = None
+        self.transformation_params = {}
+
+        train_transformed, _ = self._apply_transformation(
+            train_original.values, transformation,
+        )
+        return pd.Series(train_transformed, index=train_original.index)
+
+    def _preparar_exogenas_metricas(self, exog_df, train_original, test_original, n_test):
+        """Preparar y validar variables exógenas SIN ESCALAR."""
+        if exog_df is None:
+            return None
+
+        try:
+            train_index = train_original.index
+            test_index = test_original.index
+
+            # VALIDACIÓN 1: Verificar que exog_df contiene TODAS las fechas
+            missing_train = [idx for idx in train_index if idx not in exog_df.index]
+            missing_test = [idx for idx in test_index if idx not in exog_df.index]
+
+            if missing_train or missing_test:
+                print(f"[METRICAS] Rechazado: faltan {len(missing_train)} fechas train, {len(missing_test)} test")
+                resultado = None
+            else:
+                # VALIDACIÓN 2: Extraer subconjuntos con .loc
+                exog_train = exog_df.loc[train_index].copy()
+                exog_test = exog_df.loc[test_index].copy()
+
+                # VALIDACIONES 3-5: Verificar calidad de datos
+                if (exog_train.isna().any().any() or exog_test.isna().any().any()):
+                    print("[METRICAS] Rechazado: NaN en exógenas")
+                    resultado = None
+                elif (len(exog_train) != len(train_original) or len(exog_test) != n_test):
+                    print("[METRICAS] Rechazado: dimensiones incorrectas")
+                    resultado = None
+                elif (np.isinf(exog_train.values).any() or np.isinf(exog_test.values).any()):
+                    print("[METRICAS] Rechazado: infinitos en exógenas")
+                    resultado = None
+                else:
+                    resultado = {"exog_train": exog_train, "exog_test": exog_test}
+
+        except (ValueError, KeyError, IndexError) as e:
+            print(f"[METRICAS] Error preparando exógenas: {e}")
+            return None
+        else:
+            return resultado
+
+    def _entrenar_modelo_metricas(self, train_data, exog_train, order, seasonal_order):
+        """Entrenar modelo SARIMAX."""
+        try:
+            model = SARIMAX(
+                train_data,
+                exog=exog_train,
+                order=order,
+                seasonal_order=seasonal_order,
+                enforce_stationarity=True,
+                enforce_invertibility=True,
+            )
+            return model.fit(disp=False, maxiter=50)
+
+        except (ValueError, np.linalg.LinAlgError) as e:
+            print(f"[METRICAS] Error en fit: {e}")
+            return None
+
+    def _predecir_y_revertir(self, results, n_test, exog_test, transformation):
+        """Predecir y revertir transformación."""
+        try:
+            pred = results.get_forecast(steps=n_test, exog=exog_test)
+            pred_mean_transformed = pred.predicted_mean
+
+            return self._inverse_transformation(
+                pred_mean_transformed.values, transformation,
+            )
+
+        except (ValueError, KeyError) as e:
+            print(f"[METRICAS] Error en predicción: {e}")
+            return None
+
+    def _calcular_todas_metricas(
+        self, test_values, pred_values, results, model_info, test_info,
+    ):
+        """
+        Calcular todas las métricas del modelo.
+
+        Args:
+            test_values: Valores reales del conjunto de prueba
+            pred_values: Valores predichos
+            results: Resultados del modelo SARIMAX
+            model_info: Diccionario con order y seasonal_order
+            test_info: Diccionario con n_test y pct_validacion
+
+        """
+        order = model_info["order"]
+        seasonal_order = model_info["seasonal_order"]
+        n_test = test_info["n_test"]
+        pct_validacion = test_info["pct_validacion"]
+
+        # RMSE
+        rmse = np.sqrt(mean_squared_error(test_values, pred_values))
+
+        # MAE
+        mae = np.mean(np.abs(test_values - pred_values))
+
+        # MAPE
+        epsilon = 1e-8
+        mape = np.mean(np.abs((test_values - pred_values) /
+                            (test_values + epsilon))) * 100
+
+        # R² Score
+        ss_res = np.sum((test_values - pred_values) ** 2)
+        ss_tot = np.sum((test_values - np.mean(test_values)) ** 2)
+        r2_score = 1 - (ss_res / (ss_tot + epsilon))
+
+        # Precisión final
+        precision_final = max(0.0, min(100.0, (1 - mape/100) * 100))
+
+        # Validar métricas
+        if np.isnan(precision_final) or np.isinf(precision_final):
+            return None
+        if np.isnan(rmse) or np.isinf(rmse):
+            return None
+
+        # Penalización por complejidad
+        complexity_penalty = sum(order) + sum(seasonal_order[:3])
+        composite_score = rmse + (complexity_penalty * 0.05)
+
+        # Score de estabilidad
+        stability_score = self._calculate_stability_score(
+            test_values, pred_values, precision_final, mape,
+        )
+
+        return {
+            "rmse": rmse,
+            "mae": mae,
+            "mape": mape,
+            "r2_score": r2_score,
+            "precision_final": precision_final,
+            "aic": results.aic,
+            "bic": results.bic,
+            "composite_score": composite_score,
+            "n_params": complexity_penalty,
+            "n_test": n_test,
+            "stability_score": stability_score,
+            "validation_pct": pct_validacion * 100,
+            "exog_scaled": False,
+        }
 
     def _calculate_stability_score(self,
                                actual_values: np.ndarray,
