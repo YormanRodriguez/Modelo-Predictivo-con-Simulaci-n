@@ -1,9 +1,9 @@
 # services/prediction_service.py
-import matplotlib
+import matplotlib as mpl
 import numpy as np
 import pandas as pd
 
-matplotlib.use("Agg")
+mpl.use("Agg")
 
 import json
 import tempfile
@@ -27,6 +27,12 @@ from services.export_service import ExportService
 from services.uncertainty_service import UncertaintyService
 
 warnings.filterwarnings("ignore")
+
+class SAIDIColumnNotFoundError(ValueError):
+    """Excepción lanzada cuando no se encuentra la columna SAIDI."""
+
+class SAIDIDataError(ValueError):
+    """Excepción lanzada cuando faltan datos SAIDI requeridos."""
 
 @dataclass
 class ExportConfig:
@@ -402,16 +408,16 @@ class PredictionService:
                 if log_callback:
                     log_callback("Leyendo Excel SAIDI en formato tradicional")
             else:
-                raise Exception("Debe proporcionar file_path o df_prepared")
+                raise SAIDIDataError("Debe proporcionar file_path o df_prepared")
 
             # Asegurar indice datetime
             if not isinstance(df.index, pd.DatetimeIndex):
                 if "Fecha" in df.columns:
                     df["Fecha"] = pd.to_datetime(df["Fecha"])
-                    df.set_index("Fecha", inplace=True)
+                    df = df.set_index("Fecha")
                 else:
                     df.iloc[:, 0] = pd.to_datetime(df.iloc[:, 0])
-                    df.set_index(df.columns[0], inplace=True)
+                    df = df.set_index(df.columns[0])
 
             # Buscar columna SAIDI
             col_saidi = None
@@ -421,7 +427,7 @@ class PredictionService:
                 col_saidi = "SAIDI Historico"
 
             if col_saidi is None:
-                raise Exception("No se encontro la columna SAIDI")
+                raise SAIDIColumnNotFoundError("No se encontró la columna SAIDI")
 
             if progress_callback:
                 progress_callback(20, "Preparando variables exogenas...")
@@ -442,7 +448,6 @@ class PredictionService:
                             f"Variables exogenas disponibles: {len(exog_df.columns)}",
                         )
 
-                    # ========== NUEVO: Validar cobertura como OptimizationService ==========
                     historico_temp = df[df[col_saidi].notna()]
                     if not self._diagnose_exog_coverage(historico_temp[col_saidi], exog_df, log_callback):
                         if log_callback:
@@ -452,9 +457,6 @@ class PredictionService:
                             log_callback("=" * 60)
                         exog_df = None
                         exog_info = None
-                    # ========== CORREGIDO: NO escalar aquí ==========
-                    # SARIMAX normaliza internamente las variables exógenas
-                    # Escalar manualmente causa DOBLE ESCALADO y pérdida de precisión
 
                     elif simulation_config and simulation_config.get("enabled", False):
                         if log_callback:
@@ -470,7 +472,6 @@ class PredictionService:
                         self.exog_scaler.fit(exog_df)  # Solo FIT, no transform
                         # exog_df permanece SIN ESCALAR
                     else:
-                        # ========== CAMBIO CRÍTICO: Sin simulación tampoco escalar ==========
                         if log_callback:
                             log_callback("Variables exogenas en escala ORIGINAL")
                             log_callback("SARIMAX las normalizara internamente")
@@ -525,7 +526,7 @@ class PredictionService:
                 )
 
             # Aplicar transformacion
-            historico_values_original = historico[col_saidi].values
+            historico_values_original = historico[col_saidi].to_numpy()
             historico_transformed, transform_info = self._apply_transformation(
                 historico_values_original, transformation,
             )
@@ -604,8 +605,9 @@ class PredictionService:
                             f"  Variables exogenas incluidas: {exog_train.shape[1]}",
                         )
                         log_callback("  Escalado: Interno de SARIMAX (no manual)")
-            except Exception as e:
-                raise Exception(f"Error ajustando modelo: {e!s}")
+            except (ValueError, TypeError, KeyError, AttributeError) as e:
+                msg = f"Error ajustando modelo: {e!s}"
+                raise RuntimeError(msg) from e
 
             if progress_callback:
                 progress_callback(
@@ -643,12 +645,12 @@ class PredictionService:
 
                 # Obtener predicción con intervalos del modelo
                 pred = results.get_forecast(steps=len(faltantes), exog=exog_forecast)
-                pred_mean_transformed = pred.predicted_mean.values
+                pred_mean_transformed = pred.predicted_mean.to_numpy()
 
                 # Calcular intervalos en escala transformada (95%)
                 conf_int_transformed = pred.conf_int(alpha=0.05)
-                lower_transformed = conf_int_transformed.iloc[:, 0].values
-                upper_transformed = conf_int_transformed.iloc[:, 1].values
+                lower_transformed = conf_int_transformed.iloc[:, 0].to_numpy()
+                upper_transformed = conf_int_transformed.iloc[:, 1].to_numpy()
 
                 # Revertir transformacion para valores predichos
                 pred_mean_original = self._inverse_transformation(
