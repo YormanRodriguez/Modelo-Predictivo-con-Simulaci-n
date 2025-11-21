@@ -663,13 +663,15 @@ class PredictionService:
 
                 # Ajustar intervalos basado en precisión del modelo
                 adjustment_factor = 1.0
-
+                mape_mayor_menor = 15
+                mape_mayor_medio = 20
+                mape_mayor_mayor = 30
                 if metricas:
-                    if metricas["mape"] > 30:
+                    if metricas["mape"] > mape_mayor_mayor:
                         adjustment_factor = 1.15
-                    elif metricas["mape"] > 20:
+                    elif metricas["mape"] > mape_mayor_medio:
                         adjustment_factor = 1.10
-                    elif metricas["mape"] > 15:
+                    elif metricas["mape"] > mape_mayor_menor:
                         adjustment_factor = 1.05
                     else:
                         adjustment_factor = 1.02
@@ -753,8 +755,9 @@ class PredictionService:
                     avg_margin_pct = np.mean(margin_error / pred_mean_original) * 100
                     log_callback(f"Margen de error promedio: ±{avg_margin_pct:.1f}%")
 
-            except Exception as e:
-                raise Exception(f"Error generando predicciones: {e!s}")
+            except (ValueError, TypeError, KeyError, IndexError, AttributeError) as e:
+                msg = f"Error generando predicciones: {e!s}"
+                raise RuntimeError(msg) from e
 
             if progress_callback:
                 progress_callback(90, "Generando grafica...")
@@ -800,6 +803,7 @@ class PredictionService:
                     lower_bound,
                     upper_bound,
                     margin_error_series,
+                    strict=True,
                 ):
                     margen_sup = superior - valor
                     margen_inf = valor - inferior
@@ -813,7 +817,7 @@ class PredictionService:
 
                 if exog_info:
                     log_callback("\nVariables exogenas utilizadas (escala original):")
-                    for var_code, var_info in exog_info.items():
+                    for var_info in exog_info.values():
                         log_callback(
                             f"  - {var_info['nombre']}: correlacion {var_info['correlacion']}",
                         )
@@ -854,6 +858,7 @@ class PredictionService:
                 lower_bound,
                 upper_bound,
                 margin_error_series,
+                strict=True,
             ):
                 predicciones_dict[fecha.strftime("%Y-%m")] = {
                     "valor_predicho": float(valor),
@@ -885,10 +890,11 @@ class PredictionService:
                 "export_service": self.export_service,
             }
 
-        except Exception as e:
+        except (ValueError, TypeError, KeyError, IndexError, AttributeError) as e:
             if log_callback:
                 log_callback(f"ERROR: {e!s}")
-            raise Exception(f"Error en prediccion: {e!s}")
+            msg = f"Error en prediccion: {e!s}"
+            raise ValueError(msg) from e
 
 
     def _apply_climate_simulation(
