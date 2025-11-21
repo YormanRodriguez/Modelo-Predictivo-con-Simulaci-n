@@ -1065,13 +1065,6 @@ class PredictionService:
 
         ALINEADO CON OptimizationService para obtener métricas consistentes
 
-        CAMBIOS CRÍTICOS:
-        1. Mapeo de columnas con coincidencia parcial (no solo exacta)
-        2. Validación de cobertura temporal (80% mínimo en overlap)
-        3. Validación de varianza no-cero en overlap
-        4. Relleno inteligente: forward-fill + backward-fill (máx 3) + media
-        5. RETORNA EN ESCALA ORIGINAL (sin StandardScaler)
-
         Args:
             climate_data: DataFrame con datos climáticos mensuales
             df_saidi: DataFrame SAIDI completo
@@ -1085,225 +1078,381 @@ class PredictionService:
 
         """
         try:
-            # Validaciones iniciales
-            if climate_data is None or climate_data.empty:
-                if log_callback:
-                    log_callback("Sin datos climáticos disponibles")
+            # Validaciones y preparación inicial
+            preparacion_inicial = self._realizar_preparacion_inicial(
+                climate_data, df_saidi, regional_code, log_callback,
+            )
+            if preparacion_inicial is None:
                 return None, None
 
-            if not regional_code or regional_code not in self.REGIONAL_EXOG_VARS:
-                if log_callback:
-                    log_callback(f"Regional {regional_code} sin variables definidas")
-                return None, None
+            climate_data = preparacion_inicial["climate_data"]
+            overlap_info = preparacion_inicial["overlap_info"]
+            historico = overlap_info["historico"]
 
-            if log_callback:
-                log_callback(f"Preparando variables para {regional_code}")
-                log_callback("MODO: SIN ESCALADO (valores originales)")
+            # Preparar variables sin escalado
+            exog_df, exog_info = self._preparar_variables_sin_escalado(
+                climate_data, historico, regional_code, overlap_info, log_callback,
+            )
 
-            # ========== VALIDAR ÍNDICE DATETIME ==========
-            if not isinstance(climate_data.index, pd.DatetimeIndex):
-                # Buscar columna de fecha
-                fecha_col = None
-                for col in ["fecha", "Fecha", "date", "Date", "month_date"]:
-                    if col in climate_data.columns:
-                        fecha_col = col
-                        break
-
-                if fecha_col is None:
-                    if log_callback:
-                        log_callback("ERROR: No se encontró columna de fecha válida")
-                    return None, None
-
-                try:
-                    climate_data = climate_data.copy()
-                    climate_data[fecha_col] = pd.to_datetime(climate_data[fecha_col])
-                    climate_data = climate_data.set_index(fecha_col)
-                except Exception as e:
-                    if log_callback:
-                        log_callback(f"ERROR convirtiendo índice: {e!s}")
-                    return None, None
-
-            # Verificar que ahora es DatetimeIndex
-            if not isinstance(climate_data.index, pd.DatetimeIndex):
-                if log_callback:
-                    log_callback("ERROR: Formato de fecha inválido")
-                return None, None
-
-            # ========== ANÁLISIS DE COBERTURA TEMPORAL ==========
-            historico = df_saidi[df_saidi["SAIDI"].notna() if "SAIDI" in df_saidi.columns else df_saidi["SAIDI Historico"].notna()]
-
-            saidi_start = historico.index[0]
-            saidi_end = historico.index[-1]
-            clima_start = climate_data.index[0]
-            clima_end = climate_data.index[-1]
-
-            # Calcular periodo de overlap
-            overlap_start = max(saidi_start, clima_start)
-            overlap_end = min(saidi_end, clima_end)
-
-            if overlap_start > overlap_end:
-                if log_callback:
-                    log_callback("ERROR: Sin overlap entre SAIDI y CLIMA")
-                return None, None
-
-            overlap_mask = (historico.index >= overlap_start) & (historico.index <= overlap_end)
-            overlap_months = overlap_mask.sum()
-
-            # Validar overlap mínimo (12 meses)
-            meses = 12
-            if overlap_months < meses:
-                if log_callback:
-                    log_callback(f"ERROR: Overlap insuficiente ({overlap_months} < 12 meses)")
-                return None, None
-
-            if log_callback:
-                log_callback(f"SAIDI: {saidi_start.strftime('%Y-%m')} a {saidi_end.strftime('%Y-%m')} ({len(historico)} meses)")
-                log_callback(f"CLIMA: {clima_start.strftime('%Y-%m')} a {clima_end.strftime('%Y-%m')} ({len(climate_data)} meses)")
-                log_callback(f"OVERLAP: {overlap_start.strftime('%Y-%m')} a {overlap_end.strftime('%Y-%m')} ({overlap_months} meses)")
-
-            # ========== MAPEO AUTOMÁTICO DE COLUMNAS ==========
-            exog_vars_config = self.REGIONAL_EXOG_VARS[regional_code]
-
-            # Normalizar nombres disponibles
-            available_cols_normalized = {}
-            for col in climate_data.columns:
-                normalized = col.lower().strip().replace(" ", "_").replace("-", "_")
-                available_cols_normalized[normalized] = col
-
-            # Mapear cada variable con búsqueda flexible
-            climate_column_mapping = {}
-
-            for var_code in exog_vars_config.keys():
-                var_normalized = var_code.lower().strip()
-
-                # Intento 1: Coincidencia exacta
-                if var_normalized in available_cols_normalized:
-                    climate_column_mapping[var_code] = available_cols_normalized[var_normalized]
-                    continue
-
-                # Intento 2: Coincidencia parcial (al menos 2 partes)
-                var_parts = var_normalized.split("_")
-                best_match = None
-                best_match_score = 0
-
-                for norm_col, orig_col in available_cols_normalized.items():
-                    matches = sum(1 for part in var_parts if part in norm_col)
-                    if matches > best_match_score:
-                        best_match_score = matches
-                        best_match = orig_col
-
-                mayor_match_score = 2
-                if best_match_score >= mayor_match_score:
-                    climate_column_mapping[var_code] = best_match
-
-            if not climate_column_mapping:
-                if log_callback:
-                    log_callback("ERROR: No se pudo mapear ninguna variable")
-                return None, None
-
-            # ========== PREPARACIÓN DE VARIABLES SIN ESCALADO ==========
-            exog_df = pd.DataFrame(index=historico.index)
-            exog_info = {}
-
-            for var_code, var_nombre in exog_vars_config.items():
-                climate_col = climate_column_mapping.get(var_code)
-
-                if not climate_col or climate_col not in climate_data.columns:
-                    continue
-
-                try:
-                    # Extraer serie del clima
-                    var_series = climate_data[climate_col].copy()
-
-                    # Crear serie alineada (inicialmente vacía)
-                    aligned_series = pd.Series(index=historico.index, dtype=float)
-
-                    # Llenar datos donde hay overlap REAL
-                    for date in historico.index:
-                        if date in var_series.index:
-                            aligned_series[date] = var_series.loc[date]
-
-                    # VALIDACIÓN: Cobertura en overlap
-                    overlap_data = aligned_series[overlap_mask]
-                    datos_reales_overlap = overlap_data.notna().sum()
-                    overlap_pct = (datos_reales_overlap / overlap_months) * 100
-
-                    # RECHAZAR si cobertura < 80%
-                    cobertura_minima = 80
-                    if overlap_pct < cobertura_minima:
-                        if log_callback:
-                            log_callback(f"X RECHAZADA {var_code}: cobertura {overlap_pct:.1f}% < 80%")
-                        continue
-
-                    # VALIDACIÓN: Varianza en overlap
-                    var_std = overlap_data.std()
-
-                    if pd.isna(var_std) or var_std == 0:
-                        if log_callback:
-                            log_callback(f"X RECHAZADA {var_code}: varianza = 0")
-                        continue
-
-                    # Forward-fill para fechas futuras
-                    aligned_series = aligned_series.fillna(method="ffill")
-
-                    # Backward-fill (máx 3 meses) para fechas pasadas
-                    aligned_series = aligned_series.fillna(method="bfill", limit=3)
-
-                    # Si AÚN hay NaN, rellenar con media del overlap
-                    if aligned_series.isnull().any():
-                        mean_overlap = overlap_data.mean()
-                        aligned_series = aligned_series.fillna(mean_overlap)
-
-                    # VERIFICACIÓN FINAL
-                    final_nan = aligned_series.isnull().sum()
-                    if final_nan > 0:
-                        if log_callback:
-                            log_callback(f"X RECHAZADA {var_code}: {final_nan} NaN finales")
-                        continue
-
-                    # ===== GUARDAR EN ESCALA ORIGINAL =====
-                    exog_df[var_code] = aligned_series
-
-                    exog_info[var_code] = {
-                        "nombre": var_nombre,
-                        "columna_clima": climate_col,
-                        "correlacion": self._get_correlation_for_var(var_code, regional_code),
-                        "scaled": False,  # CRÍTICO
-                        "datos_reales_overlap": int(datos_reales_overlap),
-                        "overlap_coverage_pct": float(overlap_pct),
-                        "varianza_overlap": float(var_std),
-                    }
-
-                    if log_callback:
-                        log_callback(f"✓ {var_code} -> ACEPTADA ({overlap_pct:.1f}% cobertura, escala original)")
-
-                except Exception as e:
-                    if log_callback:
-                        log_callback(f"X ERROR {var_code}: {e}")
-                    continue
-
-            # VALIDACIÓN FINAL
-            if exog_df.empty or exog_df.shape[1] == 0:
+            # Validar resultado final
+            if exog_df is None or exog_df.empty or exog_df.shape[1] == 0:
                 if log_callback:
                     log_callback("ERROR: Ninguna variable aceptada")
                 return None, None
 
             if log_callback:
-                log_callback("=" * 60)
-                log_callback(f"✓ Variables preparadas: {len(exog_df.columns)}")
-                log_callback("  ESCALA: ORIGINAL (sin StandardScaler)")
-                log_callback("  Rangos:")
-                for col in exog_df.columns:
-                    log_callback(f"    - {col}: [{exog_df[col].min():.2f}, {exog_df[col].max():.2f}]")
-                log_callback("=" * 60)
+                self._log_resumen_variables(exog_df, log_callback)
 
-            return exog_df, exog_info if exog_info else None
-
-        except Exception as e:
+        except (ValueError, TypeError, KeyError, IndexError, AttributeError) as e:
             if log_callback:
                 log_callback(f"ERROR CRÍTICO: {e!s}")
             return None, None
+        else:
+            return exog_df, exog_info if exog_info else None
 
+
+    def _realizar_preparacion_inicial(
+        self, climate_data, df_saidi, regional_code, log_callback,
+    ):
+        """Realizar validaciones iniciales y preparar datos."""
+        # Validaciones iniciales
+        if not self._validar_datos_iniciales(climate_data, regional_code, log_callback):
+            return None
+
+        if log_callback:
+            log_callback(f"Preparando variables para {regional_code}")
+            log_callback("MODO: SIN ESCALADO (valores originales)")
+
+        # Validar y preparar índice datetime
+        climate_data = self._validar_indice_datetime(climate_data, log_callback)
+        if climate_data is None:
+            return None
+
+        # Análisis de cobertura temporal
+        overlap_info = self._analizar_cobertura_temporal(
+            climate_data, df_saidi, log_callback,
+        )
+        if overlap_info is None:
+            return None
+
+        # Mapeo automático de columnas
+        climate_column_mapping = self._mapear_columnas_climaticas(
+            climate_data, regional_code, log_callback,
+        )
+        if not climate_column_mapping:
+            return None
+
+        # Preparar info consolidada
+        overlap_info["climate_column_mapping"] = climate_column_mapping
+
+        return {
+            "climate_data": climate_data,
+            "overlap_info": overlap_info,
+        }
+
+
+    def _validar_datos_iniciales(self, climate_data, regional_code, log_callback):
+        """Validar datos climáticos y código regional."""
+        if climate_data is None or climate_data.empty:
+            if log_callback:
+                log_callback("Sin datos climáticos disponibles")
+            return False
+
+        if not regional_code or regional_code not in self.REGIONAL_EXOG_VARS:
+            if log_callback:
+                log_callback(f"Regional {regional_code} sin variables definidas")
+            return False
+
+        return True
+
+
+    def _validar_indice_datetime(self, climate_data, log_callback):
+        """Validar y convertir índice a DatetimeIndex."""
+        if isinstance(climate_data.index, pd.DatetimeIndex):
+            return climate_data
+
+        # Buscar columna de fecha
+        fecha_col = None
+        for col in ["fecha", "Fecha", "date", "Date", "month_date"]:
+            if col in climate_data.columns:
+                fecha_col = col
+                break
+
+        if fecha_col is None:
+            if log_callback:
+                log_callback("ERROR: No se encontró columna de fecha válida")
+            return None
+
+        try:
+            climate_data = climate_data.copy()
+            climate_data[fecha_col] = pd.to_datetime(climate_data[fecha_col])
+            climate_data = climate_data.set_index(fecha_col)
+        except (ValueError, TypeError, KeyError) as e:
+            if log_callback:
+                log_callback(f"ERROR convirtiendo índice: {e!s}")
+            return None
+
+        if not isinstance(climate_data.index, pd.DatetimeIndex):
+            if log_callback:
+                log_callback("ERROR: Formato de fecha inválido")
+            return None
+
+        return climate_data
+
+
+    def _analizar_cobertura_temporal(self, climate_data, df_saidi, log_callback):
+        """Analizar cobertura temporal entre SAIDI y datos climáticos."""
+        historico = df_saidi[
+            df_saidi["SAIDI"].notna() if "SAIDI" in df_saidi.columns
+            else df_saidi["SAIDI Historico"].notna()
+        ]
+
+        saidi_start = historico.index[0]
+        saidi_end = historico.index[-1]
+        clima_start = climate_data.index[0]
+        clima_end = climate_data.index[-1]
+
+        # Calcular periodo de overlap
+        overlap_start = max(saidi_start, clima_start)
+        overlap_end = min(saidi_end, clima_end)
+
+        if overlap_start > overlap_end:
+            if log_callback:
+                log_callback("ERROR: Sin overlap entre SAIDI y CLIMA")
+            return None
+
+        overlap_mask = (historico.index >= overlap_start) & (historico.index <= overlap_end)
+        overlap_months = overlap_mask.sum()
+
+        # Validar overlap mínimo (12 meses)
+        meses = 12
+        if overlap_months < meses:
+            if log_callback:
+                log_callback(f"ERROR: Overlap insuficiente ({overlap_months} < 12 meses)")
+            return None
+
+        if log_callback:
+            log_callback(f"SAIDI: {saidi_start.strftime('%Y-%m')} a {saidi_end.strftime('%Y-%m')} ({len(historico)} meses)")
+            log_callback(f"CLIMA: {clima_start.strftime('%Y-%m')} a {clima_end.strftime('%Y-%m')} ({len(climate_data)} meses)")
+            log_callback(f"OVERLAP: {overlap_start.strftime('%Y-%m')} a {overlap_end.strftime('%Y-%m')} ({overlap_months} meses)")
+
+        return {
+            "historico": historico,
+            "overlap_mask": overlap_mask,
+            "overlap_months": overlap_months,
+        }
+
+
+    def _mapear_columnas_climaticas(self, climate_data, regional_code, log_callback):
+        """Mapear columnas climáticas con búsqueda flexible."""
+        exog_vars_config = self.REGIONAL_EXOG_VARS[regional_code]
+
+        # Normalizar nombres disponibles
+        available_cols_normalized = {}
+        for col in climate_data.columns:
+            normalized = col.lower().strip().replace(" ", "_").replace("-", "_")
+            available_cols_normalized[normalized] = col
+
+        # Mapear cada variable con búsqueda flexible
+        climate_column_mapping = {}
+
+        for var_code in exog_vars_config:
+            var_normalized = var_code.lower().strip()
+
+            # Intento 1: Coincidencia exacta
+            if var_normalized in available_cols_normalized:
+                climate_column_mapping[var_code] = available_cols_normalized[var_normalized]
+                continue
+
+            # Intento 2: Coincidencia parcial
+            best_match = self._buscar_mejor_coincidencia(
+                var_normalized, available_cols_normalized,
+            )
+            if best_match:
+                climate_column_mapping[var_code] = best_match
+
+        if not climate_column_mapping and log_callback:
+            log_callback("ERROR: No se pudo mapear ninguna variable")
+
+        return climate_column_mapping
+
+
+    def _buscar_mejor_coincidencia(self, var_normalized, available_cols_normalized):
+        """Buscar la mejor coincidencia parcial para una variable."""
+        var_parts = var_normalized.split("_")
+        best_match = None
+        best_match_score = 0
+
+        for norm_col, orig_col in available_cols_normalized.items():
+            matches = sum(1 for part in var_parts if part in norm_col)
+            if matches > best_match_score:
+                best_match_score = matches
+                best_match = orig_col
+
+        mayor_match_score = 2
+        if best_match_score >= mayor_match_score:
+            return best_match
+        return None
+
+
+    def _preparar_variables_sin_escalado(
+    self, climate_data, historico, regional_code, overlap_info, log_callback,
+    ):
+        """Preparar variables exógenas sin escalado."""
+        exog_vars_config = self.REGIONAL_EXOG_VARS[regional_code]
+        exog_df = pd.DataFrame(index=historico.index)
+        exog_info = {}
+
+        overlap_mask = overlap_info["overlap_mask"]
+        overlap_months = overlap_info["overlap_months"]
+        climate_column_mapping = overlap_info["climate_column_mapping"]
+
+        for var_code, var_nombre in exog_vars_config.items():
+            climate_col = climate_column_mapping.get(var_code)
+
+            if not climate_col or climate_col not in climate_data.columns:
+                continue
+
+            var_config = {
+                "var_nombre": var_nombre,
+                "climate_col": climate_col,
+                "overlap_mask": overlap_mask,
+                "overlap_months": overlap_months,
+                "regional_code": regional_code,
+            }
+
+            result = self._procesar_variable_exogena(
+                climate_data, historico, var_code, var_config, log_callback,
+            )
+
+            if result is not None:
+                exog_df[var_code] = result["series"]
+                exog_info[var_code] = result["info"]
+
+        return exog_df, exog_info
+
+
+    def _procesar_variable_exogena(
+    self, climate_data, historico, var_code, var_config, log_callback,
+    ):
+        """Procesar una variable exógena individual."""
+        try:
+            # Extraer configuración
+            var_nombre = var_config["var_nombre"]
+            climate_col = var_config["climate_col"]
+            overlap_mask = var_config["overlap_mask"]
+            overlap_months = var_config["overlap_months"]
+            regional_code = var_config["regional_code"]
+
+            # Extraer y alinear serie
+            var_series = climate_data[climate_col].copy()
+            aligned_series = self._alinear_serie_climatica(var_series, historico)
+
+            # Validar cobertura y varianza
+            validacion = self._validar_variable_exogena(
+                aligned_series, overlap_mask, overlap_months, var_code, log_callback,
+            )
+            if validacion is None:
+                return None
+
+            # Rellenar NaN
+            aligned_series = self._rellenar_valores_faltantes(
+                aligned_series, validacion["overlap_data"],
+            )
+
+            # Verificación final
+            final_nan = aligned_series.isna().sum()
+            if final_nan > 0:
+                if log_callback:
+                    log_callback(f"X RECHAZADA {var_code}: {final_nan} NaN finales")
+                return None
+
+            if log_callback:
+                log_callback(f"✓ {var_code} -> ACEPTADA ({validacion['overlap_pct']:.1f}% cobertura, escala original)")
+
+            return {
+                "series": aligned_series,
+                "info": {
+                    "nombre": var_nombre,
+                    "columna_clima": climate_col,
+                    "correlacion": self._get_correlation_for_var(var_code, regional_code),
+                    "scaled": False,
+                    "datos_reales_overlap": validacion["datos_reales_overlap"],
+                    "overlap_coverage_pct": validacion["overlap_pct"],
+                    "varianza_overlap": validacion["var_std"],
+                },
+            }
+
+        except (ValueError, TypeError, KeyError, IndexError) as e:
+            if log_callback:
+                log_callback(f"X ERROR {var_code}: {e}")
+            return None
+
+
+    def _alinear_serie_climatica(self, var_series, historico):
+        """Alinear serie climática con índice histórico."""
+        aligned_series = pd.Series(index=historico.index, dtype=float)
+
+        for date in historico.index:
+            if date in var_series.index:
+                aligned_series[date] = var_series.loc[date]
+
+        return aligned_series
+
+
+    def _validar_variable_exogena(
+        self, aligned_series, overlap_mask, overlap_months, var_code, log_callback,
+    ):
+        """Validar cobertura y varianza de variable exógena."""
+        overlap_data = aligned_series[overlap_mask]
+        datos_reales_overlap = overlap_data.notna().sum()
+        overlap_pct = (datos_reales_overlap / overlap_months) * 100
+
+        cobertura_minima = 80
+        if overlap_pct < cobertura_minima:
+            if log_callback:
+                log_callback(f"X RECHAZADA {var_code}: cobertura {overlap_pct:.1f}% < 80%")
+            return None
+
+        var_std = overlap_data.std()
+        if pd.isna(var_std) or var_std == 0:
+            if log_callback:
+                log_callback(f"X RECHAZADA {var_code}: varianza = 0")
+            return None
+
+        return {
+            "overlap_data": overlap_data,
+            "datos_reales_overlap": int(datos_reales_overlap),
+            "overlap_pct": float(overlap_pct),
+            "var_std": float(var_std),
+        }
+
+
+    def _rellenar_valores_faltantes(self, aligned_series, overlap_data):
+        """Rellenar valores faltantes con estrategia forward/backward fill."""
+        # Forward-fill para fechas futuras
+        aligned_series = aligned_series.fillna(method="ffill")
+
+        # Backward-fill (máx 3 meses) para fechas pasadas
+        aligned_series = aligned_series.fillna(method="bfill", limit=3)
+
+        # Si aún hay NaN, rellenar con media del overlap
+        if aligned_series.isna().any():
+            mean_overlap = overlap_data.mean()
+            aligned_series = aligned_series.fillna(mean_overlap)
+
+        return aligned_series
+
+
+    def _log_resumen_variables(self, exog_df, log_callback):
+        """Registrar resumen de variables preparadas."""
+        log_callback("=" * 60)
+        log_callback(f"✓ Variables preparadas: {len(exog_df.columns)}")
+        log_callback("  ESCALA: ORIGINAL (sin StandardScaler)")
+        log_callback("  Rangos:")
+        for col in exog_df.columns:
+            log_callback(f"    - {col}: [{exog_df[col].min():.2f}, {exog_df[col].max():.2f}]")
+        log_callback("=" * 60)
 
     def _align_exog_to_saidi(self, exog_series, df_saidi, var_code, log_callback=None):
         """
