@@ -8,6 +8,7 @@ from datetime import datetime
 
 # Importar servicios de backend
 from services.prediction_service import PredictionService
+from services.prediction_service import PredictionConfig
 from services.optimization_service import OptimizationService
 from services.validation_service import ValidationService
 from services.rolling_validation_service import RollingValidationService
@@ -542,7 +543,8 @@ class AppController(QObject):
             if df_prepared is None:
                 raise Exception("No se pudieron preparar los datos SAIDI")
 
-            result = self.prediction_service.run_prediction(
+            # Crear config
+            config = PredictionConfig(
                 file_path=self.model.get_file_path(),
                 df_prepared=df_prepared,
                 order=None,
@@ -551,8 +553,11 @@ class AppController(QObject):
                 climate_data=climate_data,
                 simulation_config=simulation_config,
                 progress_callback=self.view.update_progress,
-                log_callback=self.view.log_message
+                log_callback=self.view.log_message,
             )
+
+            # Llamar al método
+            result = self.prediction_service.run_prediction(config)
 
             # Llamar al manejador de finalización
             self.on_prediction_finished(result)
