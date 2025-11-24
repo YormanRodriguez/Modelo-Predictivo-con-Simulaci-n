@@ -86,5 +86,27 @@
     "stability_score": 26.50143033985727,
     "optimization_date": "2025-11-23 16:04:24",
     "quality": "excellent"
+  },
+  "SAIDI_Cens": {
+    "transformation": "original",
+    "order": [
+      0,
+      0,
+      3
+    ],
+    "seasonal_order": [
+      2,
+      0,
+      0,
+      12
+    ],
+    "precision_final": 85.09433062918359,
+    "rmse": 0.3202311276200509,
+    "mape": 14.905669370816405,
+    "r2_score": 0.8061557617613261,
+    "with_exogenous": false,
+    "stability_score": 34.03773225167344,
+    "optimization_date": "2025-11-24 15:15:31",
+    "quality": "excellent"
   }
 }
