@@ -1,46 +1,46 @@
 {
   "SAIDI_T": {
-    "transformation": "boxcox",
+    "transformation": "log",
     "order": [
-      1,
+      5,
       0,
       1
     ],
     "seasonal_order": [
-      0,
       1,
-      0,
+      1,
+      1,
       12
     ],
-    "precision_final": 69.597164232023,
-    "rmse": 4.975568005998709,
-    "mape": 30.402835767976992,
-    "r2_score": 0.15290021487102856,
+    "precision_final": 72.63312213562622,
+    "rmse": 4.240767940038393,
+    "mape": 27.366877864373773,
+    "r2_score": 0.3846272590667228,
     "with_exogenous": true,
-    "stability_score": 27.838865692809204,
-    "optimization_date": "2025-11-12 11:08:23",
+    "stability_score": 29.05324885425049,
+    "optimization_date": "2025-11-22 18:25:29",
     "quality": "excellent"
   },
   "SAIDI_P": {
-    "transformation": "log",
+    "transformation": "boxcox",
     "order": [
+      2,
       1,
-      0,
-      0
+      6
     ],
     "seasonal_order": [
       1,
       0,
-      1,
+      3,
       12
     ],
-    "precision_final": 78.85885620672097,
-    "rmse": 0.9347655461225209,
-    "mape": 21.14114379327902,
-    "r2_score": 0.2203771486979299,
-    "with_exogenous": false,
-    "stability_score": 31.54354248268839,
-    "optimization_date": "2025-11-12 11:23:09",
+    "precision_final": 79.06385922823833,
+    "rmse": 0.6618603236193981,
+    "mape": 20.936140771761664,
+    "r2_score": 0.6091484294177361,
+    "with_exogenous": true,
+    "stability_score": 31.625543691295334,
+    "optimization_date": "2025-11-24 08:01:12",
     "quality": "excellent"
   },
   "SAIDI_A": {
@@ -63,6 +63,28 @@
     "with_exogenous": false,
     "stability_score": 31.0603508528678,
     "optimization_date": "2025-11-12 11:23:37",
+    "quality": "excellent"
+  },
+  "SAIDI_C": {
+    "transformation": "sqrt",
+    "order": [
+      0,
+      1,
+      0
+    ],
+    "seasonal_order": [
+      2,
+      1,
+      4,
+      12
+    ],
+    "precision_final": 66.25357584964317,
+    "rmse": 0.30422457017690224,
+    "mape": 33.746424150356816,
+    "r2_score": -0.22389628181415122,
+    "with_exogenous": true,
+    "stability_score": 26.50143033985727,
+    "optimization_date": "2025-11-23 16:04:24",
     "quality": "excellent"
   }
 }

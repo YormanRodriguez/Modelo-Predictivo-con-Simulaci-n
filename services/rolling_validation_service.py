@@ -1,7 +1,7 @@
 # services/rolling_validation_service.py
 """
-Servicio de Validación Temporal con Rolling Forecast para SAIDI - Manejo robusto de errores de álgebra lineal
-MODIFICADO: Criterios de validación más realistas alineados con MAPE estándar de series temporales complejas
+Servicio de Validación Temporal con Rolling Forecast para SAIDI
+CORREGIDO: Manejo robusto de variables exógenas con baja cobertura
 """
 import pandas as pd
 import numpy as np
@@ -680,17 +680,17 @@ class RollingValidationService:
         }
     
     def analyze_parameter_stability(self,
-                                   data_original: pd.Series,
-                                   data_transformed: pd.Series,
-                                   exog_df: Optional[pd.DataFrame],
-                                   order: Tuple,
-                                   seasonal_order: Tuple,
-                                   transformation: str,
-                                   progress_callback=None,
-                                   log_callback=None) -> Dict[str, Any]:
-        """Analizar estabilidad de parámetros ARIMA/SARIMA"""
+                               data_original: pd.Series,
+                               data_transformed: pd.Series,
+                               exog_df: Optional[pd.DataFrame],
+                               order: Tuple,
+                               seasonal_order: Tuple,
+                               transformation: str,
+                               progress_callback=None,
+                               log_callback=None) -> Dict[str, Any]:
+        """Analizar estabilidad de parámetros ARIMA/SARIMA - CORREGIDO"""
         if log_callback:
-            log_callback("\n ANÁLISIS DE ESTABILIDAD DE PARÁMETROS")
+            log_callback("\n⚙ ANÁLISIS DE ESTABILIDAD DE PARÁMETROS")
         
         n_total = len(data_original)
         window_sizes = []
@@ -708,6 +708,7 @@ class RollingValidationService:
             log_callback(f"Ventanas a evaluar: {window_sizes}")
         
         params_evolution = {}
+        window_sizes_success = []  # ← NUEVO: Solo ventanas exitosas
         failed_windows = 0
         
         for idx, window in enumerate(window_sizes):
@@ -722,15 +723,14 @@ class RollingValidationService:
             if exog_df is not None:
                 exog_train = exog_df.loc[train_orig.index]
             
-            # VALIDACIÓN: Verificar que no haya NaN en los datos
+            # VALIDACIÓN: Verificar que no haya NaN
             if train_trans.isna().any() or (exog_train is not None and exog_train.isna().any().any()):
                 failed_windows += 1
                 if log_callback and failed_windows <= 2:
-                    log_callback(f" Ventana {window} contiene NaN - omitida")
+                    log_callback(f"⚠ Ventana {window} contiene NaN - omitida")
                 continue
             
             try:
-                # Parámetros más robustos
                 model = SARIMAX(
                     train_trans,
                     exog=exog_train,
@@ -740,13 +740,15 @@ class RollingValidationService:
                     enforce_invertibility=False
                 )
                 
-                # Método de ajuste más estable
                 results = model.fit(
                     disp=False,
                     method='lbfgs',
                     maxiter=100,
                     low_memory=True
                 )
+                
+                # Registrar ventana exitosa
+                window_sizes_success.append(window)
                 
                 # Extraer parámetros
                 params = results.params
@@ -756,21 +758,16 @@ class RollingValidationService:
                         params_evolution[param_name] = []
                     params_evolution[param_name].append(param_value)
                 
-            except np.linalg.LinAlgError:
+            except (np.linalg.LinAlgError, Exception) as e:
                 failed_windows += 1
                 if log_callback and failed_windows <= 2:
-                    log_callback(f" Ventana {window} falló (matriz singular) - omitida")
-                continue
-            except Exception:
-                failed_windows += 1
-                if log_callback and failed_windows <= 2:
-                    log_callback(f" Ventana {window} falló - omitida")
+                    log_callback(f"⚠ Ventana {window} falló: {str(e)[:50]} - omitida")
                 continue
         
-        if not params_evolution:
-            raise Exception("No se pudo analizar estabilidad de parámetros en ninguna ventana")
+        if not params_evolution or len(window_sizes_success) < 2:
+            raise Exception(f"Insuficientes ventanas exitosas: {len(window_sizes_success)}/2 mínimo")
         
-        # Analizar estabilidad de cada parámetro
+        # ===== ANÁLISIS CORREGIDO CON FUNCIÓN LOGARÍTMICA SUAVIZADA =====
         param_analysis = {}
         unstable_params = []
         
@@ -778,38 +775,87 @@ class RollingValidationService:
             if len(values) > 1:
                 mean_val = np.mean(values)
                 std_val = np.std(values)
+                value_range = max(values) - min(values)
                 
-                # Score de estabilidad: mayor std = menor estabilidad
-                if abs(mean_val) > 1e-6:
+                # 
+                if abs(mean_val) > 0.01:
                     cv = abs(std_val / mean_val)
-                    stability_score = max(0, min(100, 100 - (cv * 100)))
+                    # Usar log(1 + cv) para suavizar valores altos
+                    # cv=0.5 → 85, cv=1.0 → 70, cv=2.0 → 50, cv=5.0 → 30
+                    stability_score = max(0, min(100, 100 - 15 * np.log1p(cv)))
                 else:
-                    stability_score = 50
+                    # Método basado en rango absoluto
+                    if value_range < 0.2:
+                        stability_score = 95
+                    elif value_range < 0.5:
+                        stability_score = 80
+                    elif value_range < 1.0:
+                        stability_score = 65
+                    elif value_range < 2.0:
+                        stability_score = 50
+                    else:
+                        stability_score = max(0, 50 - (value_range - 2.0) * 10)
                 
                 param_analysis[param_name] = {
                     'mean': mean_val,
                     'std': std_val,
+                    'min': min(values),
+                    'max': max(values),
+                    'range': value_range,
+                    'cv': abs(std_val / mean_val) if abs(mean_val) > 0.01 else None,
                     'stability_score': stability_score,
                     'values': values
                 }
                 
-                if std_val > 0.15 or stability_score < 70:
+                # Criterio de inestabilidad MÁS REALISTA
+                is_unstable = False
+                
+                if abs(mean_val) > 0.01:
+                    cv = abs(std_val / mean_val)
+                    # Inestable si CV > 1.5 Y score < 65
+                    if cv > 1.5 and stability_score < 65:
+                        is_unstable = True
+                else:
+                    # Inestable si rango > 1.5 Y score < 65
+                    if value_range > 1.5 and stability_score < 65:
+                        is_unstable = True
+                
+                if is_unstable:
                     unstable_params.append(param_name)
         
-        # Score global
-        if param_analysis:
-            overall_stability = np.mean([p['stability_score'] for p in param_analysis.values()])
+        # Score global: promedio ponderado por tipo de parámetro
+        ar_scores = [p['stability_score'] for name, p in param_analysis.items() if 'ar.' in name.lower()]
+        ma_scores = [p['stability_score'] for name, p in param_analysis.items() if 'ma.' in name.lower()]
+        exog_scores = [p['stability_score'] for name, p in param_analysis.items() 
+                       if 'ar.' not in name.lower() and 'ma.' not in name.lower() and 'sigma' not in name.lower()]
+        
+        # Ponderación: AR/MA más importantes (70%) que exógenas (30%)
+        overall_stability = 0
+        weight_sum = 0
+        
+        if ar_scores:
+            overall_stability += np.mean(ar_scores) * 0.35
+            weight_sum += 0.35
+        
+        if ma_scores:
+            overall_stability += np.mean(ma_scores) * 0.35
+            weight_sum += 0.35
+        
+        if exog_scores:
+            overall_stability += np.mean(exog_scores) * 0.30
+            weight_sum += 0.30
+        
+        if weight_sum > 0:
+            overall_stability = overall_stability / weight_sum
         else:
             overall_stability = 0
         
-        # CAMBIO 4: Interpretación (más tolerante)
-        # ANTES: >= 85 = ALTA, >= 75 = BUENA, >= 65 = MODERADA
-        # DESPUÉS: Umbrales más realistas
-        if overall_stability >= 80:
+        # Interpretación REALISTA
+        if overall_stability >= 75:
             interpretation = "Los parámetros muestran ALTA estabilidad - Modelo robusto"
-        elif overall_stability >= 70:
+        elif overall_stability >= 65:
             interpretation = "Los parámetros muestran BUENA estabilidad - Modelo confiable"
-        elif overall_stability >= 60:
+        elif overall_stability >= 55:
             interpretation = "Los parámetros muestran estabilidad MODERADA - Aceptable para producción"
         else:
             interpretation = "Los parámetros muestran BAJA estabilidad - Revisar especificación"
@@ -817,18 +863,33 @@ class RollingValidationService:
         if log_callback:
             log_callback(f"  Overall Stability Score: {overall_stability:.1f}/100")
             log_callback(f"  {interpretation}")
+            
+            # Desglose por tipo
+            if ar_scores:
+                log_callback(f"  AR params: {np.mean(ar_scores):.1f}/100 (n={len(ar_scores)})")
+            if ma_scores:
+                log_callback(f"  MA params: {np.mean(ma_scores):.1f}/100 (n={len(ma_scores)})")
+            if exog_scores:
+                log_callback(f"  Exog params: {np.mean(exog_scores):.1f}/100 (n={len(exog_scores)})")
+            
             if unstable_params:
-                log_callback(f"  Parámetros inestables: {', '.join(unstable_params)}")
+                log_callback(f"  Parámetros críticos inestables ({len(unstable_params)}): {', '.join(unstable_params[:5])}")
             if failed_windows > 0:
-                log_callback(f"  Ventanas omitidas: {failed_windows}/{len(window_sizes)}")
+                pct_failed = failed_windows / len(window_sizes) * 100
+                log_callback(f"  Ventanas omitidas: {failed_windows}/{len(window_sizes)} ({pct_failed:.1f}%)")
         
         return {
             'overall_stability_score': overall_stability,
             'unstable_params': unstable_params,
             'parameter_details': param_analysis,
             'interpretation': interpretation,
-            'window_sizes': window_sizes,
-            'n_failed_windows': failed_windows
+            'window_sizes': window_sizes_success,
+            'n_failed_windows': failed_windows,
+            'param_group_scores': {
+                'ar': np.mean(ar_scores) if ar_scores else None,
+                'ma': np.mean(ma_scores) if ma_scores else None,
+                'exog': np.mean(exog_scores) if exog_scores else None
+            }
         }
     
     def run_backtesting(self,
@@ -1249,15 +1310,7 @@ class RollingValidationService:
                                     regional_code: Optional[str],
                                     log_callback) -> Tuple[Optional[pd.DataFrame], Optional[Dict]]:
         """
-        Preparar variables exógenas climáticas SIN ESCALAR
-        ALINEADO CON PredictionService/OptimizationService para métricas consistentes
-        
-        MEJORAS CRÍTICAS:
-        1. Mapeo de columnas con coincidencia parcial (no solo exacta)
-        2. Validación de cobertura temporal (80% mínimo en overlap)
-        3. Validación de varianza no-cero en overlap
-        4. Relleno inteligente: forward-fill + backward-fill (máx 3) + media
-        5. RETORNA EN ESCALA ORIGINAL (sin StandardScaler)
+        Preparar variables exógenas climáticas SIN ESCALAR.
         
         Args:
             climate_data: DataFrame con datos climáticos mensuales
@@ -1269,6 +1322,7 @@ class RollingValidationService:
             Tuple de (exog_df, exog_info) o (None, None) si falla
             - exog_df: DataFrame EN ESCALA ORIGINAL
             - exog_info: Dict con metadata de cada variable
+
         """
         try:
             # Validaciones iniciales
@@ -1387,18 +1441,17 @@ class RollingValidationService:
             # Preparación de variables SIN ESCALADO
             exog_df = pd.DataFrame(index=historico.index)
             exog_info = {}
+            rejected_vars = []  
             
             for var_code, var_nombre in exog_vars_config.items():
                 climate_col = climate_column_mapping.get(var_code)
                 
                 if not climate_col or climate_col not in climate_data.columns:
+                    rejected_vars.append((var_code, "No encontrada en datos climáticos"))
                     continue
                 
                 try:
-                    # Extraer serie del clima
                     var_series = climate_data[climate_col].copy()
-                    
-                    # Crear serie alineada (inicialmente vacía)
                     aligned_series = pd.Series(index=historico.index, dtype=float)
                     
                     # Llenar datos donde hay overlap REAL
@@ -1406,23 +1459,32 @@ class RollingValidationService:
                         if date in var_series.index:
                             aligned_series[date] = var_series.loc[date]
                     
-                    # VALIDACIÓN: Cobertura en overlap
+                    # VALIDACIÓN 1: Cobertura en overlap
                     overlap_data = aligned_series[overlap_mask]
                     datos_reales_overlap = overlap_data.notna().sum()
                     overlap_pct = (datos_reales_overlap / overlap_months) * 100
                     
-                    # RECHAZAR si cobertura < 80%
+                    # CRÍTICO: Rechazar si cobertura < 80%
                     if overlap_pct < 80:
+                        rejected_vars.append((var_code, f"Cobertura {overlap_pct:.1f}% < 80%"))
                         if log_callback:
-                            log_callback(f"   RECHAZADA {var_code}: cobertura {overlap_pct:.1f}% < 80%")
+                            log_callback(f"RECHAZADA {var_code}: cobertura {overlap_pct:.1f}% < 80%")
                         continue
                     
-                    # VALIDACIÓN: Varianza en overlap
+                    # VALIDACIÓN 2: Varianza en overlap
                     var_std = overlap_data.std()
-                    
                     if pd.isna(var_std) or var_std == 0:
+                        rejected_vars.append((var_code, "Varianza = 0"))
                         if log_callback:
-                            log_callback(f"   RECHAZADA {var_code}: varianza = 0")
+                            log_callback(f" RECHAZADA {var_code}: varianza = 0")
+                        continue
+                    
+                    # VALIDACIÓN 3: Cobertura en TODO el período histórico
+                    coverage_total = aligned_series.notna().sum() / len(aligned_series) * 100
+                    if coverage_total < 60:  # Al menos 60% de cobertura total
+                        rejected_vars.append((var_code, f"Cobertura total {coverage_total:.1f}% < 60%"))
+                        if log_callback:
+                            log_callback(f" RECHAZADA {var_code}: cobertura total {coverage_total:.1f}% < 60%")
                         continue
                     
                     # Forward-fill para fechas futuras
@@ -1439,8 +1501,9 @@ class RollingValidationService:
                     # VERIFICACIÓN FINAL
                     final_nan = aligned_series.isnull().sum()
                     if final_nan > 0:
+                        rejected_vars.append((var_code, f"{final_nan} NaN finales"))
                         if log_callback:
-                            log_callback(f"   RECHAZADA {var_code}: {final_nan} NaN finales")
+                            log_callback(f" RECHAZADA {var_code}: {final_nan} NaN finales")
                         continue
                     
                     # GUARDAR EN ESCALA ORIGINAL
@@ -1453,30 +1516,38 @@ class RollingValidationService:
                         'scaled': False,
                         'datos_reales_overlap': int(datos_reales_overlap),
                         'overlap_coverage_pct': float(overlap_pct),
+                        'total_coverage_pct': float(coverage_total),  # ← NUEVO
                         'varianza_overlap': float(var_std)
                     }
                     
                     if log_callback:
-                        log_callback(f"   ACEPTADA {var_code} ({overlap_pct:.1f}% cobertura, r={exog_info[var_code]['correlacion']:.3f})")
+                        log_callback(f" ACEPTADA {var_code} (overlap={overlap_pct:.1f}%, total={coverage_total:.1f}%, r={exog_info[var_code]['correlacion']:.3f})")
                         
                 except Exception as e:
+                    rejected_vars.append((var_code, f"Error: {str(e)[:50]}"))
                     if log_callback:
-                        log_callback(f"   ERROR {var_code}: {e}")
+                        log_callback(f" ERROR {var_code}: {e}")
                     continue
             
             # VALIDACIÓN FINAL
             if exog_df.empty or exog_df.shape[1] == 0:
                 if log_callback:
+                    log_callback("=" * 60)
                     log_callback("ERROR: Ninguna variable aceptada")
+                    log_callback(f"Variables rechazadas ({len(rejected_vars)}):")
+                    for var, reason in rejected_vars:
+                        log_callback(f"  - {var}: {reason}")
+                    log_callback("=" * 60)
                 return None, None
             
             if log_callback:
                 log_callback("=" * 60)
-                log_callback(f"Variables preparadas: {len(exog_df.columns)}")
+                log_callback(f"Variables preparadas: {len(exog_df.columns)}/{len(exog_vars_config)}")
                 log_callback("   ESCALA: ORIGINAL (sin StandardScaler)")
-                log_callback("   Rangos:")
-                for col in exog_df.columns:
-                    log_callback(f"     - {col}: [{exog_df[col].min():.2f}, {exog_df[col].max():.2f}]")
+                if rejected_vars:
+                    log_callback(f"   Variables rechazadas: {len(rejected_vars)}")
+                    for var, reason in rejected_vars[:3]:  # Mostrar solo primeras 3
+                        log_callback(f"     - {var}: {reason}")
                 log_callback("=" * 60)
             
             return exog_df, exog_info if exog_info else None
