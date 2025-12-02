@@ -63,7 +63,6 @@ dependencies = [
     "websockets==15.0.1",
     "xlrd==2.0.2",
 ]
-
 [tool.ruff]
 lint.extend-select = [
     "E",    # Pycodestyle errors (style issues)

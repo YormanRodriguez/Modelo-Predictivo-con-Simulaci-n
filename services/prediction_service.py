@@ -539,9 +539,13 @@ class PredictionService:
             if log_callback:
                 log_callback("No hay meses faltantes, creando predicciones futuras")
             ultimo_mes = historico.index[-1]
+
+            if log_callback:
+                log_callback(f"[DEBUG] Último mes histórico: {ultimo_mes}")
+                log_callback(f"[DEBUG] Creando {12} meses desde {ultimo_mes + pd.DateOffset(months=1)}")
             fechas_futuras = pd.date_range(
                 start=ultimo_mes + pd.DateOffset(months=1),
-                periods=6,
+                periods=6, #Cantidad de meses a predecir cambiar a 6 o 12 segun el caso de predicción
                 freq="MS",
             )
             for fecha in fechas_futuras:
