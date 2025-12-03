@@ -17,8 +17,8 @@ warnings.filterwarnings('ignore')
 
 class OptimizationService:  
     """
-    Servicio de optimización de parámetros SARIMAX
-    
+    Servicio de optimización de parámetros SARIMAX.
+
     Funcionalidades:
     - Evaluación exhaustiva de combinaciones de parámetros
     - Soporte para múltiples transformaciones de datos
@@ -78,7 +78,7 @@ class OptimizationService:
     }
     
     def __init__(self):
-        """Inicializar servicio de optimización"""
+        """Inicializar servicio de optimización."""
         # Parámetros por defecto
         self.default_order = (3, 0, 3)
         self.default_seasonal_order = (3, 1, 3, 12)
@@ -118,8 +118,8 @@ class OptimizationService:
                     use_parallel: bool = True,
                     max_workers: Optional[int] = None) -> Dict[str, Any]:
         """
-        Ejecutar optimización de parámetros SARIMAX
-        
+        Ejecutar optimización de parámetros SARIMAX.
+
         Args:
             file_path: Ruta del archivo Excel SAIDI (opcional)
             df_prepared: DataFrame SAIDI preparado (opcional)
@@ -130,7 +130,7 @@ class OptimizationService:
             iteration_callback: Función callback para actualizar iteración actual
             use_parallel: Usar procesamiento paralelo
             max_workers: Número de workers paralelos (None = automático)
-        
+
         Returns:
             Diccionario con resultados de optimización
         """
@@ -221,7 +221,8 @@ class OptimizationService:
                 progress_callback(20, f"Iniciando evaluacion de {self.total_iterations} modelos")
             
             # Paso 4: Ejecutar evaluación (paralela o secuencial)
-            if use_parallel and len(param_combinations) > 50:
+            combinacion_paralela = 50
+            if use_parallel and len(param_combinations) > combinacion_paralela:
                 print("[DEBUG_OPT] Usando procesamiento PARALELO")
                 self._run_parallel_optimization(
                     historico[col_saidi], param_combinations, exog_df,
@@ -318,7 +319,7 @@ class OptimizationService:
             raise Exception(error_msg)
     
     def _reset_state(self):
-        """Reiniciar estado interno del servicio"""
+        """Reiniciar estado interno del servicio."""
         print("[DEBUG_OPT] Reiniciando estado del servicio")
         
         self.all_models = []
@@ -354,8 +355,8 @@ class OptimizationService:
                             df_prepared: Optional[pd.DataFrame],
                             log_callback) -> Tuple[pd.DataFrame, str, pd.DataFrame]:
         """
-        Cargar y validar datos SAIDI
-        
+        Cargar y validar datos SAIDI.
+
         Returns:
             Tuple con (df_completo, nombre_columna_saidi, df_historico)
         """
@@ -394,30 +395,31 @@ class OptimizationService:
         
         # Filtrar datos históricos (no nulos)
         historico = df[df[col_saidi].notna()].copy()
-        
-        if len(historico) < 12:
-            raise ValueError(f"Datos insuficientes: solo {len(historico)} observaciones (minimo 12)")
-        
+
+        meses = 12
+        if len(historico) < meses:
+            raise ValueError(f"Datos insuficientes: solo {len(historico)} observaciones (minimo {meses})")
+
         print(f"[DEBUG_OPT] Datos validados: {len(historico)} obs, columna: {col_saidi}")
         
         return df, col_saidi, historico
     
     def _configure_parameter_space(self, log_callback) -> List[Tuple]:
         """
-        Configurar espacio de búsqueda de parámetros
-        
+        Configurar espacio de búsqueda de parámetros.
+
         Returns:
             Lista de tuplas (p, d, q, P, D, Q, s)
         """
         print("[DEBUG_OPT] Configurando espacio de busqueda")
         
         # Rangos de parámetros
-        p_range = range(0, 7)  # AR
-        d_range = range(0, 3)  # Diferenciación
-        q_range = range(0, 7)  # MA
-        P_range = range(0, 6)  # AR estacional
-        D_range = range(0, 3)  # Diferenciación estacional
-        Q_range = range(0, 6)  # MA estacional
+        p_range = range(7)  # AR
+        d_range = range(3)  # Diferenciación
+        q_range = range(7)  # MA
+        P_range = range(6)  # AR estacional  # noqa: N806
+        D_range = range(3)  # Diferenciación estacional # noqa: N806
+        Q_range = range(6)  # MA estacional # noqa: N806
         s_range = [12]
 
         # Rangos de parámetros
@@ -450,21 +452,22 @@ class OptimizationService:
     
     def _filter_invalid_combinations(self, combinations: List[Tuple]) -> List[Tuple]:
         """
-        Filtrar combinaciones de parámetros inválidas
-        
+        Filtrar combinaciones de parámetros inválidas.
+
         Criterios:
         - Evitar modelos triviales (todos los parámetros en 0)
         - Evitar modelos extremadamente complejos
         - Debe tener al menos un componente AR o MA
         """
         valid = []
-        
-        for p, d, q, P, D, Q, s in combinations:
+
+        for p, d, q, P, D, Q, s in combinations: # noqa: N806
             # Calcular complejidad total
             total_params = p + d + q + P + D + Q
             
             # Rechazar si es trivial o demasiado complejo
-            if total_params == 0 or total_params > 14:
+            combinacion_sobreajuste = 14
+            if total_params == 0 or total_params > combinacion_sobreajuste:
                 continue
             
             # Debe tener al menos un componente AR o MA
@@ -482,9 +485,8 @@ class OptimizationService:
                                progress_callback,
                                iteration_callback,
                                log_callback,
-                               max_workers: Optional[int]):
-        """Ejecutar optimización en paralelo usando ProcessPoolExecutor"""
-        
+                               max_workers: int | None):
+        """Ejecutar optimización en paralelo usando ProcessPoolExecutor."""
         if max_workers is None:
             max_workers = max(1, mp.cpu_count() - 1)
         
@@ -496,7 +498,7 @@ class OptimizationService:
         # Preparar tareas
         tasks = []
         for params in param_combinations:
-            p, d, q, P, D, Q, s = params
+            p, d, q, P, D, Q, s = params # noqa: N806
             order = (p, d, q)
             seasonal_order = (P, D, Q, s)
             
@@ -547,7 +549,8 @@ class OptimizationService:
                             self._update_transformation_stats(transformation, metrics)
                             
                             # Log de progreso si es relevante
-                            if metrics['precision_final'] > 60:
+                            precision_aceptable=60
+                            if metrics["precision_final"] > precision_aceptable:
                                 print(f"[DEBUG_OPT] Modelo relevante encontrado: "
                                     f"{transformation} - Precision: {metrics['precision_final']:.1f}%")
                         
@@ -578,14 +581,13 @@ class OptimizationService:
                                 progress_callback,
                                 iteration_callback,
                                 log_callback):
-        """Ejecutar optimización secuencialmente (un modelo a la vez)"""
-        
+        """Ejecutar optimización secuencialmente (un modelo a la vez)."""
         print("[DEBUG_OPT] Iniciando procesamiento secuencial")
         
         total_tasks = len(param_combinations) * len(self.AVAILABLE_TRANSFORMATIONS)
         
         for params in param_combinations:
-            p, d, q, P, D, Q, s = params
+            p, d, q, P, D, Q, s = params # noqa: N806
             order = (p, d, q)
             seasonal_order = (P, D, Q, s)
             
@@ -609,7 +611,8 @@ class OptimizationService:
                     self._update_transformation_stats(transformation, metrics)
                     
                     # Log relevante
-                    if metrics['precision_final'] > 60:
+                    precision_aceptable=60
+                    if metrics["precision_final"] > precision_aceptable:
                         print(f"[DEBUG_OPT] Modelo relevante: {transformation} - "
                             f"Precision: {metrics['precision_final']:.1f}%")
                 
@@ -632,9 +635,7 @@ class OptimizationService:
                           serie_saidi: pd.Series, 
                           exog_df: pd.DataFrame,
                           log_callback) -> bool:
-        """
-        Diagnosticar cobertura temporal de variables exógenas
-        """
+        """Diagnosticar cobertura temporal de variables exógenas."""
         try:
             saidi_start = serie_saidi.index[0]
             saidi_end = serie_saidi.index[-1]
@@ -656,14 +657,16 @@ class OptimizationService:
                     print(f"[DIAGNOSTICO] Fechas SAIDI faltantes en EXOG: {len(missing_in_exog)} ({pct_missing:.1f}%)")
                     
                     # Mostrar primeras y últimas fechas faltantes
-                    if len(missing_in_exog) <= 5:
+                    meses_faltantes=5
+                    if len(missing_in_exog) <= meses_faltantes:
                         print(f"[DIAGNOSTICO]   Fechas faltantes: {missing_in_exog}")
                     else:
                         print(f"[DIAGNOSTICO]   Primeras faltantes: {missing_in_exog[:3]}")
                         print(f"[DIAGNOSTICO]   Últimas faltantes: {missing_in_exog[-3:]}")
                     
                     # CRÍTICO: Si falta >20% de fechas, rechazar
-                    if pct_missing > 20:
+                    porcentaje_faltante_datos=20
+                    if pct_missing > porcentaje_faltante_datos:
                         print("[DIAGNOSTICO] ERROR CRÍTICO: >20% de fechas faltantes")
                         if log_callback:
                             log_callback(f"ERROR: {pct_missing:.1f}% de fechas SAIDI no tienen datos climáticos")
@@ -710,26 +713,26 @@ class OptimizationService:
                                 forecast_dates: pd.DatetimeIndex,
                                 log_callback=None) -> pd.DataFrame:
         """
-        Proyectar variables climáticas de forma inteligente usando promedios estacionales ponderados
-        
+        Proyectar variables climáticas de forma inteligente usando promedios estacionales ponderados.
+
         Estrategia de proyección:
         1. Calcular promedios mensuales históricos (estacionalidad)
         2. Aplicar ponderación exponencial (más peso a años recientes)
         3. Detectar tendencias lineales con scipy.stats.linregress
         4. Aplicar ajuste de tendencia si correlación > 0.3
         5. Logging detallado de proyecciones vs histórico
-        
+
         Esta estrategia es SUPERIOR al forward-fill naive porque:
         - Captura estacionalidad real (ciclos anuales)
         - Pondera más los años recientes (cambio climático)
         - Detecta y aplica tendencias (calentamiento, cambios de precipitación)
         - Proporciona valores más realistas para el modelo SARIMAX
-        
+
         Args:
             climate_data: DataFrame con datos climáticos históricos
             forecast_dates: Índice de fechas futuras a proyectar
             log_callback: Función para logging detallado
-        
+
         Returns:
             DataFrame con variables climáticas proyectadas para forecast_dates
         """
@@ -767,8 +770,9 @@ class OptimizationService:
             
             try:
                 var_series = climate_data[col].dropna()
-                
-                if len(var_series) < 12:
+
+                meses=12
+                if len(var_series) < meses:
                     # Datos insuficientes: usar media simple
                     projected_df[col] = var_series.mean()
                     print("[CLIMATE_PROJECTION]   ADVERTENCIA: Datos insuficientes, usando media")
@@ -803,8 +807,10 @@ class OptimizationService:
                 slope, intercept, r_value, p_value, std_err = linregress(time_numeric, values_numeric)
                 
                 # Determinar si hay tendencia significativa
-                has_trend = (abs(r_value) > 0.3) and (p_value < 0.05)
-                
+                tendencia_minima=0.3
+                tendencia_maxima=0.05
+                has_trend = (abs(r_value) > tendencia_minima) and (p_value < tendencia_maxima)
+
                 if has_trend:
                     trend_direction = "ascendente" if slope > 0 else "descendente"
                     print(f"[CLIMATE_PROJECTION]   Tendencia {trend_direction} detectada: "
@@ -889,28 +895,31 @@ class OptimizationService:
                     transformation: str,
                     exog_df: Optional[pd.DataFrame]) -> Optional[Dict[str, Any]]:
         """
-        Evaluar un modelo SARIMAX individual    
+        Evaluar un modelo SARIMAX individual.
+
         Estrategia de validación:
         - Train/test split adaptativo (20-30% test según cantidad de datos)
         - Validación estricta de cobertura exógena (100% sin NaN)
         - Alineación perfecta entre índices SAIDI y exógenas
-        
+
         Args:
             serie_original: Serie temporal SAIDI
             order: Parámetros (p,d,q) del modelo
             seasonal_order: Parámetros estacionales (P,D,Q,s)
             transformation: Tipo de transformación a aplicar
             exog_df: DataFrame con variables exógenas EN ESCALA ORIGINAL (puede ser None)
-        
+
         Returns:
             Dict con métricas del modelo o None si falla
         """
         try:
             # Calcular porcentaje de validación adaptativo
             n_obs = len(serie_original)
-            if n_obs >= 60:
+            cantidad_observaciones_alta=60
+            cantidad_observaciones_aceptable=36
+            if n_obs >= cantidad_observaciones_alta:
                 pct_validacion = 0.30
-            elif n_obs >= 36:
+            elif n_obs >= cantidad_observaciones_aceptable:
                 pct_validacion = 0.25
             else:
                 pct_validacion = 0.20
@@ -920,8 +929,9 @@ class OptimizationService:
             # Dividir en train/test
             train_original = serie_original[:-n_test]
             test_original = serie_original[-n_test:]
-            
-            if len(train_original) < 12:
+
+            meses=12
+            if len(train_original) < meses:
                 return None
             
             # Aplicar transformación a la serie SAIDI
@@ -1072,9 +1082,7 @@ class OptimizationService:
                             predicted_values: np.ndarray,  
                             precision: float,
                             mape: float) -> float:
-        """
-        Calcular score de estabilidad del modelo
-        """
+        """Calcular score de estabilidad del modelo."""
         try:
             errors = actual_values - predicted_values
             
@@ -1082,7 +1090,8 @@ class OptimizationService:
             std_error = np.std(errors)
             
             # Coeficiente de variación de errores
-            if mean_abs_error > 1e-8:
+            c_error =  1e-8
+            if mean_abs_error > c_error:
                 cv_error = std_error / mean_abs_error
                 # Convertir a score (menor CV = mayor estabilidad)
                 stability_cv = max(0, 100 * (1 - min(cv_error, 1)))
@@ -1091,9 +1100,11 @@ class OptimizationService:
                 stability_cv = 50.0
             
             # Penalización adaptativa por MAPE
-            if mape > 50:
+            penalizacion_mape=50
+            penalizacion_minima_mape=30
+            if mape > penalizacion_mape:
                 mape_penalty = 0.5  # Penalización fuerte
-            elif mape > 30:
+            elif mape > penalizacion_minima_mape:
                 mape_penalty = 0.7  # Penalización moderada
             else:
                 mape_penalty = 1.0  # Sin penalización
@@ -1115,8 +1126,8 @@ class OptimizationService:
                             precision: float,
                             mape: float) -> float:
         """
-        Calcular score de estabilidad del modelo
-        
+        Calcular score de estabilidad del modelo.
+
         Basado en:
         - Variabilidad de errores
         - Consistencia de predicciones
@@ -1128,17 +1139,20 @@ class OptimizationService:
             # Coeficiente de variación de errores
             mean_abs_error = np.mean(np.abs(errors))
             std_error = np.std(errors)
-            
-            if mean_abs_error > 1e-8:
+
+            c_error =  1e-8
+            if mean_abs_error > c_error:
                 cv_error = std_error / mean_abs_error
                 stability_cv = max(0, 100 * (1 - min(cv_error, 1)))
             else:
                 stability_cv = 50.0
             
             # Penalización por MAPE alto
-            if mape > 50:
+            penalizacion_mape=50
+            penalizacion_minima_mape=30
+            if mape > penalizacion_mape:
                 mape_penalty = 0.5
-            elif mape > 30:
+            elif mape > penalizacion_minima_mape:
                 mape_penalty = 0.7
             else:
                 mape_penalty = 1.0
@@ -1155,8 +1169,8 @@ class OptimizationService:
     
     def _is_valid_model(self, metrics: Dict[str, Any]) -> bool:
         """
-        Verificar si un modelo es válido para consideración
-        
+        Verificar si un modelo es válido para consideración.
+
         Criterio: Debe tener métricas computables (no infinitas)
         """
         if metrics is None:
@@ -1173,8 +1187,8 @@ class OptimizationService:
     
     def _add_model(self, metrics: Dict[str, Any]):
         """
-        Agregar modelo a la colección de resultados
-        
+        Agregar modelo a la colección de resultados.
+
         También actualiza el mejor modelo por transformación
         """
         self.all_models.append(metrics)
@@ -1191,14 +1205,12 @@ class OptimizationService:
                 self.best_by_transformation[transformation] = metrics
         
         # Actualizar mejores globales
-        if metrics['precision_final'] > self.best_precision:
-            self.best_precision = metrics['precision_final']
-        
-        if metrics['rmse'] < self.best_rmse:
-            self.best_rmse = metrics['rmse']
-    
-    def _update_transformation_stats(self, transformation: str, metrics: Dict[str, Any]):
-        """Actualizar estadísticas de una transformación específica"""
+        self.best_precision = max(self.best_precision, metrics["precision_final"])
+
+        self.best_rmse = min(self.best_rmse, metrics["rmse"])
+
+    def _update_transformation_stats(self, transformation: str, metrics: dict[str, Any]):
+        """Actualizar estadísticas de una transformación específica."""
         stats = self.transformation_stats[transformation]
         
         stats['count'] += 1
@@ -1216,7 +1228,7 @@ class OptimizationService:
             stats['best_stability'] = stability
     
     def _update_iteration_status(self, iteration_callback):
-        """Actualizar callback de iteración con información del mejor modelo actual"""
+        """Actualizar callback de iteración con información del mejor modelo actual."""
         if not self.all_models:
             return
         
@@ -1239,13 +1251,13 @@ class OptimizationService:
     
     def _select_best_models(self) -> Tuple[List[Dict], str, Dict[str, int]]:
         """
-        Seleccionar y clasificar los mejores modelos encontrados
-        
+        Seleccionar y clasificar los mejores modelos encontrados.
+
         Sistema de fallback adaptativo:
         1. Prioridad: modelos 'excellent' y 'good'
         2. Fallback: modelos 'acceptable'
         3. Último recurso: mejores de 'poor'
-        
+
         Returns:
             Tuple con (lista_modelos, nivel_calidad, conteos_calidad)
         """
@@ -1269,18 +1281,21 @@ class OptimizationService:
         good = []
         acceptable = []
         poor = []
-        
+
+        precision_aceptable=20
+        precision_bueno=40
+        precision_excelente=60
         for model in sorted_models:
-            precision = model['precision_final']
-            
-            if precision >= 60:
-                model['quality'] = 'excellent'
+            precision = model["precision_final"]
+
+            if precision >= precision_excelente:
+                model["quality"] = "excellent"
                 excellent.append(model)
-            elif precision >= 40:
-                model['quality'] = 'good'
+            elif precision >= precision_bueno:
+                model["quality"] = "good"
                 good.append(model)
-            elif precision >= 20:
-                model['quality'] = 'acceptable'
+            elif precision >= precision_aceptable:
+                model["quality"] = "acceptable"
                 acceptable.append(model)
             else:
                 model['quality'] = 'poor'
@@ -1297,13 +1312,14 @@ class OptimizationService:
             f"Acceptable={len(acceptable)}, Poor={len(poor)}")
         
         # Estrategia de selección adaptativa
-        if len(excellent) >= 5:
+        top_modelos=5
+        if len(excellent) >= top_modelos:
             selected = excellent[:self.MAX_TOP_MODELS]
             quality_level = "EXCELENTE"
-        elif len(excellent) + len(good) >= 5:
+        elif len(excellent) + len(good) >= top_modelos:
             selected = (excellent + good)[:self.MAX_TOP_MODELS]
             quality_level = "BUENO"
-        elif len(excellent) + len(good) + len(acceptable) >= 5:
+        elif len(excellent) + len(good) + len(acceptable) >= top_modelos:
             selected = (excellent + good + acceptable)[:self.MAX_TOP_MODELS]
             quality_level = "ACEPTABLE"
         else:
@@ -1321,11 +1337,8 @@ class OptimizationService:
                         historico: pd.DataFrame,
                         log_callback) -> Tuple[Optional[pd.DataFrame], Optional[Dict], Dict]:
         """
-        Preparar variables exógenas con estrategia de overlap inteligente
-        
-        CAMBIO CLAVE: Ya NO se aplica escalado. SARIMAX maneja internamente
-        la normalización de variables exógenas.
-        
+        Preparar variables exógenas con estrategia de overlap inteligente.
+
         Estrategia:
         1. Identificar periodo de overlap entre SAIDI y datos climáticos
         2. Validar cobertura mínima (80% en overlap)
@@ -1333,14 +1346,14 @@ class OptimizationService:
         4. Forward-fill para fechas futuras (sin límite)
         5. Backward-fill para fechas pasadas (máx 3 meses)
         6. RETORNAR EN ESCALA ORIGINAL (sin StandardScaler)
-        
+
         Args:
             climate_data: DataFrame con datos climáticos mensuales
             df_saidi: DataFrame SAIDI completo
             regional_code: Código de la regional
             historico: Serie temporal SAIDI histórica
             log_callback: Función para logging
-        
+
         Returns:
             Tuple de (exog_df, exog_info, coverage_report)
             - exog_df: DataFrame con variables EN ESCALA ORIGINAL
@@ -1438,7 +1451,8 @@ class OptimizationService:
             overlap_months = overlap_mask.sum()
             
             # Validar overlap mínimo (12 meses)
-            if overlap_months < 12:
+            meses=12
+            if overlap_months < meses:
                 print(f"[EXOG_ADAPTIVE] ERROR: Overlap insuficiente ({overlap_months} < 12 meses)")
                 if log_callback:
                     log_callback(f"ERROR: Overlap insuficiente: {overlap_months} meses (mínimo: 12)")
@@ -1502,8 +1516,9 @@ class OptimizationService:
                     if matches > best_match_score:
                         best_match_score = matches
                         best_match = orig_col
-                
-                if best_match_score >= 2:
+
+                mejor_puntaje=2
+                if best_match_score >= mejor_puntaje:
                     climate_column_mapping[var_code] = best_match
             
             if not climate_column_mapping:
@@ -1549,9 +1564,10 @@ class OptimizationService:
                     print(f"[EXOG_ADAPTIVE]     Cobertura en overlap: {datos_reales_overlap}/{overlap_months} ({overlap_pct:.1f}%)")
                     
                     # RECHAZAR si cobertura < 80%
-                    if overlap_pct < 80:
-                        coverage_report['variables_rejected'].append(var_nombre)
-                        coverage_report['rejection_reasons'][var_code] = f"Cobertura insuficiente: {overlap_pct:.1f}%"
+                    cobertura_minima=80
+                    if overlap_pct < cobertura_minima:
+                        coverage_report["variables_rejected"].append(var_nombre)
+                        coverage_report["rejection_reasons"][var_code] = f"Cobertura insuficiente: {overlap_pct:.1f}%"
                         print(f"[EXOG_ADAPTIVE]   X RECHAZADA {var_code}: cobertura {overlap_pct:.1f}% < 80%")
                         continue
                     
@@ -1660,8 +1676,8 @@ class OptimizationService:
                             exog_series: pd.DataFrame,
                             df_saidi: pd.DataFrame,
                             var_code: str,
-                            log_callback) -> Optional[pd.Series]:
-        """Alinear datos exógenos al índice temporal de SAIDI"""
+                            log_callback) -> pd.Series | None:
+        """Alinear datos exógenos al índice temporal de SAIDI."""
         try:
             climate_dates = exog_series.index
             saidi_dates = df_saidi.index
@@ -1701,12 +1717,12 @@ class OptimizationService:
         except Exception as e:
             print(f"[DEBUG_OPT_ERROR] Error alineando {var_code}: {e}")
             return None
-    
-    def _apply_transformation(self, 
-                         data: np.ndarray, 
-                         transformation_type: str) -> Tuple[np.ndarray, str]:
-        """Aplicar transformación a los datos"""
-        if transformation_type == 'original':
+
+    def _apply_transformation(self,
+                         data: np.ndarray,
+                         transformation_type: str) -> tuple[np.ndarray, str]:
+        """Aplicar transformación a los datos."""
+        if transformation_type == "original":
             return data, "Sin transformacion"
         
         elif transformation_type == 'standard':
@@ -1738,8 +1754,8 @@ class OptimizationService:
     def _inverse_transformation(self, 
                            data: np.ndarray, 
                            transformation_type: str) -> np.ndarray:
-        """Revertir transformación a escala original"""
-        if transformation_type == 'original':
+        """Revertir transformación a escala original."""
+        if transformation_type == "original":
             return data
         
         elif transformation_type == 'standard':
@@ -1757,19 +1773,16 @@ class OptimizationService:
             lambda_param = self.transformation_params.get('boxcox_lambda', 0)
             if lambda_param == 0:
                 return np.exp(data)
-            else:
-                return np.power(data * lambda_param + 1, 1 / lambda_param)
-        
-        else:
-            return data
-    
-    def _log_final_summary(self, 
-                      log_callback, 
-                      top_models: List[Dict],
-                      exog_info: Optional[Dict],
-                      regional_code: Optional[str] = None):  # Agregar regional_code como parámetro
-        """Generar resumen final de optimizacion CON INFO DE CORRELACIONES"""
-        
+            return np.power(data * lambda_param + 1, 1 / lambda_param)
+
+        return data
+
+    def _log_final_summary(self,
+                      log_callback,
+                      top_models: list[dict],
+                      exog_info: dict | None,
+                      regional_code: str | None = None):  # Agregar regional_code como parámetro
+        """Generar resumen final de optimizacion CON INFO DE CORRELACIONES."""
         # Definir mapa de correlaciones por regional
         correlations_map = {
             'SAIDI_O': {  # Ocaña
@@ -1823,14 +1836,20 @@ class OptimizationService:
         # Top 10 mejores modelos
         log_callback("\nTOP 10 MEJORES MODELOS:")
         log_callback("-" * 80)
-        
+
+        top_1=1
+        top_2=2
+        top_3=3
+        correlacion_fuerte=60
+        correlacion_fuerte_moderada=40
+        correlacion_moderada=30
         for i, modelo in enumerate(top_models[:10], 1):
-            if i == 1:
+            if i == top_1:
                 medal = " Puesto 1"
 
-            elif i == 2:
+            elif i == top_2:
                 medal = " Puesto 2"
-            elif i == 3:
+            elif i == top_3:
                 medal = " Puesto 3"
             else:
                 medal = f"   Puesto {i}"
@@ -1878,11 +1897,11 @@ class OptimizationService:
                 
                 # Clasificar fuerza de correlacion
                 abs_corr = abs(corr)
-                if abs_corr >= 0.6:
+                if abs_corr >= correlacion_fuerte:
                     strength = "*** FUERTE ***"
-                elif abs_corr >= 0.4:
+                elif abs_corr >= correlacion_fuerte_moderada:
                     strength = "** MODERADA-FUERTE **"
-                elif abs_corr >= 0.3:
+                elif abs_corr >= correlacion_moderada:
                     strength = "* MODERADA *"
                 else:
                     strength = ""

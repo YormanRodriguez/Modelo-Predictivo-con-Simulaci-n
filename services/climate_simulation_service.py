@@ -1,7 +1,4 @@
 # services/climate_simulation_service.py - Servicio de simulación climática para SAIDI
-
-# services/climate_simulation_service.py - Servicio de simulación climática para SAIDI
-
 from dataclasses import dataclass
 from typing import ClassVar
 
