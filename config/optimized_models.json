@@ -44,25 +44,25 @@
     "quality": "excellent"
   },
   "SAIDI_A": {
-    "transformation": "original",
+    "transformation": "log",
     "order": [
       1,
       0,
-      0
+      3
     ],
     "seasonal_order": [
-      1,
+      4,
       0,
-      1,
+      0,
       12
     ],
-    "precision_final": 77.6508771321695,
-    "rmse": 0.5170203968648877,
-    "mape": 22.349122867830506,
-    "r2_score": 0.16004547751595521,
-    "with_exogenous": false,
-    "stability_score": 31.0603508528678,
-    "optimization_date": "2025-11-12 11:23:37",
+    "precision_final": 79.08355201475905,
+    "rmse": 0.49590797407133175,
+    "mape": 20.916447985240946,
+    "r2_score": 0.22724361394573045,
+    "with_exogenous": true,
+    "stability_score": 31.633420805903622,
+    "optimization_date": "2025-11-25 15:10:06",
     "quality": "excellent"
   },
   "SAIDI_C": {
@@ -88,11 +88,11 @@
     "quality": "excellent"
   },
   "SAIDI_Cens": {
-    "transformation": "original",
+    "transformation": "sqrt",
     "order": [
       0,
       0,
-      3
+      5
     ],
     "seasonal_order": [
       2,
@@ -100,13 +100,13 @@
       0,
       12
     ],
-    "precision_final": 85.09433062918359,
-    "rmse": 0.3202311276200509,
-    "mape": 14.905669370816405,
-    "r2_score": 0.8061557617613261,
+    "precision_final": 85.73503229099708,
+    "rmse": 0.34492430022909565,
+    "mape": 14.26496770900292,
+    "r2_score": 0.7929332187509207,
     "with_exogenous": false,
-    "stability_score": 34.03773225167344,
-    "optimization_date": "2025-11-24 15:15:31",
+    "stability_score": 34.294012916398835,
+    "optimization_date": "2025-11-26 09:26:19",
     "quality": "excellent"
   }
 }
