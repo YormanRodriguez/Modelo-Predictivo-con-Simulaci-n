@@ -1,6 +1,7 @@
-# controller/app_controller.py - Controlador principal MVC (COMPLETO + CLIMA)
+# controller/app_controller.py - Controlador principal MVC
 import gc
 import os
+import traceback
 from datetime import datetime
 
 import pandas as pd
@@ -21,7 +22,7 @@ from view.main_window import PlotViewerDialog
 
 
 class AppController(QObject):
-    """Controlador principal de la aplicación"""
+    """Controlador principal de la aplicación."""
 
     def __init__(self, view, model, climate_model):
         super().__init__()
@@ -50,14 +51,14 @@ class AppController(QObject):
 
 
     def setup_climate_connections(self):
-        """Configurar conexiones del modelo climático"""
+        """Configurar conexiones del modelo climático."""
         self.climate_model.climate_data_loaded.connect(self.on_climate_data_loaded)
         self.climate_model.all_climate_loaded.connect(self.on_all_climate_loaded)
         self.climate_model.status_changed.connect(self.view.update_status)
         self.climate_model.error_occurred.connect(self.show_error)
 
     def load_climate_file(self, regional_code: str):
-        """Cargar archivo climático para una regional específica"""
+        """Cargar archivo climático para una regional específica."""
         try:
             regional_nombre = self.climate_model.REGIONALES.get(regional_code, regional_code)
             file_path, _ = QFileDialog.getOpenFileName(
@@ -91,7 +92,7 @@ class AppController(QObject):
             self.show_error(f"Error al cargar datos climáticos: {e!s}")
 
     def on_climate_data_loaded(self, climate_info: dict):
-        """Callback cuando se cargan datos climáticos de una regional"""
+        """Callback cuando se cargan datos climáticos de una regional."""
         regional_name = climate_info.get("regional_name", "Desconocida")
         total_records = climate_info.get("total_records", 0)
         completeness = climate_info.get("avg_completeness", 0)
@@ -107,7 +108,7 @@ class AppController(QObject):
         self.update_climate_details_panel()
 
     def on_all_climate_loaded(self, summary: dict):
-        """Callback cuando todas las regionales tienen datos climáticos"""
+        """Callback cuando todas las regionales tienen datos climáticos."""
         self.view.log_success("=" * 60)
         self.view.log_success("TODOS LOS DATOS CLIMÁTICOS CARGADOS")
         self.view.log_success("=" * 60)
@@ -126,7 +127,7 @@ class AppController(QObject):
         self.update_climate_details_panel()
 
     def update_climate_details_panel(self):
-        """Actualizar panel de detalles de datos climáticos en la vista"""
+        """Actualizar panel de detalles de datos climáticos en la vista."""
         all_info = {}
 
         for regional_code in self.climate_model.REGIONALES.keys():
@@ -139,15 +140,15 @@ class AppController(QObject):
             self.view.update_climate_details(all_info)
 
     def get_climate_data_for_regional(self, regional_code: str):
-        """Obtener datos climáticos para una regional específica"""
+        """Obtener datos climáticos para una regional específica."""
         return self.climate_model.get_climate_data(regional_code)
 
     def are_climate_data_available(self, regional_code: str) -> bool:
-        """Verificar si hay datos climáticos disponibles para una regional"""
+        """Verificar si hay datos climáticos disponibles para una regional."""
         return self.climate_model.is_regional_loaded(regional_code)
 
     def cleanup_temp_files(self):
-        """Limpiar archivos temporales de gráficas"""
+        """Limpiar archivos temporales de gráficas."""
         try:
             # Servicios que generan plots implementan cleanup_plot_file
             try:
@@ -167,7 +168,7 @@ class AppController(QObject):
             print(f"Error durante limpieza automática: {e}")
 
     def show_plot(self, plot_file_path, title="Gráfica SAIDI"):
-        """Mostrar gráfica en un diálogo separado"""
+        """Mostrar gráfica en un diálogo separado."""
         if not plot_file_path or not os.path.exists(plot_file_path):
             self.view.log_error("No se encontró el archivo de gráfica")
             return
@@ -181,11 +182,11 @@ class AppController(QObject):
             self.view.log_error(f"Error mostrando gráfica: {e!s}")
 
     def setup_model_connections(self):
-        """Configurar conexiones del modelo"""
+        """Configurar conexiones del modelo."""
         self.model.error_occurred.connect(self.show_error)
 
     def on_regional_selected(self, regional_codigo: str):
-        """Callback cuando el usuario selecciona una regional"""
+        """Callback cuando el usuario selecciona una regional."""
         try:
             if self.model.set_selected_regional(regional_codigo):
                 nombre = self.model.REGIONAL_MAPPING.get(regional_codigo, regional_codigo)
@@ -202,7 +203,7 @@ class AppController(QObject):
             self.view.log_error(f"Error al seleccionar regional: {e!s}")
 
     def load_excel_file(self):
-        """Cargar archivo Excel mediante diálogo"""
+        """Cargar archivo Excel mediante diálogo."""
         try:
             file_path, _ = QFileDialog.getOpenFileName(
                 self.view,
@@ -226,7 +227,7 @@ class AppController(QObject):
             self.show_error(f"Error al cargar archivo: {e!s}")
 
     def run_prediction(self):
-        """Ejecutar predicción SAIDI CON VARIABLES EXÓGENAS Y SIMULACIÓN"""
+        """Ejecutar predicción SAIDI CON VARIABLES EXÓGENAS Y SIMULACIÓN."""
         if not self.model.is_excel_loaded():
             self.show_warning("Debe cargar un archivo Excel primero")
             return
@@ -321,8 +322,6 @@ class AppController(QObject):
             self.view.log_message("=" * 60)
             self.view.log_message(f"Regional: {regional_nombre} ({regional_code})")
             self.view.log_message(f"Número de predicciones: {len(predictions)}")
-
-            from PyQt6.QtWidgets import QFileDialog
 
             default_name = f"Predicciones_SAIDI_{regional_nombre}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
             default_path = os.path.join(os.path.expanduser("~/Desktop"), default_name)
@@ -458,7 +457,6 @@ class AppController(QObject):
             self.view.log_error(f"Error: {error_msg}")
 
             # Mostrar traceback completo en log para debugging
-            import traceback
             self.view.log_error("\nTraceback completo:")
             for line in traceback.format_exc().split("\n"):
                 if line.strip():
@@ -467,7 +465,7 @@ class AppController(QObject):
             self.show_error(f"Error al exportar predicciones:\n\n{error_msg}")
 
     def _open_file(self, filepath):
-        """Abrir archivo con la aplicación predeterminada del sistema"""
+        """Abrir archivo con la aplicación predeterminada del sistema."""
         try:
             import platform
             import subprocess
@@ -486,7 +484,7 @@ class AppController(QObject):
             self.view.log_error(f"No se pudo abrir el archivo: {e!s}")
 
     def _open_folder(self, folder_path):
-        """Abrir carpeta con el explorador de archivos del sistema"""
+        """Abrir carpeta con el explorador de archivos del sistema."""
         try:
             import platform
             import subprocess
@@ -505,7 +503,7 @@ class AppController(QObject):
             self.view.log_error(f"No se pudo abrir la carpeta: {e!s}")
 
     def _on_simulation_configured(self, simulation_config, regional_code, climate_data):
-        """Callback cuando el usuario configura la simulación"""
+        """Callback cuando el usuario configura la simulación."""
         # VERIFICAR que simulation_config tenga la estructura correcta:
         # {
         #     'enabled': True,
@@ -534,7 +532,7 @@ class AppController(QObject):
         self._execute_prediction(regional_code, climate_data, simulation_config)
 
     def _execute_prediction(self, regional_code, climate_data, simulation_config):
-        """Ejecutar la predicción con o sin simulación"""
+        """Ejecutar la predicción con o sin simulación."""
         try:
             self.view.set_buttons_enabled(False)
             self.view.show_progress(visible=True)
@@ -567,7 +565,7 @@ class AppController(QObject):
             self.on_prediction_error(str(e))
 
     def run_optimization(self):
-        """Ejecutar optimización de parámetros CON VARIABLES EXÓGENAS"""
+        """Ejecutar optimización de parámetros CON VARIABLES EXÓGENAS."""
         if not self.model.is_excel_loaded():
             self.show_warning("Debe cargar un archivo Excel primero")
             return
@@ -642,7 +640,7 @@ class AppController(QObject):
             self.view.show_progress(visible=False)
 
     def run_validation(self):
-        """Ejecutar validación del modelo CON VARIABLES EXÓGENAS, SIMULACIÓN E INTERVALOS"""
+        """Ejecutar validación del modelo CON VARIABLES EXÓGENAS, SIMULACIÓN E INTERVALOS."""
         if not self.model.is_excel_loaded():
             self.show_warning("Debe cargar un archivo Excel primero")
             return
@@ -741,10 +739,7 @@ class AppController(QObject):
         self._execute_validation(regional_code, climate_data, None)
 
     def _execute_validation(self, regional_code, climate_data, simulation_config):
-        """
-        Ejecutar validación con o sin simulación
-        NUEVO MÉTODO - Agregar después de run_validation()
-        """
+        """Ejecutar validación con o sin simulación."""
         try:
             self.view.set_buttons_enabled(False)
             self.view.update_status("Validando modelo SARIMAX...")
@@ -791,7 +786,7 @@ class AppController(QObject):
             self.view.show_progress(visible=False)
 
     def generate_validation_report(self):
-        """Generar informe PDF completo de validación temporal"""
+        """Generar informe PDF completo de validación temporal."""
         if not self.model.is_excel_loaded():
             self.show_warning("Debe cargar un archivo Excel primero")
             return
@@ -856,7 +851,7 @@ class AppController(QObject):
             self.view.show_progress(visible=False)
 
     def on_prediction_finished(self, result):
-        """Callback cuando termina la predicción - ACTUALIZADO CON EXPORTACIÓN"""
+        """Callback cuando termina la predicción."""
         self.last_prediction_result = result
 
         try:
@@ -938,7 +933,7 @@ class AppController(QObject):
             print(f"[DEBUG] on_prediction_finished error: {e}")
 
     def on_optimization_finished(self, result):
-        """Callback cuando termina la optimización"""
+        """Callback cuando termina la optimización."""
         self.view.set_buttons_enabled(True)
         self.view.show_progress(visible=False)
         self.view.update_status("Optimización completada")
@@ -963,7 +958,10 @@ class AppController(QObject):
                 rmse = model.get("rmse", 0)
                 transformation = model.get("transformation", "unknown")
 
-                medal = "1" if i == 1 else "2" if i == 2 else "3" if i == 3 else f"#{i}"
+                top_1 = 1
+                top_2 = 2
+                top_3 = 3
+                medal = "1" if i == top_1 else "2" if i == top_2 else "3" if i == top_3 else f"#{i}"
                 self.view.log_message(
                     f"  {medal} [{transformation.upper():8s}] Precisión: {precision:.1f}% | RMSE: {rmse:.4f} | "
                     f"order={order}, seasonal={seasonal_order}",
@@ -978,11 +976,15 @@ class AppController(QObject):
                 self.view.log_message(f"  Transformación: {best_transformation.upper()}")
                 self.view.log_message(f"  Parámetros: order={best['order']}, seasonal={best['seasonal_order']}")
 
-                if precision >= 90:
+                precision_mayor = 90
+                precision_media = 80
+                precision_menor = 70
+
+                if precision >= precision_mayor:
                     interpretacion = "EXCELENTE - Predicciones muy confiables "
-                elif precision >= 80:
+                elif precision >= precision_media:
                     interpretacion = "BUENO - Predicciones confiables "
-                elif precision >= 70:
+                elif precision >= precision_menor:
                     interpretacion = "ACEPTABLE - Predicciones moderadamente confiables "
                 else:
                     interpretacion = "REGULAR - Usar con precaución "
@@ -1004,7 +1006,7 @@ class AppController(QObject):
                         break
 
     def on_validation_finished(self, result):
-        """Callback cuando termina la validacion"""
+        """Callback cuando termina la validacion."""
         self.view.set_buttons_enabled(True)
         self.view.show_progress(visible=False)
         self.view.update_status("Validacion completada")
@@ -1013,7 +1015,6 @@ class AppController(QObject):
         model_params = result.get("model_params", {}) if result else {}
         simulation_applied = model_params.get("with_simulation", False)
 
-        # ========== NUEVO: Detectar si se usó configuración optimizada ==========
         regional_code = model_params.get("regional_code")
         used_optimized = False
 
@@ -1031,7 +1032,7 @@ class AppController(QObject):
                     regional_nombre = self.model.REGIONAL_MAPPING.get(regional_code, regional_code)
 
                     self.view.log_success("=" * 60)
-                    self.view.log_success("✓ VALIDACIÓN CON CONFIGURACIÓN OPTIMIZADA")
+                    self.view.log_success("VALIDACIÓN CON CONFIGURACIÓN OPTIMIZADA")
                     self.view.log_success("=" * 60)
                     self.view.log_message(f"Regional: {regional_nombre}")
                     self.view.log_message("Parámetros utilizados: OPTIMIZADOS")
@@ -1112,7 +1113,6 @@ class AppController(QObject):
             self.view.log_message(f"  - MAPE: {metrics.get('mape', 0):.1f}%")
             self.view.log_message(f"  - R2: {metrics.get('r2_score', 0):.3f}")
 
-            # ========== NUEVO: Comparar con precisión optimizada ==========
             if used_optimized:
                 optimized_config = self.validation_service.load_optimized_config(regional_code)
                 if optimized_config:
@@ -1121,17 +1121,19 @@ class AppController(QObject):
                     difference = actual_precision - expected_precision
 
                     self.view.log_message("")
-                    self.view.log_message("📊 COMPARACIÓN CON OPTIMIZACIÓN:")
-                    self.view.log_message(f"  - Precisión esperada: {expected_precision:.1f}%")
-                    self.view.log_message(f"  - Precisión obtenida: {actual_precision:.1f}%")
+                    self.view.log_message("COMPARACIÓN CON OPTIMIZACIÓN:")
+                    self.view.log_message(f"Precisión esperada: {expected_precision:.1f}%")
+                    self.view.log_message(f"Precisión obtenida: {actual_precision:.1f}%")
 
-                    if abs(difference) <= 5:
-                        self.view.log_message(f"  ✓ Diferencia: {difference:+.1f}% (CONSISTENTE)")
+                    valor_abs = 5
+
+                    if abs(difference) <= valor_abs:
+                        self.view.log_message(f"Diferencia: {difference:+.1f}% (CONSISTENTE)")
                     elif difference > 0:
-                        self.view.log_message(f"  ✓ Diferencia: {difference:+.1f}% (MEJOR de lo esperado)")
+                        self.view.log_message(f"Diferencia: {difference:+.1f}% (MEJOR de lo esperado)")
                     else:
-                        self.view.log_message(f"  ⚠ Diferencia: {difference:+.1f}% (Menor de lo esperado)")
-                        self.view.log_message("     Posible causa: Datos de validación diferentes a optimización")
+                        self.view.log_message(f"Diferencia: {difference:+.1f}% (Menor de lo esperado)")
+                        self.view.log_message("Posible causa: Datos de validación diferentes a optimización")
 
             # Informacion de validacion
             self.view.log_message("")
@@ -1164,16 +1166,22 @@ class AppController(QObject):
             # Interpretacion de calidad basada en PRECISION
             precision = metrics.get("precision_final", 0)
             self.view.log_message("")
-            if precision >= 90:
-                self.view.log_success("Calidad: EXCELENTE - Predicciones muy confiables ⭐⭐⭐")
-            elif precision >= 80:
-                self.view.log_success("Calidad: BUENO - Predicciones confiables ⭐⭐")
-            elif precision >= 70:
-                self.view.log_message("Calidad: ACEPTABLE - Predicciones moderadamente confiables ⭐")
-            elif precision >= 60:
-                self.view.log_message("Calidad: REGULAR - Usar con precaución ⚠️")
+
+            precision_mayor = 90
+            precision_mayor_media = 80
+            precision_media = 70
+            precision_baja = 60
+
+            if precision >= precision_mayor:
+                self.view.log_success("Calidad: EXCELENTE - Predicciones muy confiable")
+            elif precision >= precision_mayor_media:
+                self.view.log_success("Calidad: BUENO - Predicciones confiables")
+            elif precision >= precision_media:
+                self.view.log_message("Calidad: ACEPTABLE - Predicciones moderadamente confiables")
+            elif precision >= precision_baja:
+                self.view.log_message("Calidad: REGULAR - Usar con precaución")
             else:
-                self.view.log_error("Calidad: BAJO - Modelo poco confiable ❌")
+                self.view.log_error("Calidad: BAJO - Modelo poco confiable")
 
             # Nota sobre intervalos (solo para referencia)
             if model_params.get("confidence_level"):
@@ -1189,10 +1197,9 @@ class AppController(QObject):
             self.show_plot(result["plot_file"], "Validacion del Modelo SAIDI")
 
     def on_report_validation_finished(self, result):
-        """Callback cuando termina validación - Genera PDF"""
+        """Callback cuando termina validación - Genera PDF."""
         try:
             # Preguntar al usuario dónde guardar el PDF
-            from PyQt6.QtWidgets import QFileDialog
 
             model_params = result.get("model_params", {})
             regional_code = model_params.get("regional_code", "SAIDI")
@@ -1255,7 +1262,6 @@ class AppController(QObject):
             self.view.log_message("=" * 60)
 
             # Ofrecer abrir PDF
-            from PyQt6.QtWidgets import QMessageBox
             msg = QMessageBox(self.view)
             msg.setIcon(QMessageBox.Icon.Information)
             msg.setWindowTitle("Informe Generado")
@@ -1277,12 +1283,11 @@ class AppController(QObject):
             self.view.set_buttons_enabled(True)
             self.view.show_progress(visible=False)
             self.view.log_error(f"Error generando informe PDF: {e!s}")
-            import traceback
             self.view.log_error(traceback.format_exc())
             self.show_error(f"Error al generar informe PDF:\n\n{e!s}")
 
     def on_report_validation_error(self, error_msg):
-        """Callback cuando hay error en generación de informe"""
+        """Callback cuando hay error en generación de informe."""
         self.view.set_buttons_enabled(True)
         self.view.show_progress(visible=False)
         self.view.update_status("Error en generación de informe")
@@ -1297,7 +1302,7 @@ class AppController(QObject):
         self.show_error(f"Error durante la predicción: {error_msg}")
 
     def on_optimization_error(self, error_msg):
-        """Callback cuando hay error en optimización"""
+        """Callback cuando hay error en optimización."""
         self.view.set_buttons_enabled(True)
         self.view.show_progress(visible=False)
         self.view.update_status("Error en optimización")
@@ -1305,7 +1310,7 @@ class AppController(QObject):
         self.show_error(f"Error durante la optimización: {error_msg}")
 
     def on_validation_error(self, error_msg):
-        """Callback cuando hay error en validación"""
+        """Callback cuando hay error en validación."""
         self.view.set_buttons_enabled(True)
         self.view.show_progress(visible=False)
         self.view.update_status("Error en validacion")
@@ -1313,19 +1318,19 @@ class AppController(QObject):
         self.show_error(f"Error durante la validacion: {error_msg}")
 
     def show_error(self, message):
-        """Mostrar mensaje de error"""
+        """Mostrar mensaje de error."""
         QMessageBox.critical(self.view, "Error", message)
 
     def show_warning(self, message):
-        """Mostrar mensaje de advertencia"""
+        """Mostrar mensaje de advertencia."""
         QMessageBox.warning(self.view, "Advertencia", message)
 
     def show_info(self, message):
-        """Mostrar mensaje informativo"""
+        """Mostrar mensaje informativo."""
         QMessageBox.information(self.view, "Información", message)
 
 class PredictionThread(QThread):
-    """Hilo para ejecutar predicción en background"""
+    """Hilo para ejecutar predicción en background."""
 
     progress_updated = pyqtSignal(int, str)
     message_logged = pyqtSignal(str)
@@ -1360,7 +1365,7 @@ class PredictionThread(QThread):
 
 
 class OptimizationThread(QThread):
-    """Hilo para ejecutar optimización en background CON CLIMA"""
+    """Hilo para ejecutar optimización en background CON CLIMA."""
 
     progress_updated = pyqtSignal(int, str)
     message_logged = pyqtSignal(str)
@@ -1383,9 +1388,9 @@ class OptimizationThread(QThread):
 
             # VERIFICAR QUE climate_data SE PASA CORRECTAMENTE
             if self.climate_data is not None:
-                self.message_logged.emit(f"✓ Climate data disponible: {len(self.climate_data)} registros")
+                self.message_logged.emit(f"Climate data disponible: {len(self.climate_data)} registros")
             else:
-                self.message_logged.emit("⚠ Sin climate data - Optimización sin exógenas")
+                self.message_logged.emit("Sin climate data - Optimización sin exógenas")
 
             result = self.optimization_service.run_optimization(
                 file_path=self.file_path,
@@ -1405,7 +1410,7 @@ class OptimizationThread(QThread):
 
 
 class ValidationThread(QThread):
-    """Hilo para ejecutar validación en background"""
+    """Hilo para ejecutar validación en background."""
 
     progress_updated = pyqtSignal(int, str)
     message_logged = pyqtSignal(str)
@@ -1440,7 +1445,7 @@ class ValidationThread(QThread):
 
 
 class RollingValidationThread(QThread):
-    """Hilo para ejecutar validación temporal completa en background"""
+    """Hilo para ejecutar validación temporal completa en background."""
 
     progress_updated = pyqtSignal(int, str)
     message_logged = pyqtSignal(str)
