@@ -1,4 +1,4 @@
-# controller/app_controller.py - Controlador principal MVC
+# controller/app_controller.py Controlador principal MVC
 import gc
 import os
 import traceback
