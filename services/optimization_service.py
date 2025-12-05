@@ -52,6 +52,26 @@ class ModelEvaluationContext:
     n_test: int
     pct_validacion: float
 
+@dataclass
+class OptimizationConfig:
+    """Configuración para la optimización."""
+
+    file_path: str | None = None
+    df_prepared: pd.DataFrame | None = None
+    regional_code: str | None = None
+    climate_data: pd.DataFrame | None = None
+    use_parallel: bool = True
+    max_workers: int | None = None
+
+@dataclass
+class ModelResults:
+    """Resultados de la selección de modelos."""
+
+    top_models: list
+    best_model: dict | None
+    quality_level: str
+    quality_counts: dict
+
 class OptimizationService:
     """
     Servicio de optimización de parámetros SARIMAX.
@@ -138,225 +158,441 @@ class OptimizationService:
         self._debug_models_evaluated = 0
         self._debug_models_added = 0
 
-    def run_optimization(self,
-                    file_path: str | None = None,
-                    df_prepared: pd.DataFrame | None = None,
-                    regional_code: str | None = None,
-                    climate_data: pd.DataFrame | None = None,
-                    progress_callback = None,
-                    log_callback = None,
-                    iteration_callback = None,
-                    *,
-                    use_parallel: bool = True,
-                    max_workers: int | None = None) -> dict[str, Any]:
+    def run_optimization(
+    self,
+    config: OptimizationConfig,
+    callbacks: OptimizationCallbacks | None = None,
+) -> dict[str, Any]:
         """
         Ejecutar optimización de parámetros SARIMAX.
 
         Args:
-            file_path: Ruta del archivo Excel SAIDI (opcional)
-            df_prepared: DataFrame SAIDI preparado (opcional)
-            regional_code: Código de la regional
-            climate_data: DataFrame con datos climáticos mensuales
-            progress_callback: Función callback para actualizar progreso
-            log_callback: Función callback para logging en UI
-            iteration_callback: Función callback para actualizar iteración actual
-            use_parallel: Usar procesamiento paralelo (keyword-only)
-            max_workers: Número de workers paralelos (None = automático)
+            config: Configuración de optimización
+            callbacks: Callbacks opcionales para progreso y logging
 
         Returns:
             Diccionario con resultados de optimización
 
         """
+        callbacks = callbacks or OptimizationCallbacks()
+
         try:
-            # Reiniciar estado
             self._reset_state()
+            self._log_optimization_start(callbacks.log, config.regional_code)
 
-            # Logging inicial
-            if log_callback:
-                log_callback("=" * 80)
-                log_callback("OPTIMIZACION DE PARAMETROS SARIMAX")
-                log_callback(f"Regional: {regional_code or 'No especificada'}")
-                log_callback(f"CPU Cores disponibles: {mp.cpu_count()}")
-                log_callback("=" * 80)
+            # Cargar y preparar datos
+            data_context = self._prepare_optimization_data(config, callbacks)
 
-            print(f"[DEBUG_OPT] Iniciando optimizacion para regional: {regional_code}")
-
-            if progress_callback:
-                progress_callback(5, "Cargando datos SAIDI...")
-
-            # Paso 1: Cargar y validar datos SAIDI
-            _, col_saidi, historico = self._load_and_validate_data(
-                file_path, df_prepared, log_callback,
+            # Configurar y ejecutar búsqueda
+            search_results = self._execute_parameter_search(  # noqa: F841
+                data_context, config, callbacks,
             )
 
-            print(f"[DEBUG_OPT] Datos SAIDI cargados: {len(historico)} observaciones")
-            print(f"[DEBUG_OPT] Periodo: {historico.index[0]} a {historico.index[-1]}")
-
-            if log_callback:
-                log_callback(f"Datos historicos: {len(historico)} observaciones")
-                log_callback(f"Periodo: {historico.index[0].strftime('%Y-%m')} a {historico.index[-1].strftime('%Y-%m')}")
-
-            if progress_callback:
-                progress_callback(10, "Preparando variables exogenas...")
-
-            # Paso 2: Preparar variables exógenas (si están disponibles)
-            exog_df, exog_info, _ = self._prepare_exogenous_adaptive(
-                climate_data, regional_code, historico, log_callback,
-            )
-
-            # Diagnóstico: Validar cobertura ANTES de continuar
-            if exog_df is not None:
-                print("[DEBUG_OPT] Ejecutando diagnóstico de cobertura exógena...")
-
-                if not self.diagnose_exog_coverage(historico[col_saidi], exog_df, log_callback):
-                    print("[DEBUG_OPT] ⚠ Cobertura exógena insuficiente - Desactivando variables")
-                    if log_callback:
-                        log_callback("ADVERTENCIA: Variables exógenas desactivadas por cobertura insuficiente")
-                        log_callback("La optimización continuará SIN variables climáticas")
-                    exog_df = None
-                    exog_info = None
-                else:
-                    print("[DEBUG_OPT] ✓ Diagnóstico de cobertura exógena OK")
-
-            # Log final del estado de exógenas
-            if exog_df is not None:
-                print(f"[DEBUG_OPT] ✓ Variables exógenas activas: {len(exog_df.columns)} variables")
-                if log_callback:
-                    log_callback(f"Variables exogenas disponibles: {len(exog_df.columns)}")
-            else:
-                print("[DEBUG_OPT] Optimización SIN variables exógenas")
-                if log_callback:
-                    log_callback("Optimizacion sin variables exogenas")
-
-            if progress_callback:
-                progress_callback(15, "Configurando espacio de busqueda...")
-
-            # Paso 3: Configurar rangos de parámetros
-            param_combinations = self._configure_parameter_space(log_callback)
-
-            # Calcular total de evaluaciones
-            self.total_iterations = len(param_combinations) * len(self.AVAILABLE_TRANSFORMATIONS)
-
-            print(f"[DEBUG_OPT] Combinaciones de parametros: {len(param_combinations)}")
-            print(f"[DEBUG_OPT] Transformaciones: {len(self.AVAILABLE_TRANSFORMATIONS)}")
-            print(f"[DEBUG_OPT] Total evaluaciones: {self.total_iterations}")
-
-            if log_callback:
-                log_callback("=" * 80)
-                log_callback(f"Combinaciones de parametros: {len(param_combinations)}")
-                log_callback(f"Transformaciones: {len(self.AVAILABLE_TRANSFORMATIONS)}")
-                log_callback(f"Total evaluaciones: {self.total_iterations}")
-                log_callback(f"Metodo: {'Paralelo' if use_parallel else 'Secuencial'}")
-                log_callback("Validacion: Consistente con PredictionService (20-30% test)")
-                log_callback("=" * 80)
-
-            if progress_callback:
-                progress_callback(20, f"Iniciando evaluacion de {self.total_iterations} modelos")
-
-            # Paso 4: Ejecutar evaluación (paralela o secuencial)
-            combinacion_de_parametros = 50
-            if use_parallel and len(param_combinations) > combinacion_de_parametros:
-                print("[DEBUG_OPT] Usando procesamiento PARALELO")
-                callbacks = OptimizationCallbacks(
-                    progress=progress_callback,
-                    iteration=iteration_callback,
-                    log=log_callback,
-                )
-                self._run_parallel_optimization(
-                    historico[col_saidi],
-                    param_combinations,
-                    exog_df,
-                    callbacks,
-                    max_workers,
-                )
-            else:
-                print("[DEBUG_OPT] Usando procesamiento SECUENCIAL")
-                self._run_sequential_optimization(
-                    historico[col_saidi], param_combinations, exog_df,
-                    progress_callback, iteration_callback, log_callback,
-                )
-
-            print(f"[DEBUG_OPT] Evaluacion completada: {self._debug_models_evaluated} modelos evaluados")
-            print(f"[DEBUG_OPT] Modelos agregados: {self._debug_models_added}")
-
-            if progress_callback:
-                progress_callback(90, "Seleccionando mejores modelos...")
-
-            # Paso 5: Seleccionar y clasificar mejores modelos
-            top_models, quality_level, quality_counts = self._select_best_models()
-
-            print(f"[DEBUG_OPT] Mejores modelos seleccionados: {len(top_models)}")
-            print(f"[DEBUG_OPT] Nivel de calidad: {quality_level}")
-
-            if log_callback:
-                log_callback("\n" + "=" * 80)
-                log_callback(f"CALIDAD DE MODELOS ENCONTRADOS: {quality_level}")
-                log_callback("=" * 80)
-                log_callback(f"Excelentes (>=60%): {quality_counts['excellent']}")
-                log_callback(f"Buenos (40-59%): {quality_counts['good']}")
-                log_callback(f"Aceptables (20-39%): {quality_counts['acceptable']}")
-                log_callback(f"Limitados (<20%): {quality_counts['poor']}")
-
-                if quality_counts["excellent"] == 0 and quality_counts["good"] == 0:
-                    log_callback("\nADVERTENCIA: Los datos son muy dificiles de predecir")
-                    log_callback("Recomendacion: Revisar calidad de datos historicos")
-
-            if progress_callback:
-                progress_callback(95, "Guardando configuración óptima...")
-
-            best_model = top_models[0] if top_models else None
-
-            if best_model and regional_code:
-                save_success = self.save_best_model_config(regional_code, best_model)
-
-                if save_success and log_callback:
-                    log_callback("\n" + "=" * 80)
-                    log_callback("✓ CONFIGURACIÓN ÓPTIMA GUARDADA")
-                    log_callback("=" * 80)
-                    log_callback(f"Los parámetros óptimos de {regional_code} se usarán automáticamente")
-                    log_callback("en futuras predicciones para esta regional.")
-                    log_callback(f"Transformación: {best_model['transformation'].upper()}")
-                    log_callback(f"Order: {best_model['order']}")
-                    log_callback(f"Seasonal: {best_model['seasonal_order']}")
-                    log_callback(f"Precisión: {best_model['precision_final']:.1f}%")
-
-            if progress_callback:
-                progress_callback(100, "Optimizacion completada")
-
-            # Paso 6: Generar resumen final
-            if log_callback:
-                self._log_final_summary(log_callback, top_models, exog_info, regional_code)
+            # Procesar resultados
+            return self._finalize_optimization(data_context, config, callbacks)
 
         except (ValueError, KeyError, FileNotFoundError, pd.errors.EmptyDataError) as e:
-            error_msg = f"Error durante optimizacion: {e!s}"
-            print(f"[DEBUG_OPT_ERROR] {error_msg}")
-            if log_callback:
-                log_callback(f"ERROR: {error_msg}")
-            raise OptimizationError(error_msg) from e
+            return self._handle_optimization_error(e, callbacks.log)
+
+
+    def _prepare_optimization_data(
+        self,
+        config: OptimizationConfig,
+        callbacks: OptimizationCallbacks,
+    ) -> dict[str, Any]:
+        """Preparar todos los datos necesarios para la optimización."""
+        self._update_progress(callbacks.progress, 5, "Cargando datos SAIDI...")
+
+        # Cargar datos SAIDI
+        _, col_saidi, historico = self._load_and_validate_data(
+            config.file_path, config.df_prepared, callbacks.log,
+        )
+
+        self._log_data_info(callbacks.log, historico)
+
+        # Preparar variables exógenas
+        self._update_progress(callbacks.progress, 10, "Preparando variables exogenas...")
+        exog_df, exog_info = self._prepare_and_validate_exogenous(
+            config.climate_data, config.regional_code, historico, callbacks.log,
+        )
+
+        return {
+            "historico": historico,
+            "col_saidi": col_saidi,
+            "exog_df": exog_df,
+            "exog_info": exog_info,
+        }
+
+
+    def _prepare_and_validate_exogenous(
+        self,
+        climate_data: pd.DataFrame | None,
+        regional_code: str | None,
+        historico: pd.DataFrame,
+        log_callback: Callable[[str], None] | None,
+    ) -> tuple[pd.DataFrame | None, dict | None]:
+        """Preparar y validar variables exógenas."""
+        exog_df, exog_info, _ = self._prepare_exogenous_adaptive(
+            climate_data, regional_code, historico, log_callback,
+        )
+
+        if exog_df is None:
+            self._log_no_exogenous(log_callback)
+            return None, None
+
+        # Validar cobertura
+        if not self._validate_exogenous_coverage(historico, exog_df, log_callback):
+            self._log_insufficient_coverage(log_callback)
+            return None, None
+
+        self._log_exogenous_active(log_callback, exog_df)
+        return exog_df, exog_info
+
+
+    def _validate_exogenous_coverage(
+        self,
+        historico: pd.DataFrame,
+        exog_df: pd.DataFrame,
+        log_callback: Callable[[str], None] | None,
+    ) -> bool:
+        """Validar cobertura de variables exógenas."""
+        print("[DEBUG_OPT] Ejecutando diagnóstico de cobertura exógena...")
+
+        col_saidi = historico.columns[0]
+        is_valid = self.diagnose_exog_coverage(
+            historico[col_saidi], exog_df, log_callback,
+        )
+
+        if is_valid:
+            print("[DEBUG_OPT] Diagnóstico de cobertura exógena OK")
         else:
-            # Preparar resultado solo si no hubo excepciones
-            result = {
-                "success": True,
-                "top_models": top_models[:20],  # Limitar a top 20
-                "total_evaluated": self.current_iteration,
-                "best_model": best_model,
-                "total_combinations": self.total_iterations,
-                "transformation": best_model["transformation"] if best_model else None,
-                "regional_code": regional_code,
-                "transformation_stats": self.transformation_stats,
-                "all_transformations_tested": self.AVAILABLE_TRANSFORMATIONS,
-                "with_exogenous": exog_df is not None,
-                "exogenous_vars": exog_info,
-                "validation_method": "aligned_with_prediction",
-                "optimization_method": "exhaustive_search",
-                "quality_level": quality_level,
-                "quality_counts": quality_counts,
-                "config_saved": best_model is not None and regional_code is not None,
-            }
+            print("[DEBUG_OPT] Cobertura exógena insuficiente - Desactivando variables")
 
-            print("[DEBUG_OPT] Optimizacion finalizada exitosamente")
+        return is_valid
 
-            return result
+
+    def _execute_parameter_search(
+        self,
+        data_context: dict[str, Any],
+        config: OptimizationConfig,
+        callbacks: OptimizationCallbacks,
+    ) -> dict[str, Any]:
+        """Ejecutar la búsqueda de parámetros."""
+        self._update_progress(callbacks.progress, 15, "Configurando espacio de busqueda...")
+
+        param_combinations = self._configure_parameter_space(callbacks.log)
+        self.total_iterations = len(param_combinations) * len(self.AVAILABLE_TRANSFORMATIONS)
+
+        self._log_search_configuration(
+            callbacks.log,
+            param_combinations,
+            use_parallel=config.use_parallel,
+        )
+
+        # Ejecutar evaluación
+        self._update_progress(
+            callbacks.progress,
+            20,
+            f"Iniciando evaluacion de {self.total_iterations} modelos",
+        )
+
+        self._run_model_evaluation(
+            data_context, param_combinations, config, callbacks,
+        )
+
+        return {"data_context": data_context, "param_combinations": param_combinations}
+
+
+    def _run_model_evaluation(
+        self,
+        data_context: dict[str, Any],
+        param_combinations: list,
+        config: OptimizationConfig,
+        callbacks: OptimizationCallbacks,
+    ) -> None:
+        """Ejecutar evaluación de modelos (paralela o secuencial)."""
+        historico = data_context["historico"]
+        col_saidi = data_context["col_saidi"]
+        exog_df = data_context["exog_df"]
+
+        combinaciones_parametros = 50
+        use_parallel = config.use_parallel and len(param_combinations) > combinaciones_parametros
+
+        if use_parallel:
+            print("[DEBUG_OPT] Usando procesamiento PARALELO")
+            self._run_parallel_optimization(
+                historico[col_saidi],
+                param_combinations,
+                exog_df,
+                callbacks,
+                config.max_workers,
+            )
+        else:
+            print("[DEBUG_OPT] Usando procesamiento SECUENCIAL")
+            self._run_sequential_optimization(
+                historico[col_saidi],
+                param_combinations,
+                exog_df,
+                callbacks.progress,
+                callbacks.iteration,
+                callbacks.log,
+            )
+
+        print(f"[DEBUG_OPT] Evaluacion completada: {self._debug_models_evaluated} modelos evaluados")
+        print(f"[DEBUG_OPT] Modelos agregados: {self._debug_models_added}")
+
+
+    def _finalize_optimization(
+        self,
+        data_context: dict[str, Any],
+        config: OptimizationConfig,
+        callbacks: OptimizationCallbacks,
+    ) -> dict[str, Any]:
+        """Finalizar optimización y generar resultados."""
+        self._update_progress(callbacks.progress, 90, "Seleccionando mejores modelos...")
+
+        # Seleccionar mejores modelos
+        top_models, quality_level, quality_counts = self._select_best_models()
+
+        self._log_quality_results(callbacks.log, quality_level, quality_counts, top_models)
+
+        # Guardar configuración óptima
+        best_model = top_models[0] if top_models else None
+        config_saved = self._save_optimal_configuration(
+            best_model, config.regional_code, callbacks,
+        )
+
+        self._update_progress(callbacks.progress, 100, "Optimizacion completada")
+
+        # Generar resumen final
+        self._log_final_summary(
+            callbacks.log,
+            top_models,
+            data_context["exog_info"],
+            config.regional_code,
+        )
+
+        model_results = ModelResults(
+            top_models=top_models,
+            best_model=best_model,
+            quality_level=quality_level,
+            quality_counts=quality_counts,
+        )
+
+        return self._build_result_dict(
+            model_results,
+            data_context,
+            config,
+            config_saved=config_saved,
+        )
+
+
+    def _save_optimal_configuration(
+        self,
+        best_model: dict | None,
+        regional_code: str | None,
+        callbacks: OptimizationCallbacks,
+    ) -> bool:
+        """Guardar configuración óptima si está disponible."""
+        if not (best_model and regional_code):
+            return False
+
+        self._update_progress(callbacks.progress, 95, "Guardando configuración óptima...")
+
+        save_success = self.save_best_model_config(regional_code, best_model)
+
+        if save_success and callbacks.log:
+            self._log_configuration_saved(callbacks.log, best_model, regional_code)
+
+        return save_success
+
+
+    def _build_result_dict(
+        self,
+        model_results: ModelResults,
+        data_context: dict[str, Any],
+        config: OptimizationConfig,
+        *,
+        config_saved: bool,
+    ) -> dict[str, Any]:
+        """Construir diccionario de resultados."""
+        print("[DEBUG_OPT] Optimizacion finalizada exitosamente")
+
+        return {
+            "success": True,
+            "top_models": model_results.top_models[:20],
+            "total_evaluated": self.current_iteration,
+            "best_model": model_results.best_model,
+            "total_combinations": self.total_iterations,
+            "transformation": model_results.best_model["transformation"] if model_results.best_model else None,
+            "regional_code": config.regional_code,
+            "transformation_stats": self.transformation_stats,
+            "all_transformations_tested": self.AVAILABLE_TRANSFORMATIONS,
+            "with_exogenous": data_context["exog_df"] is not None,
+            "exogenous_vars": data_context["exog_info"],
+            "validation_method": "aligned_with_prediction",
+            "optimization_method": "exhaustive_search",
+            "quality_level": model_results.quality_level,
+            "quality_counts": model_results.quality_counts,
+            "config_saved": config_saved,
+        }
+
+
+    def _handle_optimization_error(
+        self,
+        error: Exception,
+        log_callback: Callable[[str], None] | None,
+    ) -> dict[str, Any]:
+        """Manejar errores durante la optimización."""
+        error_msg = f"Error durante optimizacion: {error!s}"
+        print(f"[DEBUG_OPT_ERROR] {error_msg}")
+
+        if log_callback:
+            log_callback(f"ERROR: {error_msg}")
+
+        raise OptimizationError(error_msg) from error
+
+
+    # Métodos auxiliares de logging
+    def _log_optimization_start(
+        self,
+        log_callback: Callable[[str], None] | None,
+        regional_code: str | None,
+    ) -> None:
+        """Log de inicio de optimización."""
+        if not log_callback:
+            return
+
+        log_callback("=" * 80)
+        log_callback("OPTIMIZACION DE PARAMETROS SARIMAX")
+        log_callback(f"Regional: {regional_code or 'No especificada'}")
+        log_callback(f"CPU Cores disponibles: {mp.cpu_count()}")
+        log_callback("=" * 80)
+
+        print(f"[DEBUG_OPT] Iniciando optimizacion para regional: {regional_code}")
+
+
+    def _log_data_info(
+        self,
+        log_callback: Callable[[str], None] | None,
+        historico: pd.DataFrame,
+    ) -> None:
+        """Log de información de datos."""
+        print(f"[DEBUG_OPT] Datos SAIDI cargados: {len(historico)} observaciones")
+        print(f"[DEBUG_OPT] Periodo: {historico.index[0]} a {historico.index[-1]}")
+
+        if log_callback:
+            log_callback(f"Datos historicos: {len(historico)} observaciones")
+            log_callback(
+                f"Periodo: {historico.index[0].strftime('%Y-%m')} "
+                f"a {historico.index[-1].strftime('%Y-%m')}",
+            )
+
+    def _log_search_configuration(
+        self,
+        log_callback: Callable[[str], None] | None,
+        param_combinations: list,
+        *,
+        use_parallel: bool,
+    ) -> None:
+        """Log de configuración de búsqueda."""
+        print(f"[DEBUG_OPT] Combinaciones de parametros: {len(param_combinations)}")
+        print(f"[DEBUG_OPT] Transformaciones: {len(self.AVAILABLE_TRANSFORMATIONS)}")
+        print(f"[DEBUG_OPT] Total evaluaciones: {self.total_iterations}")
+
+        if not log_callback:
+            return
+
+        log_callback("=" * 80)
+        log_callback(f"Combinaciones de parametros: {len(param_combinations)}")
+        log_callback(f"Transformaciones: {len(self.AVAILABLE_TRANSFORMATIONS)}")
+        log_callback(f"Total evaluaciones: {self.total_iterations}")
+        log_callback(f"Metodo: {'Paralelo' if use_parallel else 'Secuencial'}")
+        log_callback("Validacion: Consistente con PredictionService (20-30% test)")
+        log_callback("=" * 80)
+
+    def _log_quality_results(
+        self,
+        log_callback: Callable[[str], None] | None,
+        quality_level: str,
+        quality_counts: dict,
+        top_models: list,
+    ) -> None:
+        """Log de resultados de calidad."""
+        print(f"[DEBUG_OPT] Mejores modelos seleccionados: {len(top_models)}")
+        print(f"[DEBUG_OPT] Nivel de calidad: {quality_level}")
+
+        if not log_callback:
+            return
+
+        log_callback("\n" + "=" * 80)
+        log_callback(f"CALIDAD DE MODELOS ENCONTRADOS: {quality_level}")
+        log_callback("=" * 80)
+        log_callback(f"Excelentes (>=60%): {quality_counts['excellent']}")
+        log_callback(f"Buenos (40-59%): {quality_counts['good']}")
+        log_callback(f"Aceptables (20-39%): {quality_counts['acceptable']}")
+        log_callback(f"Limitados (<20%): {quality_counts['poor']}")
+
+        if quality_counts["excellent"] == 0 and quality_counts["good"] == 0:
+            log_callback("\nADVERTENCIA: Los datos son muy dificiles de predecir")
+            log_callback("Recomendacion: Revisar calidad de datos historicos")
+
+
+    def _log_configuration_saved(
+        self,
+        log_callback: Callable[[str], None],
+        best_model: dict,
+        regional_code: str,
+    ) -> None:
+        """Log de configuración guardada."""
+        log_callback("\n" + "=" * 80)
+        log_callback("✓ CONFIGURACIÓN ÓPTIMA GUARDADA")
+        log_callback("=" * 80)
+        log_callback(
+            f"Los parámetros óptimos de {regional_code} "
+            "se usarán automáticamente",
+        )
+        log_callback("en futuras predicciones para esta regional.")
+        log_callback(f"Transformación: {best_model['transformation'].upper()}")
+        log_callback(f"Order: {best_model['order']}")
+        log_callback(f"Seasonal: {best_model['seasonal_order']}")
+        log_callback(f"Precisión: {best_model['precision_final']:.1f}%")
+
+
+    def _log_no_exogenous(self, log_callback: Callable[[str], None] | None) -> None:
+        """Log cuando no hay variables exógenas."""
+        print("[DEBUG_OPT] Optimización SIN variables exógenas")
+        if log_callback:
+            log_callback("Optimizacion sin variables exogenas")
+
+
+    def _log_insufficient_coverage(self, log_callback: Callable[[str], None] | None) -> None:
+        """Log de cobertura insuficiente."""
+        if log_callback:
+            log_callback("ADVERTENCIA: Variables exógenas desactivadas por cobertura insuficiente")
+            log_callback("La optimización continuará SIN variables climáticas")
+
+
+    def _log_exogenous_active(
+        self,
+        log_callback: Callable[[str], None] | None,
+        exog_df: pd.DataFrame,
+    ) -> None:
+        """Log de variables exógenas activas."""
+        print(f"[DEBUG_OPT] ✓ Variables exógenas activas: {len(exog_df.columns)} variables")
+        if log_callback:
+            log_callback(f"Variables exogenas disponibles: {len(exog_df.columns)}")
+
+
+    def _update_progress(
+    self,
+    progress_callback: Callable[[int, str], None] | None,
+    percentage: int,
+    message: str,
+    ) -> None:
+        """Actualizar progreso si hay callback."""
+        if progress_callback:
+            progress_callback(percentage, message)
 
     def _reset_state(self):
         """Reiniciar estado interno del servicio."""
@@ -637,7 +873,7 @@ class OptimizationService:
                 print(f"[DEBUG_OPT_WARN] Error en evaluacion: {type(e).__name__}")
 
             # Actualizar progreso
-            self._update_progress(callbacks, total_tasks)
+            self._update_batch_progress(callbacks, total_tasks)
 
 
     def _store_model_metrics(self,
@@ -668,8 +904,8 @@ class OptimizationService:
                 f"{transformation} - Precision: {metrics['precision_final']:.1f}%")
 
 
-    def _update_progress(self, callbacks: OptimizationCallbacks, total_tasks: int):
-        """Actualizar callbacks de progreso e iteración."""
+    def _update_batch_progress(self, callbacks: OptimizationCallbacks, total_tasks: int):
+        """Actualizar callbacks de progreso e iteración durante batch processing."""
         if callbacks.progress:
             progress_pct = int((self.current_iteration / total_tasks) * 70 + 20)
             callbacks.progress(progress_pct,

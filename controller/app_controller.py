@@ -8,7 +8,7 @@ import pandas as pd
 from PyQt6.QtCore import QObject, QThread, QTimer, pyqtSignal
 from PyQt6.QtWidgets import QFileDialog, QMessageBox
 
-from services.optimization_service import OptimizationService
+from services.optimization_service import OptimizationService, OptimizationConfig, OptimizationCallbacks
 
 # Importar servicios de backend
 from services.prediction_service import PredictionConfig, PredictionService
@@ -591,17 +591,17 @@ class AppController(QObject):
 
                 # VERIFICAR QUE SE OBTUVIERON CORRECTAMENTE
                 if climate_data is not None and not climate_data.empty:
-                    self.view.log_message(f"✓ Datos climáticos disponibles: {len(climate_data)} registros")
-                    self.view.log_message(f"   Periodo: {climate_data.index[0]} a {climate_data.index[-1]}")
-                    self.view.log_message(f"   Columnas: {len(climate_data.columns)}")
+                    self.view.log_message(f"Datos climáticos disponibles: {len(climate_data)} registros")
+                    self.view.log_message(f"Periodo: {climate_data.index[0]} a {climate_data.index[-1]}")
+                    self.view.log_message(f"Columnas: {len(climate_data.columns)}")
 
                     # DEBUG: Mostrar primeras columnas
                     self.view.log_message(f"   Primeras 5 columnas: {list(climate_data.columns[:5])}")
                 else:
-                    self.view.log_message("⚠ Datos climáticos vacíos o inválidos")
+                    self.view.log_message("Datos climáticos vacíos o inválidos")
                     climate_data = None
             else:
-                self.view.log_message(" Sin datos climáticos - Optimización sin variables exógenas")
+                self.view.log_message("Sin datos climáticos - Optimización sin variables exógenas")
 
         try:
             self.view.log_message("Iniciando optimización de parámetros...")
@@ -616,12 +616,12 @@ class AppController(QObject):
                 self.view.set_buttons_enabled(True)
                 return
 
-            #  CREAR THREAD CON climate_data
+            # NUEVO: Crear thread con config y callbacks
             self.optimization_thread = OptimizationThread(
                 optimization_service=self.optimization_service,
                 df_prepared=df_prepared,
                 regional_code=regional_code,
-                climate_data=climate_data,  #  PASAR climate_data AL THREAD
+                climate_data=climate_data,
             )
 
             # Conectar señales
@@ -1380,7 +1380,7 @@ class OptimizationThread(QThread):
         self.file_path = file_path
         self.df_prepared = df_prepared
         self.regional_code = regional_code
-        self.climate_data = climate_data  # ASEGURAR QUE SE GUARDA
+        self.climate_data = climate_data
 
     def run(self):
         try:
@@ -1392,16 +1392,31 @@ class OptimizationThread(QThread):
             else:
                 self.message_logged.emit("Sin climate data - Optimización sin exógenas")
 
-            result = self.optimization_service.run_optimization(
+            # NUEVO: Importar las clases necesarias
+            from services.optimization_service import OptimizationConfig, OptimizationCallbacks
+
+            # Crear configuración
+            config = OptimizationConfig(
                 file_path=self.file_path,
                 df_prepared=self.df_prepared,
                 regional_code=self.regional_code,
-                climate_data=self.climate_data,  # CRÍTICO: Pasar climate_data
-                progress_callback=self.progress_updated.emit,
-                log_callback=self.message_logged.emit,
-                iteration_callback=self.iteration_logged.emit,
+                climate_data=self.climate_data,
+                use_parallel=True,
+                max_workers=None,
             )
+
+            # Crear callbacks
+            callbacks = OptimizationCallbacks(
+                progress=self.progress_updated.emit,
+                log=self.message_logged.emit,
+                iteration=self.iteration_logged.emit,
+            )
+
+            # NUEVO: Llamar al método refactorizado
+            result = self.optimization_service.run_optimization(config, callbacks)
+
             self.finished.emit(result)
+
         except Exception as e:
             import traceback
             error_detail = traceback.format_exc()
