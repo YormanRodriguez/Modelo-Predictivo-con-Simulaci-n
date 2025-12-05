@@ -5,7 +5,9 @@ import logging
 import multiprocessing as mp
 import traceback
 import warnings
+from collections.abc import Callable
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from itertools import product
 from pathlib import Path
@@ -23,6 +25,23 @@ warnings.filterwarnings("ignore")
 
 class OptimizationError(Exception):
     """Excepción personalizada para errores durante la optimización de modelos SARIMAX."""
+
+@dataclass
+class OptimizationCallbacks:
+    """Contenedor para callbacks de optimización."""
+
+    progress: Callable[[int, str], None] | None = None
+    iteration: Callable | None = None
+    log: Callable[[str], None] | None = None
+
+@dataclass
+class ClimateProjectionContext:
+    """Contexto para proyección de variables climáticas."""
+
+    forecast_dates: pd.DatetimeIndex
+    hist_start: pd.Timestamp
+    hist_end: pd.Timestamp
+    log_callback: Callable | None = None
 
 class OptimizationService:
     """
@@ -229,9 +248,17 @@ class OptimizationService:
             combinacion_de_parametros = 50
             if use_parallel and len(param_combinations) > combinacion_de_parametros:
                 print("[DEBUG_OPT] Usando procesamiento PARALELO")
+                callbacks = OptimizationCallbacks(
+                    progress=progress_callback,
+                    iteration=iteration_callback,
+                    log=log_callback,
+                )
                 self._run_parallel_optimization(
-                    historico[col_saidi], param_combinations, exog_df,
-                    progress_callback, iteration_callback, log_callback, max_workers,
+                    historico[col_saidi],
+                    param_combinations,
+                    exog_df,
+                    callbacks,
+                    max_workers,
                 )
             else:
                 print("[DEBUG_OPT] Usando procesamiento SECUENCIAL")
@@ -518,9 +545,7 @@ class OptimizationService:
                                serie_original: pd.Series,
                                param_combinations: list[tuple],
                                exog_df: pd.DataFrame | None,
-                               progress_callback,
-                               iteration_callback,
-                               log_callback,
+                               callbacks: OptimizationCallbacks,
                                max_workers: int | None):
         """Ejecutar optimización en paralelo usando ProcessPoolExecutor."""
         if max_workers is None:
@@ -528,21 +553,13 @@ class OptimizationService:
 
         print(f"[DEBUG_OPT] Iniciando procesamiento paralelo con {max_workers} workers")
 
-        if log_callback:
-            log_callback(f"Procesamiento paralelo con {max_workers} workers")
+        if callbacks.log:
+            callbacks.log(f"Procesamiento paralelo con {max_workers} workers")
 
         # Preparar tareas
-        tasks = []
-        for params in param_combinations:
-            p, d, q, P, D, Q, s = params # noqa: N806
-            order = (p, d, q)
-            seasonal_order = (P, D, Q, s)
-
-            for transformation in self.AVAILABLE_TRANSFORMATIONS:
-                tasks.append((serie_original, order, seasonal_order, transformation, exog_df))
-
+        tasks = self._prepare_optimization_tasks(param_combinations, serie_original, exog_df)
         total_tasks = len(tasks)
-        batch_size = 100  # Procesar en lotes
+        batch_size = 100
 
         print(f"[DEBUG_OPT] Total tareas: {total_tasks}, batch_size: {batch_size}")
 
@@ -552,65 +569,105 @@ class OptimizationService:
                 batch_end = min(batch_start + batch_size, total_tasks)
                 batch_tasks = tasks[batch_start:batch_end]
 
-                # Enviar lote al executor
-                futures = {
-                    executor.submit(_evaluate_model_worker, task): task
-                    for task in batch_tasks
-                }
-
-                # Procesar resultados a medida que se completan
-                for future in as_completed(futures):
-                    self.current_iteration += 1
-                    self._debug_models_evaluated += 1
-
-                    try:
-                        metrics = future.result(timeout=45)
-
-                        if metrics and self._is_valid_model(metrics):
-                            task = futures[future]
-                            transformation = task[3]
-                            order = task[1]
-                            seasonal_order = task[2]
-
-                            # Agregar métricas adicionales
-                            metrics["transformation"] = transformation
-                            metrics["order"] = order
-                            metrics["seasonal_order"] = seasonal_order
-                            metrics["with_exogenous"] = exog_df is not None
-
-                            # Almacenar modelo
-                            self._add_model(metrics)
-
-                            # Actualizar estadísticas
-                            self._update_transformation_stats(transformation, metrics)
-
-                            # Log de progreso si es relevante
-                            precision_mayor_60 = 60
-                            if metrics["precision_final"] > precision_mayor_60:
-                                print(f"[DEBUG_OPT] Modelo relevante encontrado: "
-                                    f"{transformation} - Precision: {metrics['precision_final']:.1f}%")
-
-                    except TimeoutError:
-                        # Silenciar timeouts específicamente
-                        pass
-                    except (ValueError, KeyError, TypeError, RuntimeError) as e:
-                        # Capturar errores esperados durante la evaluación del modelo
-                        print(f"[DEBUG_OPT_WARN] Error en evaluacion: {type(e).__name__}")
-
-                    # Actualizar progreso
-                    if progress_callback:
-                        progress_pct = int((self.current_iteration / total_tasks) * 70 + 20)
-                        progress_callback(progress_pct,
-                                        f"Evaluando {self.current_iteration}/{total_tasks}")
-
-                    # Actualizar iteración actual
-                    if iteration_callback and self.current_iteration % 100 == 0:
-                        self._update_iteration_status(iteration_callback)
+                # Enviar y procesar lote
+                self._process_batch(executor, batch_tasks, total_tasks, exog_df, callbacks)
 
                 # Limpiar memoria después de cada lote
                 gc.collect()
 
         print("[DEBUG_OPT] Procesamiento paralelo completado")
+
+
+    def _prepare_optimization_tasks(self,
+                                    param_combinations: list[tuple],
+                                    serie_original: pd.Series,
+                                    exog_df: pd.DataFrame | None) -> list[tuple]:
+        """Preparar lista de tareas para optimización paralela."""
+        tasks = []
+        for params in param_combinations:
+            p, d, q, P, D, Q, s = params  # noqa: N806
+            order = (p, d, q)
+            seasonal_order = (P, D, Q, s)
+
+            for transformation in self.AVAILABLE_TRANSFORMATIONS:
+                tasks.append((serie_original, order, seasonal_order, transformation, exog_df))
+
+        return tasks
+
+
+    def _process_batch(self,
+                    executor: ProcessPoolExecutor,
+                    batch_tasks: list[tuple],
+                    total_tasks: int,
+                    exog_df: pd.DataFrame | None,
+                    callbacks: OptimizationCallbacks):
+        """Procesar un lote de tareas en paralelo."""
+        # Enviar lote al executor
+        futures = {
+            executor.submit(_evaluate_model_worker, task): task
+            for task in batch_tasks
+        }
+
+        # Procesar resultados a medida que se completan
+        for future in as_completed(futures):
+            self.current_iteration += 1
+            self._debug_models_evaluated += 1
+
+            try:
+                metrics = future.result(timeout=45)
+
+                if metrics and self._is_valid_model(metrics):
+                    task = futures[future]
+                    self._store_model_metrics(task, metrics, exog_df)
+
+            except TimeoutError:
+                # Silenciar timeouts específicamente
+                pass
+            except (ValueError, KeyError, TypeError, RuntimeError) as e:
+                # Capturar errores esperados durante la evaluación del modelo
+                print(f"[DEBUG_OPT_WARN] Error en evaluacion: {type(e).__name__}")
+
+            # Actualizar progreso
+            self._update_progress(callbacks, total_tasks)
+
+
+    def _store_model_metrics(self,
+                            task: tuple,
+                            metrics: dict,
+                            exog_df: pd.DataFrame | None):
+        """Almacenar métricas de un modelo válido."""
+        transformation = task[3]
+        order = task[1]
+        seasonal_order = task[2]
+
+        # Agregar métricas adicionales
+        metrics["transformation"] = transformation
+        metrics["order"] = order
+        metrics["seasonal_order"] = seasonal_order
+        metrics["with_exogenous"] = exog_df is not None
+
+        # Almacenar modelo
+        self._add_model(metrics)
+
+        # Actualizar estadísticas
+        self._update_transformation_stats(transformation, metrics)
+
+        # Log de progreso si es relevante
+        precision_mayor_60 = 60
+        if metrics["precision_final"] > precision_mayor_60:
+            print(f"[DEBUG_OPT] Modelo relevante encontrado: "
+                f"{transformation} - Precision: {metrics['precision_final']:.1f}%")
+
+
+    def _update_progress(self, callbacks: OptimizationCallbacks, total_tasks: int):
+        """Actualizar callbacks de progreso e iteración."""
+        if callbacks.progress:
+            progress_pct = int((self.current_iteration / total_tasks) * 70 + 20)
+            callbacks.progress(progress_pct,
+                            f"Evaluando {self.current_iteration}/{total_tasks}")
+
+        if callbacks.iteration and self.current_iteration % 100 == 0:
+            self._update_iteration_status(callbacks.iteration)
 
     def _run_sequential_optimization(self,
                             serie_original: pd.Series,
@@ -670,74 +727,24 @@ class OptimizationService:
         print("[DEBUG_OPT] Procesamiento secuencial completado")
 
     def diagnose_exog_coverage(self,
-                      serie_saidi: pd.Series,
-                      exog_df: pd.DataFrame,
-                      log_callback) -> bool:
+                          serie_saidi: pd.Series,
+                          exog_df: pd.DataFrame,
+                          log_callback) -> bool:
         """Diagnosticar cobertura temporal de variables exógenas."""
         try:
-            saidi_start = serie_saidi.index[0]
-            saidi_end = serie_saidi.index[-1]
-            exog_start = exog_df.index[0]
-            exog_end = exog_df.index[-1]
-            info_faltante_mayor = 5
-            info_faltante_media = 20
+            self._print_coverage_info(serie_saidi, exog_df)
 
-            print(f"[DIAGNOSTICO] SAIDI: {saidi_start} a {saidi_end} ({len(serie_saidi)} obs)")
-            print(f"[DIAGNOSTICO] EXOG:  {exog_start} a {exog_end} ({len(exog_df)} obs)")
-
-            # 1. Verificar que los índices coinciden EXACTAMENTE
-            if not exog_df.index.equals(serie_saidi.index):
-                print("[DIAGNOSTICO] ADVERTENCIA: Índices no coinciden exactamente")
-
-                # Verificar fechas faltantes
-                missing_in_exog = [d for d in serie_saidi.index if d not in exog_df.index]
-
-                if missing_in_exog:
-                    pct_missing = len(missing_in_exog) / len(serie_saidi) * 100
-                    print(f"[DIAGNOSTICO] Fechas SAIDI faltantes en EXOG: {len(missing_in_exog)} ({pct_missing:.1f}%)")
-
-                    # Mostrar primeras y últimas fechas faltantes
-                    if len(missing_in_exog) <= info_faltante_mayor:
-                        print(f"[DIAGNOSTICO]   Fechas faltantes: {missing_in_exog}")
-                    else:
-                        print(f"[DIAGNOSTICO]   Primeras faltantes: {missing_in_exog[:3]}")
-                        print(f"[DIAGNOSTICO]   Últimas faltantes: {missing_in_exog[-3:]}")
-
-                    # CRÍTICO: Si falta >20% de fechas, rechazar
-                    if pct_missing > info_faltante_media:
-                        print("[DIAGNOSTICO] ERROR CRÍTICO: >20% de fechas faltantes")
-                        if log_callback:
-                            log_callback(f"ERROR: {pct_missing:.1f}% de fechas SAIDI no tienen datos climáticos")
-                        return False
-
-            # 2. Verificar que NO hay NaN en ninguna columna
-            if exog_df.isna().any().any():
-                nan_cols = exog_df.columns[exog_df.isna().any()].tolist()
-                nan_details = []
-
-                for col in nan_cols:
-                    nan_count = exog_df[col].isna().sum()
-                    pct_nan = (nan_count / len(exog_df)) * 100
-                    nan_details.append(f"{col}: {nan_count} ({pct_nan:.1f}%)")
-
-                print("[DIAGNOSTICO] ERROR: Columnas con NaN encontradas:")
-                for detail in nan_details:
-                    print(f"[DIAGNOSTICO]   - {detail}")
-
-                if log_callback:
-                    log_callback("ERROR: Variables exógenas contienen valores NaN")
-
+            # Realizar todas las validaciones
+            if not self._validate_index_coverage(serie_saidi, exog_df, log_callback):
                 return False
 
-            # 3. Verificar valores infinitos
-            if np.isinf(exog_df.to_numpy()).any():
-                print("[DIAGNOSTICO] ERROR: Variables exógenas contienen valores infinitos")
+            if not self._validate_nan_values(exog_df, log_callback):
                 return False
 
-            # 4. Verificar que hay varianza en las variables
-            for col in exog_df.columns:
-                if exog_df[col].std() == 0:
-                    print(f"[DIAGNOSTICO] ADVERTENCIA: {col} tiene varianza cero")
+            if not self._validate_infinite_values(exog_df):
+                return False
+
+            self._check_variance(exog_df)
 
         except (KeyError, IndexError, ValueError, TypeError) as e:
             print(f"[DIAGNOSTICO] ERROR durante diagnóstico: {e}")
@@ -746,10 +753,91 @@ class OptimizationService:
             print("[DIAGNOSTICO] Cobertura temporal y calidad de datos OK")
             return True
 
+    def _print_coverage_info(self, serie_saidi: pd.Series, exog_df: pd.DataFrame) -> None:
+        """Imprimir información de cobertura temporal."""
+        saidi_start = serie_saidi.index[0]
+        saidi_end = serie_saidi.index[-1]
+        exog_start = exog_df.index[0]
+        exog_end = exog_df.index[-1]
+
+        print(f"[DIAGNOSTICO] SAIDI: {saidi_start} a {saidi_end} ({len(serie_saidi)} obs)")
+        print(f"[DIAGNOSTICO] EXOG:  {exog_start} a {exog_end} ({len(exog_df)} obs)")
+
+    def _validate_index_coverage(self,
+                                serie_saidi: pd.Series,
+                                exog_df: pd.DataFrame,
+                                log_callback) -> bool:
+        """Verificar que los índices coinciden y no hay fechas faltantes críticas."""
+        if exog_df.index.equals(serie_saidi.index):
+            return True
+
+        print("[DIAGNOSTICO] ADVERTENCIA: Índices no coinciden exactamente")
+        missing_in_exog = [d for d in serie_saidi.index if d not in exog_df.index]
+
+        if not missing_in_exog:
+            return True
+
+        pct_missing = len(missing_in_exog) / len(serie_saidi) * 100
+        print(f"[DIAGNOSTICO] Fechas SAIDI faltantes en EXOG: {len(missing_in_exog)} ({pct_missing:.1f}%)")
+
+        self._print_missing_dates(missing_in_exog)
+
+        # CRÍTICO: Si falta >20% de fechas, rechazar
+        cobertura = 20
+        if pct_missing > cobertura:
+            print("[DIAGNOSTICO] ERROR CRÍTICO: >20% de fechas faltantes")
+            if log_callback:
+                log_callback(f"ERROR: {pct_missing:.1f}% de fechas SAIDI no tienen datos climáticos")
+            return False
+
+        return True
+
+    def _print_missing_dates(self, missing_dates: list) -> None:
+        """Imprimir fechas faltantes de forma resumida."""
+        meses_faltantes = 5
+        if len(missing_dates) <= meses_faltantes:
+            print(f"[DIAGNOSTICO]   Fechas faltantes: {missing_dates}")
+        else:
+            print(f"[DIAGNOSTICO]   Primeras faltantes: {missing_dates[:3]}")
+            print(f"[DIAGNOSTICO]   Últimas faltantes: {missing_dates[-3:]}")
+
+    def _validate_nan_values(self, exog_df: pd.DataFrame, log_callback) -> bool:
+        """Verificar que no hay valores NaN en las columnas."""
+        if not exog_df.isna().any().any():
+            return True
+
+        nan_cols = exog_df.columns[exog_df.isna().any()].tolist()
+        nan_details = [
+            f"{col}: {exog_df[col].isna().sum()} ({exog_df[col].isna().sum() / len(exog_df) * 100:.1f}%)"
+            for col in nan_cols
+        ]
+
+        print("[DIAGNOSTICO] ERROR: Columnas con NaN encontradas:")
+        for detail in nan_details:
+            print(f"[DIAGNOSTICO]   - {detail}")
+
+        if log_callback:
+            log_callback("ERROR: Variables exógenas contienen valores NaN")
+
+        return False
+
+    def _validate_infinite_values(self, exog_df: pd.DataFrame) -> bool:
+        """Verificar que no hay valores infinitos."""
+        if np.isinf(exog_df.to_numpy()).any():
+            print("[DIAGNOSTICO] ERROR: Variables exógenas contienen valores infinitos")
+            return False
+        return True
+
+    def _check_variance(self, exog_df: pd.DataFrame) -> None:
+        """Advertir sobre columnas con varianza cero."""
+        for col in exog_df.columns:
+            if exog_df[col].std() == 0:
+                print(f"[DIAGNOSTICO] ADVERTENCIA: {col} tiene varianza cero")
+
     def _project_climate_intelligent(self,
-                            climate_data: pd.DataFrame,
-                            forecast_dates: pd.DatetimeIndex,
-                            log_callback=None) -> pd.DataFrame:
+                                climate_data: pd.DataFrame,
+                                forecast_dates: pd.DatetimeIndex,
+                                log_callback=None) -> pd.DataFrame:
         """
         Proyectar variables climáticas de forma inteligente usando promedios estacionales ponderados.
 
@@ -777,16 +865,45 @@ class OptimizationService:
         """
         print(f"[CLIMATE_PROJECTION] Iniciando proyección inteligente para {len(forecast_dates)} fechas")
 
-        if log_callback:
-            log_callback("=" * 80)
-            log_callback("PROYECCIÓN INTELIGENTE DE VARIABLES CLIMÁTICAS")
-            log_callback("=" * 80)
+        self._validate_climate_data(climate_data)
+        self._log_projection_header(climate_data, forecast_dates, log_callback)
 
-        # Verificar que hay datos históricos
+        projected_df = pd.DataFrame(index=forecast_dates)
+        hist_start = climate_data.index[0]
+        hist_end = climate_data.index[-1]
+
+        # Crear contexto de proyección
+        context = ClimateProjectionContext(
+            forecast_dates=forecast_dates,
+            hist_start=hist_start,
+            hist_end=hist_end,
+            log_callback=log_callback,
+        )
+
+        # Procesar cada variable climática
+        for col in climate_data.columns:
+            print(f"[CLIMATE_PROJECTION] Proyectando: {col}")
+            projected_df[col] = self._project_single_variable(
+                climate_data[col], col, context,
+            )
+
+        # Verificación final
+        projected_df = self._handle_missing_values(projected_df)
+        self._log_projection_footer(projected_df, log_callback)
+
+        print("[CLIMATE_PROJECTION] Proyección completada exitosamente")
+        return projected_df
+
+    def _validate_climate_data(self, climate_data: pd.DataFrame) -> None:
+        """Validar que hay datos climáticos históricos disponibles."""
         if climate_data is None or climate_data.empty:
             raise ValueError("No hay datos climáticos históricos para proyectar")
 
-        # Calcular periodo histórico disponible
+    def _log_projection_header(self,
+                            climate_data: pd.DataFrame,
+                            forecast_dates: pd.DatetimeIndex,
+                            log_callback) -> None:
+        """Registrar información inicial de la proyección."""
         hist_start = climate_data.index[0]
         hist_end = climate_data.index[-1]
         n_years_hist = (hist_end - hist_start).days / 365.25
@@ -794,136 +911,182 @@ class OptimizationService:
         print(f"[CLIMATE_PROJECTION] Histórico: {hist_start} a {hist_end} ({n_years_hist:.1f} años)")
 
         if log_callback:
+            log_callback("=" * 80)
+            log_callback("PROYECCIÓN INTELIGENTE DE VARIABLES CLIMÁTICAS")
+            log_callback("=" * 80)
             log_callback(f"Histórico disponible: {hist_start.strftime('%Y-%m')} a {hist_end.strftime('%Y-%m')}")
             log_callback(f"Periodo a proyectar: {forecast_dates[0].strftime('%Y-%m')} a {forecast_dates[-1].strftime('%Y-%m')}")
             log_callback("")
 
-        # DataFrame para almacenar proyecciones
-        projected_df = pd.DataFrame(index=forecast_dates)
+    def _project_single_variable(self,
+                            var_series: pd.Series,
+                            col_name: str,
+                            context: ClimateProjectionContext) -> np.ndarray:
+        """Proyectar una única variable climática."""
+        try:
+            var_series = var_series.dropna()
 
-        # Procesar cada variable climática
-        meses = 12
+            meses = 12
+            if len(var_series) < meses:
+                print("[CLIMATE_PROJECTION]   ADVERTENCIA: Datos insuficientes, usando media")
+                return np.full(len(context.forecast_dates), var_series.mean())
+
+            # Calcular promedios mensuales ponderados
+            monthly_avg = self._calculate_weighted_monthly_averages(var_series, context.hist_end)
+
+            # Detectar tendencia
+            trend_info = self._detect_linear_trend(var_series, context.hist_start)
+            self._log_trend_info(col_name, trend_info, context.log_callback)
+
+            # Proyectar valores futuros
+            projected_values = self._project_future_values(
+                context.forecast_dates, monthly_avg, trend_info, context.hist_end,
+            )
+
+            # Logging comparativo
+            self._log_projection_comparison(
+                var_series, projected_values, trend_info, context.log_callback,
+            )
+
+        except (ValueError, TypeError, KeyError, IndexError) as e:
+            return self._handle_projection_error(
+                col_name, var_series, context.forecast_dates, e, context.log_callback,
+            )
+        else:
+            return projected_values
+
+    def _calculate_weighted_monthly_averages(self,
+                                            var_series: pd.Series,
+                                            hist_end: pd.Timestamp) -> dict:
+        """Calcular promedios mensuales con ponderación exponencial."""
+        years_ago = (hist_end - var_series.index).days / 365.25
+        weights = np.exp(-years_ago / 3.0)
+        weights = weights / weights.sum()
+
+        monthly_avg = {}
+        for month in range(1, 13):
+            mask = var_series.index.month == month
+            month_values = var_series[mask]
+            month_weights = weights[mask]
+
+            if len(month_values) > 0:
+                monthly_avg[month] = np.average(month_values, weights=month_weights)
+            else:
+                monthly_avg[month] = var_series.mean()
+
+        return monthly_avg
+
+    def _detect_linear_trend(self, var_series: pd.Series, hist_start: pd.Timestamp) -> dict:
+        """Detectar tendencia lineal en la serie temporal."""
+        time_numeric = np.array([(d - hist_start).days / 30.44 for d in var_series.index])
+        values_numeric = var_series.to_numpy()
+
+        slope, intercept, r_value, p_value, _ = linregress(time_numeric, values_numeric)
+
         abs_mayor = 0.3
         abs_menor = 0.05
-        for col in climate_data.columns:
-            print(f"[CLIMATE_PROJECTION] Proyectando: {col}")
+        has_trend = (abs(r_value) > abs_mayor) and (p_value < abs_menor)
 
-            try:
-                var_series = climate_data[col].dropna()
+        return {
+            "has_trend": has_trend,
+            "slope": slope,
+            "intercept": intercept,
+            "r_value": r_value,
+            "p_value": p_value,
+            "time_numeric": time_numeric,
+        }
 
-                if len(var_series) < meses:
-                    # Datos insuficientes: usar media simple
-                    projected_df[col] = var_series.mean()
-                    print("[CLIMATE_PROJECTION]   ADVERTENCIA: Datos insuficientes, usando media")
-                    continue
+    def _log_trend_info(self, col_name: str, trend_info: dict, log_callback) -> None:
+        """Registrar información sobre la tendencia detectada."""
+        if trend_info["has_trend"]:
+            trend_direction = "ascendente" if trend_info["slope"] > 0 else "descendente"
+            print(f"[CLIMATE_PROJECTION]   Tendencia {trend_direction} detectada: "
+                f"r={trend_info['r_value']:.3f}, slope={trend_info['slope']:.4f}/mes")
 
-                # ========== PASO 1: CALCULAR PROMEDIOS MENSUALES PONDERADOS ==========
-                # Crear ponderación exponencial (más peso a años recientes)
-                years_ago = (hist_end - var_series.index).days / 365.25
-                weights = np.exp(-years_ago / 3.0)  # Decaimiento exponencial con tau=3 años
-                weights = weights / weights.sum()  # Normalizar
+            if log_callback:
+                log_callback(f"{col_name}:")
+                log_callback(f"  - Tendencia {trend_direction}: r={trend_info['r_value']:.3f}, p={trend_info['p_value']:.4f}")
+                log_callback(f"  - Cambio proyectado: {trend_info['slope']*12:.4f} por año")
+        else:
+            print(f"[CLIMATE_PROJECTION]   Sin tendencia significativa (r={trend_info['r_value']:.3f})")
+            if log_callback:
+                log_callback(f"{col_name}: Sin tendencia (r={trend_info['r_value']:.3f})")
 
-                # Calcular promedios mensuales ponderados
-                monthly_avg = {}
-                for month in range(1, 13):
-                    mask = var_series.index.month == month
-                    month_values = var_series[mask]
-                    month_weights = weights[mask]
+    def _project_future_values(self,
+                            forecast_dates: pd.DatetimeIndex,
+                            monthly_avg: dict,
+                            trend_info: dict,
+                            hist_end: pd.Timestamp) -> np.ndarray:
+        """Proyectar valores futuros usando estacionalidad y tendencia."""
+        projected_values = []
 
-                    if len(month_values) > 0:
-                        # Promedio ponderado
-                        monthly_avg[month] = np.average(month_values, weights=month_weights)
-                    else:
-                        # Si no hay datos para este mes, usar promedio global
-                        monthly_avg[month] = var_series.mean()
+        for date in forecast_dates:
+            base_value = monthly_avg[date.month]
 
-                # ========== PASO 2: DETECTAR TENDENCIA LINEAL ==========
-                # Convertir fechas a números (meses desde inicio)
-                time_numeric = np.array([(d - hist_start).days / 30.44 for d in var_series.index])
-                values_numeric = var_series.to_numpy()
+            if trend_info["has_trend"]:
+                months_ahead = (date - hist_end).days / 30.44
+                time_point = trend_info["time_numeric"][-1] + months_ahead
+                trend_adjustment = (
+                    trend_info["slope"] * time_point + trend_info["intercept"] -
+                    (trend_info["slope"] * trend_info["time_numeric"][-1] + trend_info["intercept"])
+                )
+                final_value = base_value + trend_adjustment
+            else:
+                final_value = base_value
 
-                # Regresión lineal
-                slope, intercept, r_value, p_value, _ = linregress(time_numeric, values_numeric)
+            projected_values.append(final_value)
 
-                # Determinar si hay tendencia significativa
-                has_trend = (abs(r_value) > abs_mayor) and (p_value < abs_menor)
+        return np.array(projected_values)
 
-                if has_trend:
-                    trend_direction = "ascendente" if slope > 0 else "descendente"
-                    print(f"[CLIMATE_PROJECTION]   Tendencia {trend_direction} detectada: "
-                        f"r={r_value:.3f}, slope={slope:.4f}/mes")
+    def _log_projection_comparison(self,
+                               var_series: pd.Series,
+                               projected_values: np.ndarray,
+                               trend_info: dict,
+                               log_callback) -> None:
+        """Comparar proyección con último valor histórico."""
+        last_hist_value = var_series.iloc[-1]
+        first_proj_value = projected_values[0]
+        change_pct = ((first_proj_value - last_hist_value) / last_hist_value) * 100
 
-                    if log_callback:
-                        log_callback(f"{col}:")
-                        log_callback(f"  - Tendencia {trend_direction}: r={r_value:.3f}, p={p_value:.4f}")
-                        log_callback(f"  - Cambio proyectado: {slope*12:.4f} por año")
-                else:
-                    print(f"[CLIMATE_PROJECTION]   Sin tendencia significativa (r={r_value:.3f})")
-                    if log_callback:
-                        log_callback(f"{col}: Sin tendencia (r={r_value:.3f})")
+        print(f"[CLIMATE_PROJECTION]   Último histórico: {last_hist_value:.2f}")
+        print(f"[CLIMATE_PROJECTION]   Primera proyección: {first_proj_value:.2f} "
+            f"({change_pct:+.1f}% cambio)")
 
-                # ========== PASO 3: PROYECTAR VALORES FUTUROS ==========
-                projected_values = []
+        if log_callback and trend_info["has_trend"]:
+            log_callback(f"  - Último valor histórico: {last_hist_value:.2f}")
+            log_callback(f"  - Primera proyección: {first_proj_value:.2f} ({change_pct:+.1f}%)")
 
-                for date in forecast_dates:
-                    month = date.month
+    def _handle_projection_error(self,
+                                col_name: str,
+                                var_series: pd.Series,
+                                forecast_dates: pd.DatetimeIndex,
+                                error: Exception,
+                                log_callback) -> np.ndarray:
+        """Manejar errores en la proyección usando fallback."""
+        print(f"[CLIMATE_PROJECTION]   ERROR proyectando {col_name}: {error}")
+        print("[CLIMATE_PROJECTION]   Fallback: usando último valor conocido")
 
-                    # Valor base: promedio estacional ponderado
-                    base_value = monthly_avg[month]
+        last_value = var_series.iloc[-1]
 
-                    # Aplicar ajuste de tendencia si existe
-                    if has_trend:
-                        months_ahead = (date - hist_end).days / 30.44
-                        time_point = time_numeric[-1] + months_ahead
-                        trend_adjustment = slope * time_point + intercept - (slope * time_numeric[-1] + intercept)
-                        final_value = base_value + trend_adjustment
-                    else:
-                        final_value = base_value
+        if log_callback:
+            log_callback(f"{col_name}: ERROR - usando último valor ({last_value:.2f})")
 
-                    projected_values.append(final_value)
+        return np.full(len(forecast_dates), last_value)
 
-                projected_df[col] = projected_values
-
-                # ========== PASO 4: LOGGING COMPARATIVO ==========
-                # Comparar proyección vs último valor histórico
-                last_hist_value = var_series.iloc[-1]
-                first_proj_value = projected_values[0]
-                change_pct = ((first_proj_value - last_hist_value) / last_hist_value) * 100
-
-                print(f"[CLIMATE_PROJECTION]   Último histórico: {last_hist_value:.2f}")
-                print(f"[CLIMATE_PROJECTION]   Primera proyección: {first_proj_value:.2f} "
-                    f"({change_pct:+.1f}% cambio)")
-
-                if log_callback and has_trend:
-                    log_callback(f"  - Último valor histórico: {last_hist_value:.2f}")
-                    log_callback(f"  - Primera proyección: {first_proj_value:.2f} ({change_pct:+.1f}%)")
-
-            except (ValueError, TypeError, KeyError, IndexError) as e:
-                # Si falla la proyección de esta variable, usar forward-fill simple
-                print(f"[CLIMATE_PROJECTION]   ERROR proyectando {col}: {e}")
-                print("[CLIMATE_PROJECTION]   Fallback: usando último valor conocido")
-
-                last_value = climate_data[col].iloc[-1]
-                projected_df[col] = last_value
-
-                if log_callback:
-                    log_callback(f"{col}: ERROR - usando último valor ({last_value:.2f})")
-
-        # Verificación final
+    def _handle_missing_values(self, projected_df: pd.DataFrame) -> pd.DataFrame:
+        """Manejar valores faltantes en la proyección."""
         if projected_df.isna().any().any():
             print("[CLIMATE_PROJECTION] ADVERTENCIA: NaN detectados en proyección")
-            # Rellenar con medias
             projected_df = projected_df.fillna(projected_df.mean())
+        return projected_df
 
+    def _log_projection_footer(self, projected_df: pd.DataFrame, log_callback) -> None:
+        """Registrar resumen final de la proyección."""
         if log_callback:
             log_callback("=" * 80)
             log_callback(f"Proyección completada: {len(projected_df.columns)} variables")
             log_callback("Método: Promedios estacionales ponderados + tendencias")
             log_callback("=" * 80)
-
-        print("[CLIMATE_PROJECTION] Proyección completada exitosamente")
-
-        return projected_df
 
     def _evaluate_single_model(self,
                 serie_original: pd.Series,
@@ -1776,24 +1939,27 @@ class OptimizationService:
         if transformation_type == "original":
             return data
 
-        if transformation_type == "standard":
-            if self.scaler is not None:
-                return self.scaler.inverse_transform(data.reshape(-1, 1)).flatten()
-            return data
+        # Diccionario de funciones de inversión
+        inverse_transforms = {
+            "standard": lambda d: (
+                self.scaler.inverse_transform(d.reshape(-1, 1)).flatten()
+                if self.scaler is not None
+                else d
+            ),
+            "log": lambda d: np.exp(d),
+            "sqrt": lambda d: np.power(d, 2),
+            "boxcox": lambda d: self._inverse_boxcox(d),
+        }
 
-        if transformation_type == "log":
+        # Aplicar la transformación correspondiente o retornar data sin cambios
+        return inverse_transforms.get(transformation_type, lambda d: d)(data)
+
+    def _inverse_boxcox(self, data: np.ndarray) -> np.ndarray:
+        """Inversión específica para transformación Box-Cox."""
+        lambda_param = self.transformation_params.get("boxcox_lambda", 0)
+        if lambda_param == 0:
             return np.exp(data)
-
-        if transformation_type == "sqrt":
-            return np.power(data, 2)
-
-        if transformation_type == "boxcox":
-            lambda_param = self.transformation_params.get("boxcox_lambda", 0)
-            if lambda_param == 0:
-                return np.exp(data)
-            return np.power(data * lambda_param + 1, 1 / lambda_param)
-
-        return data
+        return np.power(data * lambda_param + 1, 1 / lambda_param)
 
     def _log_final_summary(self,
                       log_callback,
