@@ -2058,10 +2058,19 @@ class OptimizationService:
                       log_callback,
                       top_models: list[dict],
                       exog_info: dict | None,
-                      regional_code: str | None = None):  # Agregar regional_code como parámetro
-        """Generar resumen final de optimizacion CON INFO DE CORRELACIONES."""
-        # Definir mapa de correlaciones por regional
-        correlations_map = {
+                      regional_code: str | None = None):
+        """Generar resumen final de optimización CON INFO DE CORRELACIONES."""
+        correlations_map = self._get_regional_correlations_map()
+
+        self._log_summary_header(log_callback, exog_info)
+        self._log_transformation_stats(log_callback)
+        self._log_top_models(log_callback, top_models)
+        self._log_exogenous_variables(log_callback, exog_info, regional_code, correlations_map)
+        self._log_optimal_model(log_callback, top_models)
+
+    def _get_regional_correlations_map(self) -> dict[str, dict[str, float]]:
+        """Obtener mapa de correlaciones por regional."""
+        return {
             "SAIDI_O": {  # Ocaña
                 "realfeel_min": 0.689,
                 "windchill_avg": 0.520,
@@ -2094,6 +2103,8 @@ class OptimizationService:
             },
         }
 
+    def _log_summary_header(self, log_callback, exog_info: dict | None) -> None:
+        """Registrar encabezado del resumen final."""
         log_callback("=" * 80)
         log_callback("RESUMEN FINAL - OPTIMIZACION COMPLETADA")
         if exog_info:
@@ -2101,7 +2112,8 @@ class OptimizationService:
         log_callback("Validacion alineada con PredictionService (20-30% test)")
         log_callback("=" * 80)
 
-        # Estadisticas por transformacion
+    def _log_transformation_stats(self, log_callback) -> None:
+        """Registrar estadísticas por transformación."""
         log_callback("\nESTADISTICAS POR TRANSFORMACION:")
         log_callback("-" * 80)
         for transform in self.AVAILABLE_TRANSFORMATIONS:
@@ -2110,34 +2122,15 @@ class OptimizationService:
                         f"Mejor precision: {stats['best_precision']:.1f}% | "
                         f"Mejor stability: {stats['best_stability']:.0f}")
 
-        # Top 10 mejores modelos
+    def _log_top_models(self, log_callback, top_models: list[dict]) -> None:
+        """Registrar top 10 mejores modelos."""
         log_callback("\nTOP 10 MEJORES MODELOS:")
         log_callback("-" * 80)
 
-        top_1 = 1
-        top_2 = 2
-        top_3 = 3
         for i, modelo in enumerate(top_models[:10], 1):
-            if i == top_1:
-                medal = " Puesto 1"
-
-            elif i == top_2:
-                medal = " Puesto 2"
-            elif i == top_3:
-                medal = " Puesto 3"
-            else:
-                medal = f"   Puesto {i}"
-
+            medal = self._get_ranking_medal(i)
             exog_mark = " [+EXOG]" if modelo.get("with_exogenous") else ""
-
-            quality = modelo.get("quality", "poor")
-            quality_map = {
-                "excellent": "[EXCELENTE]",
-                "good": "[BUENO]",
-                "acceptable": "[ACEPTABLE]",
-                "poor": "[LIMITADO]",
-            }
-            quality_symbol = quality_map.get(quality, "[?]")
+            quality_symbol = self._get_quality_symbol(modelo.get("quality", "poor"))
 
             stability_str = ""
             if modelo.get("stability_score"):
@@ -2152,76 +2145,102 @@ class OptimizationService:
             log_callback(f"   RMSE: {modelo['rmse']:.4f} | R2: {modelo['r2_score']:.3f}")
             log_callback(f"   Validacion: {val_pct:.0f}% de datos como test ({modelo.get('n_test', 0)} meses)")
 
-        # Variables exogenas utilizadas CON CORRELACIONES
-        abs_fuerte = 0.6
-        abs_moderada_fuerte = 0.4
-        abs_moderada= 0.3
-        if exog_info:
-            log_callback("\nVARIABLES EXOGENAS UTILIZADAS:")
-            log_callback("-" * 80)
+    def _get_ranking_medal(self, position: int) -> str:
+        """Obtener medalla según posición en ranking."""
+        medals = {1: " Puesto 1", 2: " Puesto 2", 3: " Puesto 3"}
+        return medals.get(position, f"   Puesto {position}")
 
-            # Obtener correlaciones específicas de la regional
-            regional_correlations = correlations_map.get(regional_code, {})
+    def _get_quality_symbol(self, quality: str) -> str:
+        """Obtener símbolo de calidad del modelo."""
+        quality_map = {
+            "excellent": "[EXCELENTE]",
+            "good": "[BUENO]",
+            "acceptable": "[ACEPTABLE]",
+            "poor": "[LIMITADO]",
+        }
+        return quality_map.get(quality, "[?]")
 
-            for var_code, var_data in exog_info.items():
-                # Obtener correlación específica de la regional
-                corr = regional_correlations.get(var_code, 0.0)
+    def _log_exogenous_variables(self,
+                                log_callback,
+                                exog_info: dict | None,
+                                regional_code: str | None,
+                                correlations_map: dict) -> None:
+        """Registrar variables exógenas utilizadas con correlaciones."""
+        if not exog_info:
+            return
 
-                # Usar operador ternario
-                corr_str = f"(r={corr:+.3f})" if corr != 0 else ""
+        log_callback("\nVARIABLES EXOGENAS UTILIZADAS:")
+        log_callback("-" * 80)
 
-                # Clasificar fuerza de correlacion
-                abs_corr = abs(corr)
-                if abs_corr >= abs_fuerte:
-                    strength = "*** FUERTE ***"
-                elif abs_corr >= abs_moderada_fuerte:
-                    strength = "** MODERADA-FUERTE **"
-                elif abs_corr >= abs_moderada:
-                    strength = "* MODERADA *"
-                else:
-                    strength = ""
+        regional_correlations = correlations_map.get(regional_code, {})
 
-                log_callback(f"   {strength} {var_data['nombre']} {corr_str}")
-                log_callback(f"      Columna: {var_data['columna_clima']}")
+        for var_code, var_data in exog_info.items():
+            corr = regional_correlations.get(var_code, 0.0)
+            corr_str = f"(r={corr:+.3f})" if corr != 0 else ""
+            strength = self._get_correlation_strength(abs(corr))
 
-        # Modelo optimo seleccionado
-        if top_models:
-            best_model = top_models[0]
-            precision = best_model["precision_final"]
-            quality = best_model.get("quality", "poor")
+            log_callback(f"   {strength} {var_data['nombre']} {corr_str}")
+            log_callback(f"      Columna: {var_data['columna_clima']}")
 
-            log_callback("\n" + "=" * 80)
-            log_callback("MODELO OPTIMO SELECCIONADO:")
-            log_callback("=" * 80)
-            log_callback(f"Transformacion: {best_model['transformation'].upper()}")
-            log_callback(f"Parametros: order={best_model['order']}, seasonal={best_model['seasonal_order']}")
-            log_callback(f"Precision: {precision:.1f}%")
-            log_callback(f"Calidad del modelo: {quality.upper()}")
-            log_callback(f"Metodo de validacion: {best_model.get('validation_pct', 0):.0f}% test")
+    def _get_correlation_strength(self, abs_corr: float) -> str:
+        """Clasificar fuerza de correlación."""
+        correlacion_fuerte = 0.6
+        correlacion_modera_fuerte = 0.4
+        correlacion_moderada = 0.3
 
-            if best_model.get("with_exogenous"):
-                log_callback("Modelo incluye variables exogenas climaticas correlacionadas")
+        if abs_corr >= correlacion_fuerte:
+            return "*** FUERTE ***"
+        if abs_corr >= correlacion_modera_fuerte:
+            return "** MODERADA-FUERTE **"
+        if abs_corr >= correlacion_moderada:
+            return "* MODERADA *"
+        return ""
 
-            stability = best_model.get("stability_score", 0)
-            if stability:
-                log_callback(f"Stability Score: {stability:.1f}/100")
+    def _log_optimal_model(self, log_callback, top_models: list[dict]) -> None:
+        """Registrar información del modelo óptimo seleccionado."""
+        if not top_models:
+            return
 
-            # Interpretacion
-            if quality == "excellent":
-                interpretacion = "EXCELENTE - Predicciones muy confiables"
-            elif quality == "good":
-                interpretacion = "BUENO - Predicciones confiables"
-            elif quality == "acceptable":
-                interpretacion = "ACEPTABLE - Usar con precaucion"
-            else:
-                interpretacion = "LIMITADO - Datos dificiles de predecir"
-                log_callback("\nNOTA: Precision baja sugiere que los datos historicos")
-                log_callback("      tienen alta variabilidad o patrones irregulares.")
+        best_model = top_models[0]
+        precision = best_model["precision_final"]
+        quality = best_model.get("quality", "poor")
 
-            log_callback(f"Interpretacion: {interpretacion}")
-            log_callback("Optimizacion: Sistema adaptativo con variables correlacionadas")
-
+        log_callback("\n" + "=" * 80)
+        log_callback("MODELO OPTIMO SELECCIONADO:")
         log_callback("=" * 80)
+        log_callback(f"Transformacion: {best_model['transformation'].upper()}")
+        log_callback(f"Parametros: order={best_model['order']}, seasonal={best_model['seasonal_order']}")
+        log_callback(f"Precision: {precision:.1f}%")
+        log_callback(f"Calidad del modelo: {quality.upper()}")
+        log_callback(f"Metodo de validacion: {best_model.get('validation_pct', 0):.0f}% test")
+
+        if best_model.get("with_exogenous"):
+            log_callback("Modelo incluye variables exogenas climaticas correlacionadas")
+
+        stability = best_model.get("stability_score", 0)
+        if stability:
+            log_callback(f"Stability Score: {stability:.1f}/100")
+
+        # Interpretación
+        interpretacion = self._get_model_interpretation(quality)
+        log_callback(f"Interpretacion: {interpretacion}")
+
+        if quality == "poor":
+            log_callback("\nNOTA: Precision baja sugiere que los datos historicos")
+            log_callback("      tienen alta variabilidad o patrones irregulares.")
+
+        log_callback("Optimizacion: Sistema adaptativo con variables correlacionadas")
+        log_callback("=" * 80)
+
+    def _get_model_interpretation(self, quality: str) -> str:
+        """Obtener interpretación según calidad del modelo."""
+        interpretations = {
+            "excellent": "EXCELENTE - Predicciones muy confiables",
+            "good": "BUENO - Predicciones confiables",
+            "acceptable": "ACEPTABLE - Usar con precaucion",
+            "poor": "LIMITADO - Datos dificiles de predecir",
+        }
+        return interpretations.get(quality, "DESCONOCIDO")
 
     def save_best_model_config(self, regional_code: str, best_model: dict[str, Any]) -> bool:
         """
