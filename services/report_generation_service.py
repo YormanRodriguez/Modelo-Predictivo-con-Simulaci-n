@@ -1,14 +1,15 @@
 # services/report_generation_service.py
 """
-Servicio de Generación de Informes PDF para Validación Temporal SAIDI
+Servicio de Generación de Informes PDF para Validación Temporal SAIDI.
+
 Genera reportes profesionales con análisis explicativo + gráficas
 """
-
-import os
 import tempfile
-from datetime import datetime
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
+from PIL import Image as PILImage
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY
 from reportlab.lib.pagesizes import A4
@@ -25,15 +26,18 @@ from reportlab.platypus import (
 )
 
 
+class ReportGenerationError(Exception):
+    """Excepción personalizada para errores en la generación de informes PDF."""
+
 class ValidationReportService:
-    """Servicio para generar informes PDF de validación temporal"""
+    """Servicio para generar informes PDF de validación temporal."""
 
     def __init__(self):
         self.styles = getSampleStyleSheet()
         self._setup_custom_styles()
 
     def _setup_custom_styles(self):
-        """Configurar estilos personalizados para el PDF"""
+        """Configurar estilos personalizados para el PDF."""
         # Título principal
         self.styles.add(ParagraphStyle(
             name="CustomTitle",
@@ -90,35 +94,32 @@ class ValidationReportService:
         ))
 
     def generate_validation_report(
-        self,
-        result: dict[str, Any],
-        output_path: str | None = None,
-        log_callback=None,
+    self,
+    result: dict[str, Any],
+    output_path: str | None = None,
+    log_callback=None,
     ) -> str:
         """
-        Generar informe PDF completo de validación temporal
-        
+        Generar informe PDF completo de validación temporal.
+
         Args:
             result: Diccionario con resultados de rolling_validation_service
             output_path: Ruta opcional para guardar el PDF
             log_callback: Función para logging
-        
+
         Returns:
             Ruta del archivo PDF generado
+
+        Raises:
+            ReportGenerationError: Si ocurre un error durante la generación del PDF
 
         """
         try:
             # Preparar ruta de salida
             if not output_path:
-                temp_dir = tempfile.gettempdir()
-                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                output_path = os.path.join(
-                    temp_dir,
-                    f"Informe_Validacion_SAIDI_{timestamp}.pdf",
-                )
-
-            if log_callback:
-                log_callback("Generando informe PDF...")
+                temp_dir = Path(tempfile.gettempdir())
+                timestamp = datetime.now(tz=UTC).strftime("%Y%m%d_%H%M%S")
+                output_path = str(temp_dir / f"Informe_Validacion_SAIDI_{timestamp}.pdf")
 
             # Crear documento
             doc = SimpleDocTemplate(
@@ -167,18 +168,21 @@ class ValidationReportService:
             # Generar PDF
             doc.build(story)
 
+        except (OSError, ValueError, KeyError, AttributeError) as e:
+            error_msg = f"Error generando informe PDF: {e!s}"
             if log_callback:
-                log_callback(f"✓ Informe PDF generado: {os.path.basename(output_path)}")
+                log_callback(error_msg)
+            raise ReportGenerationError(error_msg) from e
+        else:
+            # Solo se ejecuta si no hubo excepciones
+            if log_callback:
+                log_callback("Generando informe PDF...")
+                log_callback(f"Informe PDF generado: {Path(output_path).name}")
 
             return output_path
 
-        except Exception as e:
-            if log_callback:
-                log_callback(f"✗ Error generando informe PDF: {e!s}")
-            raise Exception(f"Error generando informe PDF: {e!s}")
-
     def _create_cover_page(self, result: dict) -> list:
-        """Crear portada del informe"""
+        """Crear portada del informe."""
         elements = []
 
         # Espaciado superior
@@ -198,7 +202,7 @@ class ValidationReportService:
 
         subtitle = Paragraph(
             f"<b>Regional:</b> {regional_code}<br/>"
-            f"<b>Fecha de generación:</b> {datetime.now().strftime('%d/%m/%Y %H:%M')}",
+            f"<b>Fecha de generación:</b> {datetime.now(tz=UTC).strftime("%Y%m%d_%H%M%S")}",
             self.styles["Normal"],
         )
         elements.append(subtitle)
@@ -237,7 +241,7 @@ class ValidationReportService:
         return elements
 
     def _create_executive_summary(self, result: dict) -> list:
-        """Crear resumen ejecutivo"""
+        """Crear resumen ejecutivo."""
         elements = []
 
         elements.append(Paragraph("RESUMEN EJECUTIVO", self.styles["CustomSubtitle"]))
@@ -251,8 +255,8 @@ class ValidationReportService:
         quality_color = self._get_quality_color(quality)
 
         summary_text = f"""
-        Este informe presenta los resultados de una <b>validación temporal exhaustiva</b> 
-        del modelo SAIDI utilizando cuatro metodologías complementarias: Rolling Forecast, 
+        Este informe presenta los resultados de una <b>validación temporal exhaustiva</b>
+        del modelo SAIDI utilizando cuatro metodologías complementarias: Rolling Forecast,
         Cross-Validation, Análisis de Estabilidad de Parámetros y Backtesting Multi-Horizonte.
         <br/><br/>
         <b><font color="{quality_color}">Calidad del Modelo: {quality}</font></b><br/>
@@ -289,11 +293,8 @@ class ValidationReportService:
 
         return elements
 
-    # services/report_generation_service.py
-# SECCIONES MODIFICADAS - Solo se muestran los métodos con cambios
-
     def _create_rolling_forecast_section(self, result: dict) -> list:
-        """Sección 1: Rolling Forecast - Walk-Forward Validation"""
+        """Sección 1: Rolling Forecast - Walk-Forward Validation."""
         elements = []
 
         elements.append(Paragraph(
@@ -304,8 +305,8 @@ class ValidationReportService:
         # Explicación teórica
         theory_text = """
         <b>¿Qué es Rolling Forecast?</b><br/>
-        El Rolling Forecast (también llamado Walk-Forward Validation) es una técnica de 
-        validación temporal que simula el proceso real de predicción. En lugar de dividir 
+        El Rolling Forecast (también llamado Walk-Forward Validation) es una técnica de
+        validación temporal que simula el proceso real de predicción. En lugar de dividir
         los datos en un único conjunto de entrenamiento y prueba, este método:
         <br/><br/>
         • <b>Entrena el modelo</b> con todos los datos disponibles hasta el momento t<br/>
@@ -331,8 +332,8 @@ class ValidationReportService:
 
         results_text = f"""
         <b>Resultados del Rolling Forecast:</b><br/><br/>
-        En este análisis se realizaron <b>{rolling_results.get('n_predictions', 0)} predicciones</b> 
-        secuenciales, donde cada predicción se generó con toda la información disponible hasta 
+        En este análisis se realizaron <b>{rolling_results.get('n_predictions', 0)} predicciones</b>
+        secuenciales, donde cada predicción se generó con toda la información disponible hasta
         ese momento.
         <br/><br/>
         <b>Métricas de Desempeño:</b><br/>
@@ -344,35 +345,34 @@ class ValidationReportService:
         <b>Interpretación:</b><br/>
         """
 
-        # CAMBIO 5: Interpretaciones más positivas y realistas
         quality = rolling_results.get("prediction_quality", "")
         if quality == "EXCELENTE":
             interpretation = """
-            El modelo demostró un <b>desempeño excepcional</b> en las predicciones rolling. 
-            Con RMSE bajo y precisión superior al 85%, el modelo es altamente confiable 
-            para pronósticos futuros. Los errores son consistentemente pequeños y el modelo 
+            El modelo demostró un <b>desempeño excepcional</b> en las predicciones rolling.
+            Con RMSE bajo y precisión superior al 85%, el modelo es altamente confiable
+            para pronósticos futuros. Los errores son consistentemente pequeños y el modelo
             se adapta bien a nuevos datos. <b>Apto para uso en producción.</b>
             """
         elif quality == "BUENA":
             interpretation = """
-            El modelo mostró un <b>desempeño sólido</b> en las predicciones secuenciales. 
-            La precisión es buena (78-85%) y los errores están dentro de rangos aceptables 
-            para series temporales con volatilidad natural. El modelo es <b>confiable para 
-            uso operativo</b> con monitoreo regular. La variabilidad observada es típica 
+            El modelo mostró un <b>desempeño sólido</b> en las predicciones secuenciales.
+            La precisión es buena (78-85%) y los errores están dentro de rangos aceptables
+            para series temporales con volatilidad natural. El modelo es <b>confiable para
+            uso operativo</b> con monitoreo regular. La variabilidad observada es típica
             de series SAIDI.
             """
         elif quality == "REGULAR":
             interpretation = """
-            El modelo presentó un <b>desempeño aceptable</b> para una serie temporal compleja. 
-            Aunque muestra variabilidad, la precisión (70-78%) es suficiente para pronósticos 
-            informativos. <b>Útil para análisis de tendencias</b> y planificación con intervalos 
+            El modelo presentó un <b>desempeño aceptable</b> para una serie temporal compleja.
+            Aunque muestra variabilidad, la precisión (70-78%) es suficiente para pronósticos
+            informativos. <b>Útil para análisis de tendencias</b> y planificación con intervalos
             de confianza amplios. Se recomienda monitoreo continuo.
             """
         else:
             interpretation = """
-            El modelo mostró <b>limitaciones significativas</b> en su capacidad predictiva. 
-            Los errores son considerables y la precisión está por debajo de umbrales 
-            recomendables. Se sugiere reformular el modelo con variables adicionales o 
+            El modelo mostró <b>limitaciones significativas</b> en su capacidad predictiva.
+            Los errores son considerables y la precisión está por debajo de umbrales
+            recomendables. Se sugiere reformular el modelo con variables adicionales o
             especificaciones alternativas.
             """
 
@@ -381,7 +381,7 @@ class ValidationReportService:
 
         # Insertar gráfica de rolling forecast
         plot_file = result.get("plot_file")
-        if plot_file and os.path.exists(plot_file):
+        if plot_file and Path(plot_file).exists():
             try:
                 rolling_plot = self._extract_plot_section(plot_file, "rolling_forecast")
                 if rolling_plot:
@@ -393,13 +393,15 @@ class ValidationReportService:
                         self.styles["Normal"],
                     )
                     elements.append(caption)
-            except Exception:
+            except (OSError, ValueError, KeyError):
+                # Silenciosamente ignorar errores al cargar imágenes
+                # El informe continuará sin la gráfica
                 pass
 
         return elements
 
     def _create_cv_section(self, result: dict) -> list:
-        """Sección 2: Time Series Cross-Validation"""
+        """Sección 2: Time Series Cross-Validation."""
         elements = []
 
         elements.append(Paragraph(
@@ -409,8 +411,8 @@ class ValidationReportService:
 
         theory_text = """
         <b>¿Qué es Time Series Cross-Validation?</b><br/>
-        La validación cruzada temporal es una extensión del concepto de cross-validation 
-        tradicional adaptada específicamente para series temporales. A diferencia del CV 
+        La validación cruzada temporal es una extensión del concepto de cross-validation
+        tradicional adaptada específicamente para series temporales. A diferencia del CV
         estándar que usa particiones aleatorias, el Time Series CV:
         <br/><br/>
         • <b>Mantiene el orden temporal</b> de las observaciones<br/>
@@ -443,36 +445,38 @@ class ValidationReportService:
         <br/><br/>
         <b>Interpretación de Estabilidad:</b><br/>
         """
+        estabilidad_mayor = 80
+        estabilidad_media = 68
+        estabilidad_menor = 58
 
-        # CAMBIO 6: Interpretaciones más tolerantes en CV
         stability = cv_results.get("cv_stability_score", 0)
-        if stability >= 80:
+        if stability >= estabilidad_mayor:
             interpretation = """
-            El modelo demostró una <b>estabilidad muy buena</b> a través de diferentes 
-            ventanas temporales. La variabilidad en las métricas está dentro de límites 
-            razonables para series con patrones estacionales y tendencias cambiantes. 
-            La desviación estándar controlada del RMSE confirma predicciones consistentes. 
+            El modelo demostró una <b>estabilidad muy buena</b> a través de diferentes
+            ventanas temporales. La variabilidad en las métricas está dentro de límites
+            razonables para series con patrones estacionales y tendencias cambiantes.
+            La desviación estándar controlada del RMSE confirma predicciones consistentes.
             <b>Modelo confiable para generalización.</b>
             """
-        elif stability >= 68:
+        elif stability >= estabilidad_media:
             interpretation = """
-            El modelo mostró <b>buena estabilidad</b> en los diferentes splits. La variación 
-            observada refleja la naturaleza dinámica de la serie temporal, no sobreajuste. 
-            El modelo es <b>apto para uso operativo</b> considerando la complejidad inherente 
+            El modelo mostró <b>buena estabilidad</b> en los diferentes splits. La variación
+            observada refleja la naturaleza dinámica de la serie temporal, no sobreajuste.
+            El modelo es <b>apto para uso operativo</b> considerando la complejidad inherente
             de SAIDI. Monitoreo regular es suficiente.
             """
-        elif stability >= 58:
+        elif stability >= estabilidad_menor:
             interpretation = """
-            El modelo presentó <b>estabilidad moderada pero funcional</b>. La variación en 
-            las métricas sugiere sensibilidad a eventos atípicos, lo cual es esperado en 
-            series de infraestructura. <b>Útil para análisis con intervalos de confianza</b> 
+            El modelo presentó <b>estabilidad moderada pero funcional</b>. La variación en
+            las métricas sugiere sensibilidad a eventos atípicos, lo cual es esperado en
+            series de infraestructura. <b>Útil para análisis con intervalos de confianza</b>
             que capturen esta variabilidad natural.
             """
         else:
             interpretation = """
-            El modelo mostró <b>baja estabilidad</b> entre diferentes ventanas temporales. 
-            La alta variabilidad sugiere posible sobreajuste o problemas estructurales. 
-            Es necesario revisar la especificación del modelo o considerar técnicas de 
+            El modelo mostró <b>baja estabilidad</b> entre diferentes ventanas temporales.
+            La alta variabilidad sugiere posible sobreajuste o problemas estructurales.
+            Es necesario revisar la especificación del modelo o considerar técnicas de
             regularización.
             """
 
@@ -481,7 +485,7 @@ class ValidationReportService:
 
         # Insertar gráfica de CV
         plot_file = result.get("plot_file")
-        if plot_file and os.path.exists(plot_file):
+        if plot_file and Path(plot_file).exists():
             try:
                 cv_plot = self._extract_plot_section(plot_file, "cv_stability")
                 if cv_plot:
@@ -493,13 +497,15 @@ class ValidationReportService:
                         self.styles["Normal"],
                     )
                     elements.append(caption)
-            except Exception:
+            except (OSError, ValueError, KeyError):
+                # Silenciosamente ignorar errores al cargar imágenes
+                # El informe continuará sin la gráfica
                 pass
 
         return elements
 
     def _create_parameter_stability_section(self, result: dict) -> list:
-        """Sección 3: Estabilidad de Parámetros"""
+        """Sección 3: Estabilidad de Parámetros."""
         elements = []
 
         elements.append(Paragraph(
@@ -509,19 +515,19 @@ class ValidationReportService:
 
         theory_text = """
         <b>¿Por qué analizar la estabilidad de parámetros?</b><br/>
-        Los coeficientes de un modelo SARIMAX deben ser relativamente estables cuando se 
-        ajusta el modelo con diferentes tamaños de muestra. Si los parámetros varían 
+        Los coeficientes de un modelo SARIMAX deben ser relativamente estables cuando se
+        ajusta el modelo con diferentes tamaños de muestra. Si los parámetros varían
         drásticamente:
         <br/><br/>
-        • Indica que el modelo está <b>sobreajustado</b> a patrones específicos del conjunto 
+        • Indica que el modelo está <b>sobreajustado</b> a patrones específicos del conjunto
         de entrenamiento<br/>
         • Sugiere que el modelo es <b>sensible a valores atípicos</b><br/>
         • Implica que las predicciones futuras pueden ser <b>poco confiables</b><br/>
         • Revela posibles <b>problemas de especificación</b> del modelo
         <br/><br/>
         <b>Metodología:</b><br/>
-        Se entrenó el modelo con ventanas de datos crecientes (24, 30, 36... hasta todos 
-        los datos) y se analizó cómo evolucionan los coeficientes AR, MA, SAR y SMA. 
+        Se entrenó el modelo con ventanas de datos crecientes (24, 30, 36... hasta todos
+        los datos) y se analizó cómo evolucionan los coeficientes AR, MA, SAR y SMA.
         Parámetros estables indican un modelo robusto.
         """
 
@@ -556,30 +562,34 @@ class ValidationReportService:
         """
 
         stability_score = param_stability.get("overall_stability_score", 0)
-        if stability_score >= 85:
+        estabilidad_mayor = 85
+        estabilidad_media = 75
+        estabilidad_menor = 65
+
+        if stability_score >= estabilidad_mayor:
             interpretation = """
-            Los parámetros del modelo son <b>altamente estables</b>. Esto es un fuerte 
-            indicador de que el modelo ha capturado correctamente la estructura subyacente 
-            de los datos sin sobreajuste. Los coeficientes convergen a valores consistentes 
-            independientemente del tamaño de muestra, lo cual es ideal para predicciones 
+            Los parámetros del modelo son <b>altamente estables</b>. Esto es un fuerte
+            indicador de que el modelo ha capturado correctamente la estructura subyacente
+            de los datos sin sobreajuste. Los coeficientes convergen a valores consistentes
+            independientemente del tamaño de muestra, lo cual es ideal para predicciones
             futuras confiables.
             """
-        elif stability_score >= 75:
+        elif stability_score >= estabilidad_media:
             interpretation = """
-            Los parámetros muestran <b>buena estabilidad</b>. Hay variación moderada pero 
-            dentro de límites aceptables. El modelo es confiable aunque puede haber 
+            Los parámetros muestran <b>buena estabilidad</b>. Hay variación moderada pero
+            dentro de límites aceptables. El modelo es confiable aunque puede haber
             sensibilidad menor a datos extremos.
             """
-        elif stability_score >= 65:
+        elif stability_score >= estabilidad_menor:
             interpretation = """
-            Los parámetros presentan <b>estabilidad moderada</b>. Algunos coeficientes 
-            varían significativamente con el tamaño de muestra, sugiriendo posible 
+            Los parámetros presentan <b>estabilidad moderada</b>. Algunos coeficientes
+            varían significativamente con el tamaño de muestra, sugiriendo posible
             sobreajuste parcial. Se recomienda considerar simplificar el modelo.
             """
         else:
             interpretation = """
-            Los parámetros muestran <b>baja estabilidad</b>. La variación significativa 
-            es una señal de alerta de sobreajuste o mala especificación. El modelo 
+            Los parámetros muestran <b>baja estabilidad</b>. La variación significativa
+            es una señal de alerta de sobreajuste o mala especificación. El modelo
             probablemente no generalizará bien a datos futuros.
             """
 
@@ -588,7 +598,7 @@ class ValidationReportService:
 
         # Insertar gráfica de estabilidad de parámetros
         plot_file = result.get("plot_file")
-        if plot_file and os.path.exists(plot_file):
+        if plot_file and Path(plot_file).exists():
             try:
                 param_plot = self._extract_plot_section(plot_file, "parameter_stability")
                 if param_plot:
@@ -600,13 +610,15 @@ class ValidationReportService:
                         self.styles["Normal"],
                     )
                     elements.append(caption)
-            except Exception:
+            except (OSError, ValueError, KeyError):
+                # Silenciosamente ignorar errores al cargar imágenes
+                # El informe continuará sin la gráfica
                 pass
 
         return elements
 
     def _create_backtesting_section(self, result: dict) -> list:
-        """Sección 4: Backtesting Multi-Horizonte"""
+        """Sección 4: Backtesting Multi-Horizonte."""
         elements = []
 
         elements.append(Paragraph(
@@ -616,7 +628,7 @@ class ValidationReportService:
 
         theory_text = """
         <b>¿Qué es el Backtesting Multi-Horizonte?</b><br/>
-        El backtesting evalúa cómo se degrada el desempeño del modelo al hacer predicciones 
+        El backtesting evalúa cómo se degrada el desempeño del modelo al hacer predicciones
         cada vez más lejanas en el futuro. Es crítico porque:
         <br/><br/>
         • Las predicciones a <b>1 mes</b> son típicamente más precisas que a 12 meses<br/>
@@ -625,7 +637,7 @@ class ValidationReportService:
         • Ayuda a establecer <b>límites de confianza</b> según el horizonte
         <br/><br/>
         <b>Horizontes evaluados:</b><br/>
-        Se probaron predicciones a 1, 3, 6 y 12 meses desde múltiples puntos de inicio 
+        Se probaron predicciones a 1, 3, 6 y 12 meses desde múltiples puntos de inicio
         en el histórico, calculando el desempeño promedio para cada horizonte.
         """
 
@@ -647,7 +659,7 @@ class ValidationReportService:
         for horizon in sorted(metrics_by_horizon.keys()):
             metrics = metrics_by_horizon[horizon]
             results_text += f"""
-            • <b>H={horizon} meses:</b> Precisión {metrics['precision']:.1f}%, 
+            • <b>H={horizon} meses:</b> Precisión {metrics['precision']:.1f}%,
             RMSE {metrics['rmse']:.3f} min ({metrics['n_tests']} pruebas)<br/>
             """
 
@@ -659,22 +671,25 @@ class ValidationReportService:
         degradation = backtesting_results.get("degradation_rate", 0)
         optimal = backtesting_results.get("optimal_horizon", 0)
 
-        if abs(degradation) < 2.0:
+        degradacion_menor = 2.0
+        degradacion_mayor = 3.5
+
+        if abs(degradation) < degradacion_menor:
             interpretation = f"""
-            El modelo muestra una <b>degradación mínima</b> en horizontes de hasta 
-            {optimal} meses. La pérdida de precisión es gradual y predecible, lo cual 
+            El modelo muestra una <b>degradación mínima</b> en horizontes de hasta
+            {optimal} meses. La pérdida de precisión es gradual y predecible, lo cual
             es excelente. El modelo es confiable para pronósticos de mediano plazo.
             """
-        elif abs(degradation) < 3.5:
+        elif abs(degradation) < degradacion_mayor:
             interpretation = f"""
-            El modelo presenta una <b>degradación moderada</b> pero manejable. La precisión 
-            se mantiene aceptable hasta {optimal} meses. Para horizontes más largos, 
+            El modelo presenta una <b>degradación moderada</b> pero manejable. La precisión
+            se mantiene aceptable hasta {optimal} meses. Para horizontes más largos,
             considere intervalos de confianza más amplios.
             """
         else:
             interpretation = f"""
-            El modelo muestra <b>degradación significativa</b> después de {optimal} meses. 
-            Se recomienda limitar las predicciones a horizontes cortos o revisar la 
+            El modelo muestra <b>degradación significativa</b> después de {optimal} meses.
+            Se recomienda limitar las predicciones a horizontes cortos o revisar la
             especificación del modelo para mejorar pronósticos a largo plazo.
             """
 
@@ -683,7 +698,7 @@ class ValidationReportService:
 
         # Insertar gráfica de backtesting
         plot_file = result.get("plot_file")
-        if plot_file and os.path.exists(plot_file):
+        if plot_file and Path(plot_file).exists():
             try:
                 backtesting_plot = self._extract_plot_section(plot_file, "backtesting")
                 if backtesting_plot:
@@ -695,27 +710,27 @@ class ValidationReportService:
                         self.styles["Normal"],
                     )
                     elements.append(caption)
-            except Exception:
+            except (OSError, ValueError, KeyError):
+                # Silenciosamente ignorar errores al cargar imágenes
+                # El informe continuará sin la gráfica
                 pass
 
         return elements
 
     def _extract_plot_section(self, plot_file: str, section: str) -> str | None:
         """
-        Extraer una sección específica de la imagen completa
-        
+        Extraer una sección específica de la imagen completa.
+
         Args:
             plot_file: Ruta de la imagen completa
-            section: Nombre de la sección ('rolling_forecast', 'cv_stability', 
+            section: Nombre de la sección ('rolling_forecast', 'cv_stability',
                     'parameter_stability', 'backtesting', 'diagnosis', 'scores')
-        
+
         Returns:
             Ruta del archivo temporal con la sección extraída
 
         """
         try:
-            from PIL import Image as PILImage
-
             # Abrir imagen completa
             img = PILImage.open(plot_file)
             width, height = img.size
@@ -740,21 +755,18 @@ class ValidationReportService:
             cropped = img.crop(crop_coords[section])
 
             # Guardar en archivo temporal
-            temp_dir = tempfile.gettempdir()
-            temp_file = os.path.join(
-                temp_dir,
-                f'section_{section}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.png',
-            )
+            temp_dir = Path(tempfile.gettempdir())
+            temp_file = temp_dir / f'section_{section}_{datetime.now(tz=UTC).strftime("%Y%m%d_%H%M%S")}.png'
             cropped.save(temp_file, "PNG")
 
-            return temp_file
-
-        except Exception as e:
+        except (OSError, ValueError, KeyError) as e:
             print(f"Error extrayendo sección {section}: {e}")
             return None
+        else:
+            return str(temp_file)
 
     def _create_final_diagnosis_section(self, result: dict) -> list:
-        """Sección 5: Diagnóstico Final Integrado"""
+        """Sección 5: Diagnóstico Final Integrado."""
         elements = []
 
         elements.append(Paragraph(
@@ -764,8 +776,8 @@ class ValidationReportService:
 
         intro_text = """
         <b>Síntesis de Todas las Validaciones</b><br/>
-        Este diagnóstico integra los resultados de las cuatro metodologías anteriores para 
-        proporcionar una evaluación holística del modelo. Cada componente aporta una 
+        Este diagnóstico integra los resultados de las cuatro metodologías anteriores para
+        proporcionar una evaluación holística del modelo. Cada componente aporta una
         perspectiva única:
         <br/><br/>
         • <b>Rolling Forecast:</b> Capacidad predictiva en escenarios reales<br/>
@@ -784,9 +796,12 @@ class ValidationReportService:
         # Tabla de scores
         scores_data = [["Componente", "Score", "Estado"]]
 
+        puntaje_mayor = 80
+        puntaje_baja = 65
+
         for component, score in component_scores.items():
             component_name = self._get_component_display_name(component)
-            status = "✓ Excelente" if score >= 80 else "○ Aceptable" if score >= 65 else "✗ Mejorable"
+            status = "Excelente" if score >= puntaje_mayor else "○ Aceptable" if score >= puntaje_baja else "✗ Mejorable"
             scores_data.append([component_name, f"{score:.1f}/100", status])
 
         scores_table = Table(scores_data, colWidths=[2.5*inch, 1.5*inch, 1.5*inch])
@@ -831,7 +846,7 @@ class ValidationReportService:
         return elements
 
     def _create_integrated_plots_section(self, result: dict) -> list:
-        """Sección 6: Gráficas Integradas del Análisis"""
+        """Sección 6: Gráficas Integradas del Análisis."""
         elements = []
 
         elements.append(Paragraph(
@@ -841,8 +856,8 @@ class ValidationReportService:
 
         intro_text = """
         <b>Panel de Gráficas Comprehensivo</b><br/>
-        A continuación se presenta el panel visual completo generado por el análisis de 
-        validación temporal. Esta visualización integrada combina los seis componentes 
+        A continuación se presenta el panel visual completo generado por el análisis de
+        validación temporal. Esta visualización integrada combina los seis componentes
         principales del análisis en un solo dashboard interconectado.
         <br/><br/>
         <b>Componentes del Panel:</b><br/>
@@ -860,7 +875,7 @@ class ValidationReportService:
         # Insertar la gráfica completa
         plot_file = result.get("plot_file")
 
-        if plot_file and os.path.exists(plot_file):
+        if plot_file and Path(plot_file).exists():
             try:
                 # Calcular dimensiones para ajustar a página A4
                 img_width = 7*inch
@@ -876,7 +891,7 @@ class ValidationReportService:
                 )
                 elements.append(caption)
 
-            except Exception:
+            except (OSError, ValueError, KeyError):
                 error_text = "<i>Error al cargar la gráfica integrada</i>"
                 elements.append(Paragraph(error_text, self.styles["Normal"]))
         else:
@@ -900,7 +915,7 @@ class ValidationReportService:
         return elements
 
     def _get_component_display_name(self, component: str) -> str:
-        """Obtener nombre amigable de componente"""
+        """Obtener nombre amigable de componente."""
         names = {
             "rolling_forecast": "Rolling Forecast",
             "precision": "Precisión Global",
@@ -911,7 +926,7 @@ class ValidationReportService:
         return names.get(component, component)
 
     def _get_quality_color(self, quality: str) -> str:
-        """Obtener color según calidad"""
+        """Obtener color según calidad."""
         colors_map = {
             "EXCELENTE": "#4CAF50",
             "CONFIABLE": "#2196F3",
@@ -921,51 +936,47 @@ class ValidationReportService:
         return colors_map.get(quality, "#757575")
 
     def _generate_final_conclusion(self, quality: str, confidence: float, limitations: list) -> str:
-        """
-        Generar conclusión final personalizada
-        MODIFICADO: Umbrales ajustados para ser más realistas según MAPE típico de SAIDI
-        """
-        # CAMBIO 7: Interpretaciones en Diagnóstico Final con umbrales ajustados
-        # ANTES: quality == 'EXCELENTE' and confidence >= 85
-        # DESPUÉS: quality == 'EXCELENTE' and confidence >= 80
+        """Generar conclusión final personalizada."""
+        calidad_alta = 80
+        calidad_media = 70
 
-        if quality == "EXCELENTE" and confidence >= 80:
+        if quality == "EXCELENTE" and confidence >= calidad_alta:
             conclusion = """
-            El modelo ha superado las pruebas de validación temporal con resultados 
-            sobresalientes. La combinación de buena precisión en rolling forecast, 
-            estabilidad en cross-validation, parámetros robustos y degradación controlada 
-            confirma que este modelo es <b>confiable para uso en producción</b>. 
+            El modelo ha superado las pruebas de validación temporal con resultados
+            sobresalientes. La combinación de buena precisión en rolling forecast,
+            estabilidad en cross-validation, parámetros robustos y degradación controlada
+            confirma que este modelo es <b>confiable para uso en producción</b>.
             Se recomienda su implementación con monitoreo periódico estándar.
             """
-        elif quality in ["EXCELENTE", "CONFIABLE"] and confidence >= 70:
+        elif quality in ["EXCELENTE", "CONFIABLE"] and confidence >= calidad_media:
             conclusion = """
-            El modelo demostró un desempeño sólido considerando la complejidad de la serie 
-            temporal SAIDI. Aunque existen variaciones naturales identificadas, el modelo 
-            es <b>confiable para uso operativo</b> en el contexto de planificación y 
-            gestión de infraestructura. Se recomienda implementación con intervalos de 
+            El modelo demostró un desempeño sólido considerando la complejidad de la serie
+            temporal SAIDI. Aunque existen variaciones naturales identificadas, el modelo
+            es <b>confiable para uso operativo</b> en el contexto de planificación y
+            gestión de infraestructura. Se recomienda implementación con intervalos de
             confianza y revisión trimestral de métricas.
             """
-        elif quality == "CUESTIONABLE" or confidence < 70:
+        elif quality == "CUESTIONABLE" or confidence < calidad_media:
             conclusion = """
-            El modelo presenta resultados que requieren consideración del contexto. 
-            Algunas métricas son funcionales para análisis de tendencias mientras que 
-            otras sugieren limitaciones para predicciones precisas. Se recomienda 
-            <b>uso informativo con intervalos amplios</b> y considerar mejoras si se 
-            requiere mayor precisión. Útil para escenarios "what-if" y planificación 
+            El modelo presenta resultados que requieren consideración del contexto.
+            Algunas métricas son funcionales para análisis de tendencias mientras que
+            otras sugieren limitaciones para predicciones precisas. Se recomienda
+            <b>uso informativo con intervalos amplios</b> y considerar mejoras si se
+            requiere mayor precisión. Útil para escenarios "what-if" y planificación
             de alto nivel.
             """
         else:
             conclusion = """
-            Los resultados de validación indican que el modelo actual <b>no es adecuado 
-            para uso en producción</b> sin modificaciones sustanciales. Se recomienda 
-            revisar la especificación del modelo, considerar variables adicionales, 
+            Los resultados de validación indican que el modelo actual <b>no es adecuado
+            para uso en producción</b> sin modificaciones sustanciales. Se recomienda
+            revisar la especificación del modelo, considerar variables adicionales,
             o explorar metodologías alternativas antes de su implementación.
             """
 
         if limitations:
             conclusion += f"""
             <br/><br/>
-            Es crítico abordar las {len(limitations)} limitaciones identificadas antes 
+            Es crítico abordar las {len(limitations)} limitaciones identificadas antes
             de tomar decisiones basadas en las predicciones del modelo.
             """
 
