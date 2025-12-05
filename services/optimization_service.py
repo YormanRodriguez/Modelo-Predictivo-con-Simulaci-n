@@ -43,6 +43,15 @@ class ClimateProjectionContext:
     hist_end: pd.Timestamp
     log_callback: Callable | None = None
 
+@dataclass
+class ModelEvaluationContext:
+    """Contexto para evaluación de métricas del modelo."""
+
+    order: tuple[int, int, int]
+    seasonal_order: tuple[int, int, int, int]
+    n_test: int
+    pct_validacion: float
+
 class OptimizationService:
     """
     Servicio de optimización de parámetros SARIMAX.
@@ -1089,13 +1098,13 @@ class OptimizationService:
             log_callback("=" * 80)
 
     def _evaluate_single_model(self,
-                serie_original: pd.Series,
-                order: tuple[int, int, int],
-                seasonal_order: tuple[int, int, int, int],
-                transformation: str,
-                exog_df: pd.DataFrame | None) -> dict[str, Any] | None:
+                          serie_original: pd.Series,
+                          order: tuple[int, int, int],
+                          seasonal_order: tuple[int, int, int, int],
+                          transformation: str,
+                          exog_df: pd.DataFrame | None) -> dict[str, Any] | None:
         """
-        Evaluar un modelo SARIMAX individual  .
+        Evaluar un modelo SARIMAX individual.
 
         Estrategia de validación:
         - Train/test split adaptativo (20-30% test según cantidad de datos)
@@ -1113,174 +1122,258 @@ class OptimizationService:
             Dict con métricas del modelo o None si falla
 
         """
-        observaciones_mayor_60 = 60
-        observaciones_mayor_36 = 36
-        meses = 12
         try:
-            # Calcular porcentaje de validación adaptativo
-            n_obs = len(serie_original)
-            if n_obs >= observaciones_mayor_60:
-                pct_validacion = 0.30
-            elif n_obs >= observaciones_mayor_36:
-                pct_validacion = 0.25
-            else:
-                pct_validacion = 0.20
-
-            n_test = max(6, int(n_obs * pct_validacion))
-
-            # Dividir en train/test
-            train_original = serie_original[:-n_test]
-            test_original = serie_original[-n_test:]
-
-            if len(train_original) < meses:
+            # Preparar datos de entrenamiento y prueba
+            train_data = self._prepare_train_test_split(serie_original, transformation)
+            if train_data is None:
                 return None
 
-            # Aplicar transformación a la serie SAIDI
-            self.scaler = None
-            self.transformation_params = {}
-
-            train_transformed, _ = self._apply_transformation(
-                train_original.to_numpy(), transformation,
+            # Preparar variables exógenas
+            exog_data = self._prepare_exogenous_variables(
+                exog_df, train_data["train_original"], train_data["test_original"],
             )
-            train_transformed_series = pd.Series(train_transformed, index=train_original.index)
-
-            # ========== PREPARAR EXÓGENAS SIN ESCALAR (VALIDACIÓN ESTRICTA) ==========
-            exog_train = None
-            exog_test = None
-
-            if exog_df is not None:
-                try:
-                    train_index = train_original.index
-                    test_index = test_original.index
-
-                    # VALIDACIÓN 1: Verificar que exog_df contiene TODAS las fechas necesarias
-                    missing_train = [idx for idx in train_index if idx not in exog_df.index]
-                    missing_test = [idx for idx in test_index if idx not in exog_df.index]
-
-                    if missing_train or missing_test:
-                        # Rechazar: faltan fechas
-                        return None
-
-                    # VALIDACIÓN 2: Extraer subconjuntos con .loc (garantiza alineación)
-                    exog_train = exog_df.loc[train_index].copy()
-                    exog_test = exog_df.loc[test_index].copy()
-
-                    # VALIDACIÓN 3: Verificar que NO hay NaN
-                    if exog_train is not None and exog_train.isna().any().any():
-                        return None
-                    if exog_test is not None and exog_test.isna().any().any():
-                        return None
-
-                    # VALIDACIÓN 4: Verificar dimensiones correctas
-                    if len(exog_train) != len(train_original) or len(exog_test) != n_test:
-                        return None
-
-                    # VALIDACIÓN 5: Verificar que no hay infinitos
-                    if np.isinf(exog_train.to_numpy()).any() or np.isinf(exog_test.to_numpy()).any():
-                        return None
-
-                except (KeyError, ValueError, TypeError) as e:
-                    # Cualquier error en preparación: rechazar modelo
-                    self.logger.debug("Error preparing exogenous variables: %s", e)
-                    return None
-
-            try:
-                model = SARIMAX(
-                    train_transformed_series,
-                    exog=exog_train,  # EN ESCALA ORIGINAL
-                    order=order,
-                    seasonal_order=seasonal_order,
-                    enforce_stationarity=True,
-                    enforce_invertibility=True,
-                )
-
-                # Fit con maxiter limitado (timeout implícito)
-                results = model.fit(disp=False, maxiter=50)
-
-            except (ValueError, np.linalg.LinAlgError, RuntimeError) as e:
-                # Convergencia fallida, parámetros inválidos, etc.
-                self.logger.debug("Model fitting failed: %s", e)
+            if exog_data is None and exog_df is not None:
                 return None
 
-            # ==================== PREDECIR EN TEST ====================
-            try:
-                pred = results.get_forecast(steps=n_test, exog=exog_test)  # EN ESCALA ORIGINAL
-                pred_mean_transformed = pred.predicted_mean
-
-            except (ValueError, KeyError) as e:
-                # Error en forecast
-                self.logger.debug("Forecast failed: %s", e)
+            # Entrenar modelo
+            results = self._fit_sarimax_model(
+                train_data["train_transformed_series"],
+                exog_data["exog_train"] if exog_data else None,
+                order,
+                seasonal_order,
+            )
+            if results is None:
                 return None
 
-            # ==================== REVERTIR TRANSFORMACIÓN ====================
-            try:
-                pred_mean_original = self._inverse_transformation(
-                    pred_mean_transformed.to_numpy(), transformation,
-                )
-            except (ValueError, TypeError) as e:
-                self.logger.debug("Inverse transformation failed: %s", e)
+            # Realizar predicción
+            predictions = self._forecast_and_inverse_transform(
+                results,
+                train_data["n_test"],
+                exog_data["exog_test"] if exog_data else None,
+                transformation,
+            )
+            if predictions is None:
                 return None
 
-            # ==================== CALCULAR MÉTRICAS ====================
-            test_values = test_original.to_numpy()
-            pred_values = pred_mean_original
-
-            # RMSE (Root Mean Squared Error)
-            rmse = np.sqrt(mean_squared_error(test_values, pred_values))
-
-            # MAE (Mean Absolute Error)
-            mae = np.mean(np.abs(test_values - pred_values))
-
-            # MAPE (Mean Absolute Percentage Error)
-            epsilon = 1e-8
-            mape = np.mean(np.abs((test_values - pred_values) /
-                                (test_values + epsilon))) * 100
-
-            # R² Score
-            ss_res = np.sum((test_values - pred_values) ** 2)
-            ss_tot = np.sum((test_values - np.mean(test_values)) ** 2)
-            r2_score = 1 - (ss_res / (ss_tot + epsilon))
-
-            # Precisión final (inversa del MAPE)
-            precision_final = max(0.0, min(100.0, (1 - mape/100) * 100))
-
-            # VALIDACIÓN: Verificar que métricas son válidas
-            if np.isnan(precision_final) or np.isinf(precision_final):
-                return None
-
-            if np.isnan(rmse) or np.isinf(rmse):
-                return None
-
-            # Penalización por complejidad del modelo
-            complexity_penalty = sum(order) + sum(seasonal_order[:3])
-            composite_score = rmse + (complexity_penalty * 0.05)
-
-            # Score de estabilidad
-            stability_score = self._calculate_stability_numpy(
-                test_values, pred_values, precision_final, mape,
+            # Calcular métricas
+            eval_context = ModelEvaluationContext(
+                order=order,
+                seasonal_order=seasonal_order,
+                n_test=train_data["n_test"],
+                pct_validacion=train_data["pct_validacion"],
             )
 
-            # Retornar métricas completas
-            return {
-                "rmse": rmse,
-                "mae": mae,
-                "mape": mape,
-                "r2_score": r2_score,
-                "precision_final": precision_final,
-                "aic": results.aic,
-                "bic": results.bic,
-                "composite_score": composite_score,
-                "n_params": complexity_penalty,
-                "n_test": n_test,
-                "stability_score": stability_score,
-                "validation_pct": pct_validacion * 100,
-                "exog_scaled": False,
-            }
+            return self._calculate_model_metrics(
+                train_data["test_original"],
+                predictions,
+                results,
+                eval_context,
+            )
 
         except (ValueError, TypeError, KeyError) as e:
-            # Cualquier error no controlado: rechazar modelo
             self.logger.debug("Unexpected error in model evaluation: %s", e)
             return None
+
+    def _prepare_train_test_split(self,
+                                serie_original: pd.Series,
+                                transformation: str) -> dict[str, Any] | None:
+        """Preparar división train/test y aplicar transformación."""
+        n_obs = len(serie_original)
+
+        observaciones_mayor = 60
+        observaciones_menor = 36
+        # Calcular porcentaje de validación adaptativo
+        if n_obs >= observaciones_mayor:
+            pct_validacion = 0.30
+        elif n_obs >= observaciones_menor:
+            pct_validacion = 0.25
+        else:
+            pct_validacion = 0.20
+
+        n_test = max(6, int(n_obs * pct_validacion))
+
+        # Dividir en train/test
+        train_original = serie_original[:-n_test]
+        test_original = serie_original[-n_test:]
+
+        meses = 12
+        if len(train_original) < meses:
+            return None
+
+        # Aplicar transformación
+        self.scaler = None
+        self.transformation_params = {}
+
+        train_transformed, _ = self._apply_transformation(
+            train_original.to_numpy(), transformation,
+        )
+        train_transformed_series = pd.Series(train_transformed, index=train_original.index)
+
+        return {
+            "train_original": train_original,
+            "test_original": test_original,
+            "train_transformed_series": train_transformed_series,
+            "n_test": n_test,
+            "pct_validacion": pct_validacion,
+        }
+
+    def _prepare_exogenous_variables(self,
+                                exog_df: pd.DataFrame | None,
+                                train_original: pd.Series,
+                                test_original: pd.Series) -> dict[str, pd.DataFrame] | None:
+        """Preparar y validar variables exógenas."""
+        if exog_df is None:
+            return None
+
+        try:
+            train_index = train_original.index
+            test_index = test_original.index
+
+            # Validar cobertura de fechas
+            if not self._validate_exog_coverage(exog_df, train_index, test_index):
+                return None
+
+            # Extraer subconjuntos
+            exog_train = exog_df.loc[train_index].copy()
+            exog_test = exog_df.loc[test_index].copy()
+
+            # Validar calidad de datos
+            if not self._validate_exog_quality(exog_train, exog_test, len(train_original), len(test_original)):
+                return None
+
+        except (KeyError, ValueError, TypeError) as e:
+            self.logger.debug("Error preparing exogenous variables: %s", e)
+            return None
+        else:
+            return {"exog_train": exog_train, "exog_test": exog_test}
+
+    def _validate_exog_coverage(self,
+                                exog_df: pd.DataFrame,
+                                train_index: pd.DatetimeIndex,
+                                test_index: pd.DatetimeIndex) -> bool:
+        """Validar que exógenas cubren todas las fechas necesarias."""
+        missing_train = [idx for idx in train_index if idx not in exog_df.index]
+        missing_test = [idx for idx in test_index if idx not in exog_df.index]
+        return not (missing_train or missing_test)
+
+    def _validate_exog_quality(self,
+                          exog_train: pd.DataFrame,
+                          exog_test: pd.DataFrame,
+                          expected_train_len: int,
+                          expected_test_len: int) -> bool:
+        """Validar calidad de datos exógenos (sin NaN, infinitos, dimensiones correctas)."""
+        # Verificar que no hay NaN
+        has_no_nan = not (exog_train.isna().any().any() or exog_test.isna().any().any())
+
+        # Verificar dimensiones correctas
+        has_correct_dims = (len(exog_train) == expected_train_len and
+                            len(exog_test) == expected_test_len)
+
+        # Verificar que no hay infinitos
+        has_no_inf = not (np.isinf(exog_train.to_numpy()).any() or
+                        np.isinf(exog_test.to_numpy()).any())
+
+        return has_no_nan and has_correct_dims and has_no_inf
+
+    def _fit_sarimax_model(self,
+                        train_series: pd.Series,
+                        exog_train: pd.DataFrame | None,
+                        order: tuple[int, int, int],
+                        seasonal_order: tuple[int, int, int, int]) -> Any | None:
+        """Ajustar modelo SARIMAX."""
+        try:
+            model = SARIMAX(
+                train_series,
+                exog=exog_train,
+                order=order,
+                seasonal_order=seasonal_order,
+                enforce_stationarity=True,
+                enforce_invertibility=True,
+            )
+
+            return model.fit(disp=False, maxiter=50)
+
+        except (ValueError, np.linalg.LinAlgError, RuntimeError) as e:
+            self.logger.debug("Model fitting failed: %s", e)
+            return None
+
+    def _forecast_and_inverse_transform(self,
+                                    results: Any,
+                                    n_test: int,
+                                    exog_test: pd.DataFrame | None,
+                                    transformation: str) -> np.ndarray | None:
+        """Realizar forecast y revertir transformación."""
+        try:
+            # Forecast
+            pred = results.get_forecast(steps=n_test, exog=exog_test)
+            pred_mean_transformed = pred.predicted_mean
+
+            # Revertir transformación
+            pred_mean_original = self._inverse_transformation(
+                pred_mean_transformed.to_numpy(), transformation,
+            )
+
+        except (ValueError, KeyError, TypeError) as e:
+            self.logger.debug("Forecast or inverse transformation failed: %s", e)
+            return None
+        else:
+            return pred_mean_original
+
+    def _calculate_model_metrics(self,
+                            test_original: pd.Series,
+                            predictions: np.ndarray,
+                            results: Any,
+                            context: ModelEvaluationContext) -> dict[str, Any] | None:
+        """Calcular todas las métricas del modelo."""
+        test_values = test_original.to_numpy()
+
+        # Calcular métricas básicas
+        rmse = np.sqrt(mean_squared_error(test_values, predictions))
+        mae = np.mean(np.abs(test_values - predictions))
+
+        epsilon = 1e-8
+        mape = np.mean(np.abs((test_values - predictions) / (test_values + epsilon))) * 100
+
+        # R² Score
+        ss_res = np.sum((test_values - predictions) ** 2)
+        ss_tot = np.sum((test_values - np.mean(test_values)) ** 2)
+        r2_score = 1 - (ss_res / (ss_tot + epsilon))
+
+        # Precisión final
+        precision_final = max(0.0, min(100.0, (1 - mape/100) * 100))
+
+        # Validar métricas
+        if not self._validate_metrics(precision_final, rmse):
+            return None
+
+        # Métricas de complejidad y estabilidad
+        complexity_penalty = sum(context.order) + sum(context.seasonal_order[:3])
+        composite_score = rmse + (complexity_penalty * 0.05)
+        stability_score = self._calculate_stability_numpy(
+            test_values, predictions, precision_final, mape,
+        )
+
+        return {
+            "rmse": rmse,
+            "mae": mae,
+            "mape": mape,
+            "r2_score": r2_score,
+            "precision_final": precision_final,
+            "aic": results.aic,
+            "bic": results.bic,
+            "composite_score": composite_score,
+            "n_params": complexity_penalty,
+            "n_test": context.n_test,
+            "stability_score": stability_score,
+            "validation_pct": context.pct_validacion * 100,
+            "exog_scaled": False,
+        }
+
+    def _validate_metrics(self, precision_final: float, rmse: float) -> bool:
+        """Validar que las métricas son valores válidos."""
+        is_precision_valid = not (np.isnan(precision_final) or np.isinf(precision_final))
+        is_rmse_valid = not (np.isnan(rmse) or np.isinf(rmse))
+        return is_precision_valid and is_rmse_valid
 
 
     def _calculate_stability_numpy(self,
