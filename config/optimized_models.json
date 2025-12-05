@@ -66,26 +66,26 @@
     "quality": "excellent"
   },
   "SAIDI_C": {
-    "transformation": "standard",
+    "transformation": "sqrt",
     "order": [
       0,
       1,
       0
     ],
     "seasonal_order": [
+      2,
       1,
-      1,
-      1,
+      4,
       12
     ],
-    "precision_final": 58.11082533316382,
-    "rmse": 0.34281187879020786,
-    "mape": 41.88917466683618,
-    "r2_score": -0.5540599474255847,
+    "precision_final": 66.25357584964317,
+    "rmse": 0.30422457017690224,
+    "mape": 33.746424150356816,
+    "r2_score": -0.22389628181415122,
     "with_exogenous": true,
-    "stability_score": 23.244330133265528,
-    "optimization_date": "2025-12-05 14:27:41",
-    "quality": "good"
+    "stability_score": 26.50143033985727,
+    "optimization_date": "2025-11-23 16:04:24",
+    "quality": "excellent"
   },
   "SAIDI_Cens": {
     "transformation": "sqrt",
