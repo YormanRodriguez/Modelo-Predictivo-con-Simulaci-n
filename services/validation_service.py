@@ -16,12 +16,12 @@ from scipy import stats
 from sklearn.metrics import mean_squared_error
 from sklearn.preprocessing import StandardScaler
 from statsmodels.tsa.statespace.sarimax import SARIMAX
+
 # En la sección de imports (línea ~18)
 from services.climate_simulation_service import (
     ClimateSimulationService,
     SimulationConfig,  # ← AGREGAR ESTO
 )
-from services.climate_simulation_service import ClimateSimulationService
 
 warnings.filterwarnings("ignore")
 
@@ -35,6 +35,35 @@ class ValidationMetricsParams:
     with_exogenous: bool
     pct_validacion: float
     n_test: int
+
+@dataclass
+class VariableProcessingContext:
+    """Contexto para procesar una variable exógena individual."""
+
+    var_code: str
+    var_nombre: str
+    climate_data: pd.DataFrame
+    climate_column_mapping: dict
+    historico: pd.DataFrame
+    overlap_mask: pd.Series
+    overlap_months: int
+    regional_code: str
+
+# Agregar al inicio del archivo con los otros dataclasses
+@dataclass
+class ValidationPlotConfig:
+    """Configuración para generar gráfica de validación."""
+
+    datos_entrenamiento: pd.Series
+    datos_validacion: pd.Series
+    predicciones_validacion: pd.Series
+    order: tuple
+    seasonal_order: tuple
+    metricas: dict
+    pct_validacion: float
+    transformation: str
+    exog_info: dict | None = None
+    simulation_config: dict | None = None
 
 class ValidationError(Exception):
     """Error general en el proceso de validación."""
@@ -640,7 +669,7 @@ class ValidationService:
                     progress_callback(95, "Generando grafica de validacion...")
 
                 # Generar grafica con datos en escala ORIGINAL
-                plot_path = self._generar_grafica_validacion(
+                plot_config = ValidationPlotConfig(
                     datos_entrenamiento=datos_entrenamiento_original,
                     datos_validacion=datos_validacion_original,
                     predicciones_validacion=predicciones_validacion,
@@ -652,6 +681,8 @@ class ValidationService:
                     exog_info=exog_info,
                     simulation_config=simulation_config if simulation_applied else None,
                 )
+
+                plot_path = self._generar_grafica_validacion(plot_config)
 
                 if progress_callback:
                     progress_callback(100, "Validacion completada exitosamente")
@@ -718,19 +749,33 @@ class ValidationService:
             msg = "Debe proporcionar file_path o df_prepared"
             raise ValidationDataError(msg)
 
-    def _ensure_datetime_index(self, df: pd.DataFrame) -> pd.DataFrame:
-            """Asegura que el DataFrame tenga un índice datetime."""
-            if isinstance(df.index, pd.DatetimeIndex):
-                return df
+    def _ensure_datetime_index(self, df: pd.DataFrame, log_callback=None) -> pd.DataFrame:
+        """Asegurar que el DataFrame tenga un índice datetime."""
+        if isinstance(df.index, pd.DatetimeIndex):
+            return df
 
-            if "Fecha" in df.columns:
-                df = df.copy()
-                df["Fecha"] = pd.to_datetime(df["Fecha"])
-                return df.set_index("Fecha")
-
+        # Para datos SAIDI
+        if "Fecha" in df.columns:
             df = df.copy()
-            df.iloc[:, 0] = pd.to_datetime(df.iloc[:, 0])
-            return df.set_index(df.columns[0])
+            df["Fecha"] = pd.to_datetime(df["Fecha"])
+            return df.set_index("Fecha")
+
+        # Para datos climáticos
+        fecha_col = self._find_date_column(df)
+        if fecha_col is not None:
+            try:
+                df = df.copy()
+                df[fecha_col] = pd.to_datetime(df[fecha_col])
+                return df.set_index(fecha_col)
+            except (ValueError, TypeError, KeyError) as e:
+                if log_callback:
+                    log_callback(f"ERROR convirtiendo índice: {e!s}")
+                return None
+
+        # Fallback: usar primera columna
+        df = df.copy()
+        df.iloc[:, 0] = pd.to_datetime(df.iloc[:, 0])
+        return df.set_index(df.columns[0])
 
     def _find_saidi_column(self, df: pd.DataFrame) -> str:
             """Busca y retorna el nombre de la columna SAIDI."""
@@ -1034,223 +1079,378 @@ class ValidationService:
         """
         try:
             # Validaciones iniciales
-            if climate_data is None or climate_data.empty:
-                if log_callback:
-                    log_callback("Sin datos climáticos disponibles")
+            validation_result = self._validate_initial_inputs(
+                climate_data, regional_code, log_callback,
+            )
+            if not validation_result:
                 return None, None
 
-            if not regional_code or regional_code not in self.REGIONAL_EXOG_VARS:
+            # Validar y preparar índice datetime
+            climate_data = self._ensure_datetime_index(climate_data, log_callback)
+            if climate_data is None:
                 if log_callback:
-                    log_callback(f"Regional {regional_code} sin variables definidas")
+                    log_callback("ERROR: No se pudo procesar índice de fechas")
                 return None, None
 
-            if log_callback:
-                log_callback(f"Preparando variables para {regional_code}")
-                log_callback("MODO: SIN ESCALADO (valores originales)")
-
-            # ========== VALIDAR ÍNDICE DATETIME ==========
-            if not isinstance(climate_data.index, pd.DatetimeIndex):
-                # Buscar columna de fecha
-                fecha_col = None
-                for col in ["fecha", "Fecha", "date", "Date", "month_date"]:
-                    if col in climate_data.columns:
-                        fecha_col = col
-                        break
-
-                if fecha_col is None:
-                    if log_callback:
-                        log_callback("ERROR: No se encontró columna de fecha válida")
-                    return None, None
-
-                try:
-                    climate_data = climate_data.copy()
-                    climate_data[fecha_col] = pd.to_datetime(climate_data[fecha_col])
-                    climate_data = climate_data.set_index(fecha_col)
-                except (ValueError, TypeError, KeyError) as e:
-                    if log_callback:
-                        log_callback(f"ERROR convirtiendo índice: {e!s}")
-                    return None, None
-
-            # Verificar que ahora es DatetimeIndex
-            if not isinstance(climate_data.index, pd.DatetimeIndex):
-                if log_callback:
-                    log_callback("ERROR: Formato de fecha inválido")
+            # Análisis de cobertura temporal
+            overlap_info = self._analyze_temporal_coverage(
+                climate_data, df_saidi, log_callback,
+            )
+            if overlap_info is None:
                 return None, None
 
-            # ========== ANÁLISIS DE COBERTURA TEMPORAL ==========
-            historico = df_saidi[df_saidi["SAIDI"].notna() if "SAIDI" in df_saidi.columns else df_saidi["SAIDI Historico"].notna()]
-
-            saidi_start = historico.index[0]
-            saidi_end = historico.index[-1]
-            clima_start = climate_data.index[0]
-            clima_end = climate_data.index[-1]
-
-            # Calcular periodo de overlap
-            overlap_start = max(saidi_start, clima_start)
-            overlap_end = min(saidi_end, clima_end)
-
-            if overlap_start > overlap_end:
-                if log_callback:
-                    log_callback("ERROR: Sin overlap entre SAIDI y CLIMA")
-                return None, None
-
-            overlap_mask = (historico.index >= overlap_start) & (historico.index <= overlap_end)
-            overlap_months = overlap_mask.sum()
-
-            # Validar overlap mínimo (12 meses)
-            meses = 12
-            if overlap_months < meses:
-                if log_callback:
-                    log_callback(f"ERROR: Overlap insuficiente ({overlap_months} < 12 meses)")
-                return None, None
-
-            if log_callback:
-                log_callback(f"SAIDI: {saidi_start.strftime('%Y-%m')} a {saidi_end.strftime('%Y-%m')} ({len(historico)} meses)")
-                log_callback(f"CLIMA: {clima_start.strftime('%Y-%m')} a {clima_end.strftime('%Y-%m')} ({len(climate_data)} meses)")
-                log_callback(f"OVERLAP: {overlap_start.strftime('%Y-%m')} a {overlap_end.strftime('%Y-%m')} ({overlap_months} meses)")
-
-            # ========== MAPEO AUTOMÁTICO DE COLUMNAS ==========
-            exog_vars_config = self.REGIONAL_EXOG_VARS[regional_code]
-
-            # Normalizar nombres disponibles
-            available_cols_normalized = {}
-            for col in climate_data.columns:
-                normalized = col.lower().strip().replace(" ", "_").replace("-", "_")
-                available_cols_normalized[normalized] = col
-
-            # Mapear cada variable con búsqueda flexible
-            climate_column_mapping = {}
-
-            mejor_modelo = 2
-            for var_code in exog_vars_config:  # CORREGIDO: SIM118 - removido .keys()
-                var_normalized = var_code.lower().strip()
-
-                # Intento 1: Coincidencia exacta
-                if var_normalized in available_cols_normalized:
-                    climate_column_mapping[var_code] = available_cols_normalized[var_normalized]
-                    continue
-
-                # Intento 2: Coincidencia parcial (al menos 2 partes)
-                var_parts = var_normalized.split("_")
-                best_match = None
-                best_match_score = 0
-
-                for norm_col, orig_col in available_cols_normalized.items():
-                    matches = sum(1 for part in var_parts if part in norm_col)
-                    if matches > best_match_score:
-                        best_match_score = matches
-                        best_match = orig_col
-
-                if best_match_score >= mejor_modelo:
-                    climate_column_mapping[var_code] = best_match
-
+            # Mapeo de columnas
+            climate_column_mapping = self._map_climate_columns(
+                climate_data, regional_code, log_callback,
+            )
             if not climate_column_mapping:
-                if log_callback:
-                    log_callback("ERROR: No se pudo mapear ninguna variable")
                 return None, None
 
-            # ========== PREPARACIÓN DE VARIABLES SIN ESCALADO ==========
-            exog_df = pd.DataFrame(index=historico.index)
-            exog_info = {}
-            cobertura_minima = 80
+            # Preparar variables exógenas
+            exog_df, exog_info = self._build_exogenous_dataframe(
+                climate_data,
+                df_saidi,
+                regional_code,
+                climate_column_mapping,
+                overlap_info,
+                log_callback,
+            )
 
-            for var_code, var_nombre in exog_vars_config.items():
-                climate_col = climate_column_mapping.get(var_code)
-
-                if not climate_col or climate_col not in climate_data.columns:
-                    continue
-
-                try:
-                    # Extraer serie del clima
-                    var_series = climate_data[climate_col].copy()
-
-                    # Crear serie alineada (inicialmente vacía)
-                    aligned_series = pd.Series(index=historico.index, dtype=float)
-
-                    # Llenar datos donde hay overlap REAL
-                    for date in historico.index:
-                        if date in var_series.index:
-                            aligned_series[date] = var_series.loc[date]
-
-                    # VALIDACIÓN: Cobertura en overlap
-                    overlap_data = aligned_series[overlap_mask]
-                    datos_reales_overlap = overlap_data.notna().sum()
-                    overlap_pct = (datos_reales_overlap / overlap_months) * 100
-
-                    # RECHAZAR si cobertura < 80%
-                    if overlap_pct < cobertura_minima:
-                        if log_callback:
-                            log_callback(f"X RECHAZADA {var_code}: cobertura {overlap_pct:.1f}% < 80%")
-                        continue
-
-                    # VALIDACIÓN: Varianza en overlap
-                    var_std = overlap_data.std()
-
-                    if pd.isna(var_std) or var_std == 0:
-                        if log_callback:
-                            log_callback(f"RECHAZADA {var_code}: varianza = 0")
-                        continue
-
-                    # Forward-fill para fechas futuras
-                    aligned_series = aligned_series.fillna(method="ffill")
-
-                    # Backward-fill (máx 3 meses) para fechas pasadas
-                    aligned_series = aligned_series.fillna(method="bfill", limit=3)
-
-                    # Si AÚN hay NaN, rellenar con media del overlap
-                    if aligned_series.isna().any():  # CORREGIDO: PD003 - .isnull() -> .isna()
-                        mean_overlap = overlap_data.mean()
-                        aligned_series = aligned_series.fillna(mean_overlap)
-
-                    # VERIFICACIÓN FINAL
-                    final_nan = aligned_series.isna().sum()  # CORREGIDO: PD003 - .isnull() -> .isna()
-                    if final_nan > 0:
-                        if log_callback:
-                            log_callback(f"RECHAZADA {var_code}: {final_nan} NaN finales")
-                        continue
-
-                    # ===== GUARDAR EN ESCALA ORIGINAL =====
-                    exog_df[var_code] = aligned_series
-
-                    exog_info[var_code] = {
-                        "nombre": var_nombre,
-                        "columna_clima": climate_col,
-                        "correlacion": self._get_correlation_for_var(var_code, regional_code),
-                        "scaled": False,  # CRÍTICO
-                        "datos_reales_overlap": int(datos_reales_overlap),
-                        "overlap_coverage_pct": float(overlap_pct),
-                        "varianza_overlap": float(var_std),
-                    }
-
-                    if log_callback:
-                        log_callback(f"✓ {var_code} -> ACEPTADA ({overlap_pct:.1f}% cobertura, escala original)")
-
-                except (ValueError, TypeError, KeyError, IndexError) as e:  # CORREGIDO: BLE001 - Exception específicas
-                    if log_callback:
-                        log_callback(f"X ERROR {var_code}: {e}")
-                    continue
-
-            # VALIDACIÓN FINAL
-            if exog_df.empty or exog_df.shape[1] == 0:
+            if exog_df is None or exog_df.empty or exog_df.shape[1] == 0:
                 if log_callback:
                     log_callback("ERROR: Ninguna variable aceptada")
                 return None, None
 
-            if log_callback:
-                log_callback("=" * 60)
-                log_callback(f"Variables preparadas: {len(exog_df.columns)}")
-                log_callback("ESCALA: ORIGINAL (sin StandardScaler)")
-                log_callback("Rangos:")
-                for col in exog_df.columns:
-                    log_callback(f"    - {col}: [{exog_df[col].min():.2f}, {exog_df[col].max():.2f}]")
-                log_callback("=" * 60)
+            self._log_final_summary(exog_df, log_callback)
+            return exog_df, exog_info if exog_info else None
 
-        except (ValueError, TypeError, KeyError, AttributeError, IndexError) as e:  # CORREGIDO: BLE001
+        except (ValueError, TypeError, KeyError, AttributeError, IndexError) as e:
             if log_callback:
                 log_callback(f"ERROR CRÍTICO: {e!s}")
             return None, None
-        else:  # CORREGIDO: TRY300 - return movido al else
-            return exog_df, exog_info if exog_info else None
+
+
+    def _validate_initial_inputs(self,
+                                climate_data: pd.DataFrame | None,
+                                regional_code: str | None,
+                                log_callback) -> bool:
+        """Validar datos climáticos y código regional."""
+        if climate_data is None or climate_data.empty:
+            if log_callback:
+                log_callback("Sin datos climáticos disponibles")
+            return False
+
+        if not regional_code or regional_code not in self.REGIONAL_EXOG_VARS:
+            if log_callback:
+                log_callback(f"Regional {regional_code} sin variables definidas")
+            return False
+
+        if log_callback:
+            log_callback(f"Preparando variables para {regional_code}")
+            log_callback("MODO: SIN ESCALADO (valores originales)")
+
+        return True
+
+    def _find_date_column(self, climate_data: pd.DataFrame) -> str | None:
+        """Encontrar columna de fecha en el DataFrame."""
+        date_column_names = ["fecha", "Fecha", "date", "Date", "month_date"]
+        for col in date_column_names:
+            if col in climate_data.columns:
+                return col
+        return None
+
+
+    def _analyze_temporal_coverage(self,
+                                climate_data: pd.DataFrame,
+                                df_saidi: pd.DataFrame,
+                                log_callback) -> dict | None:
+        """Analizar cobertura temporal entre SAIDI y datos climáticos."""
+        historico = self._get_historical_saidi(df_saidi)
+
+        saidi_start = historico.index[0]
+        saidi_end = historico.index[-1]
+        clima_start = climate_data.index[0]
+        clima_end = climate_data.index[-1]
+
+        # Calcular periodo de overlap
+        overlap_start = max(saidi_start, clima_start)
+        overlap_end = min(saidi_end, clima_end)
+
+        if overlap_start > overlap_end:
+            if log_callback:
+                log_callback("ERROR: Sin overlap entre SAIDI y CLIMA")
+            return None
+
+        overlap_mask = (historico.index >= overlap_start) & (historico.index <= overlap_end)
+        overlap_months = overlap_mask.sum()
+
+        # Validar overlap mínimo (12 meses)
+        meses = 12
+        if overlap_months < meses:
+            if log_callback:
+                log_callback(f"ERROR: Overlap insuficiente ({overlap_months} < 12 meses)")
+            return None
+
+        if log_callback:
+            log_callback(f"SAIDI: {saidi_start.strftime('%Y-%m')} a {saidi_end.strftime('%Y-%m')} ({len(historico)} meses)")
+            log_callback(f"CLIMA: {clima_start.strftime('%Y-%m')} a {clima_end.strftime('%Y-%m')} ({len(climate_data)} meses)")
+            log_callback(f"OVERLAP: {overlap_start.strftime('%Y-%m')} a {overlap_end.strftime('%Y-%m')} ({overlap_months} meses)")
+
+        return {
+            "historico": historico,
+            "overlap_mask": overlap_mask,
+            "overlap_months": overlap_months,
+            "overlap_start": overlap_start,
+            "overlap_end": overlap_end,
+        }
+
+
+    def _get_historical_saidi(self, df_saidi: pd.DataFrame) -> pd.DataFrame:
+        """Obtener datos históricos de SAIDI."""
+        if "SAIDI" in df_saidi.columns:
+            return df_saidi[df_saidi["SAIDI"].notna()]
+        return df_saidi[df_saidi["SAIDI Historico"].notna()]
+
+
+    def _map_climate_columns(self,
+                            climate_data: pd.DataFrame,
+                            regional_code: str,
+                            log_callback) -> dict:
+        """Mapear variables exógenas a columnas del clima."""
+        exog_vars_config = self.REGIONAL_EXOG_VARS[regional_code]
+
+        # Normalizar nombres disponibles
+        available_cols_normalized = self._normalize_column_names(climate_data)
+
+        # Mapear cada variable
+        climate_column_mapping = {}
+        for var_code in exog_vars_config:
+            matched_col = self._find_matching_column(
+                var_code, available_cols_normalized,
+            )
+            if matched_col:
+                climate_column_mapping[var_code] = matched_col
+
+        if not climate_column_mapping and log_callback:
+            log_callback("ERROR: No se pudo mapear ninguna variable")
+
+        return climate_column_mapping
+
+
+    def _normalize_column_names(self, climate_data: pd.DataFrame) -> dict:
+        """Normalizar nombres de columnas para búsqueda flexible."""
+        normalized = {}
+        for col in climate_data.columns:
+            norm_name = col.lower().strip().replace(" ", "_").replace("-", "_")
+            normalized[norm_name] = col
+        return normalized
+
+
+    def _find_matching_column(self,
+                            var_code: str,
+                            available_cols_normalized: dict) -> str | None:
+        """Encontrar columna que coincida con el código de variable."""
+        var_normalized = var_code.lower().strip()
+
+        # Intento 1: Coincidencia exacta
+        if var_normalized in available_cols_normalized:
+            return available_cols_normalized[var_normalized]
+
+        # Intento 2: Coincidencia parcial (al menos 2 partes)
+        var_parts = var_normalized.split("_")
+        best_match = None
+        best_match_score = 0
+
+        for norm_col, orig_col in available_cols_normalized.items():
+            matches = sum(1 for part in var_parts if part in norm_col)
+            if matches > best_match_score:
+                best_match_score = matches
+                best_match = orig_col
+
+        return best_match if best_match_score >= 2 else None
+
+
+    def _build_exogenous_dataframe(self,
+                                climate_data: pd.DataFrame,
+                                df_saidi: pd.DataFrame,
+                                regional_code: str,
+                                climate_column_mapping: dict,
+                                overlap_info: dict,
+                                log_callback) -> tuple[pd.DataFrame | None, dict | None]:
+        """Construir DataFrame de variables exógenas."""
+        exog_vars_config = self.REGIONAL_EXOG_VARS[regional_code]
+        historico = overlap_info["historico"]
+        overlap_mask = overlap_info["overlap_mask"]
+        overlap_months = overlap_info["overlap_months"]
+
+        exog_df = pd.DataFrame(index=historico.index)
+        exog_info = {}
+
+        for var_code, var_nombre in exog_vars_config.items():
+            result = self._process_single_variable(
+                var_code,
+                var_nombre,
+                climate_data,
+                climate_column_mapping,
+                historico,
+                overlap_mask,
+                overlap_months,
+                regional_code,
+                log_callback,
+            )
+
+            if result is not None:
+                aligned_series, var_info = result
+                exog_df[var_code] = aligned_series
+                exog_info[var_code] = var_info
+
+        return (exog_df, exog_info) if not exog_df.empty else (None, None)
+
+
+    def _process_single_variable(self,
+                                var_code: str,
+                                var_nombre: str,
+                                climate_data: pd.DataFrame,
+                                climate_column_mapping: dict,
+                                historico: pd.DataFrame,
+                                overlap_mask: pd.Series,
+                                overlap_months: int,
+                                regional_code: str,
+                                log_callback) -> tuple[pd.Series, dict] | None:
+        """Procesar una variable exógena individual."""
+        climate_col = climate_column_mapping.get(var_code)
+
+        if not climate_col or climate_col not in climate_data.columns:
+            return None
+
+        try:
+            # Extraer y alinear serie
+            var_series = climate_data[climate_col].copy()
+            aligned_series = self._align_series_to_index(
+                var_series, historico.index,
+            )
+
+            # Validar cobertura
+            overlap_data = aligned_series[overlap_mask]
+            coverage_valid, overlap_pct = self._validate_coverage(
+                overlap_data, overlap_months, var_code, log_callback,
+            )
+            if not coverage_valid:
+                return None
+
+            # Validar varianza
+            if not self._validate_variance(overlap_data, var_code, log_callback):
+                return None
+
+            # Rellenar valores faltantes
+            aligned_series = self._fill_missing_values(
+                aligned_series, overlap_data,
+            )
+
+            # Verificación final
+            final_nan = aligned_series.isna().sum()
+            if final_nan > 0:
+                if log_callback:
+                    log_callback(f"RECHAZADA {var_code}: {final_nan} NaN finales")
+                return None
+
+            var_info = {
+                "nombre": var_nombre,
+                "columna_clima": climate_col,
+                "correlacion": self._get_correlation_for_var(var_code, regional_code),
+                "scaled": False,
+                "datos_reales_overlap": int(overlap_data.notna().sum()),
+                "overlap_coverage_pct": float(overlap_pct),
+                "varianza_overlap": float(overlap_data.std()),
+            }
+
+            if log_callback:
+                log_callback(f"✓ {var_code} -> ACEPTADA ({overlap_pct:.1f}% cobertura, escala original)")
+
+            return aligned_series, var_info
+
+        except (ValueError, TypeError, KeyError, IndexError) as e:
+            if log_callback:
+                log_callback(f"X ERROR {var_code}: {e}")
+            return None
+
+
+    def _align_series_to_index(self,
+                            var_series: pd.Series,
+                            target_index: pd.Index) -> pd.Series:
+        """Alinear serie a un índice objetivo."""
+        aligned_series = pd.Series(index=target_index, dtype=float)
+
+        for date in target_index:
+            if date in var_series.index:
+                aligned_series[date] = var_series.loc[date]
+
+        return aligned_series
+
+
+    def _validate_coverage(self,
+                        overlap_data: pd.Series,
+                        overlap_months: int,
+                        var_code: str,
+                        log_callback) -> tuple[bool, float]:
+        """Validar cobertura mínima de datos."""
+        datos_reales_overlap = overlap_data.notna().sum()
+        overlap_pct = (datos_reales_overlap / overlap_months) * 100
+
+        overlap_min = 80
+        if overlap_pct < overlap_min:
+            if log_callback:
+                log_callback(f"X RECHAZADA {var_code}: cobertura {overlap_pct:.1f}% < 80%")
+            return False, overlap_pct
+
+        return True, overlap_pct
+
+
+    def _validate_variance(self,
+                        overlap_data: pd.Series,
+                        var_code: str,
+                        log_callback) -> bool:
+        """Validar que la variable tenga varianza."""
+        var_std = overlap_data.std()
+
+        if pd.isna(var_std) or var_std == 0:
+            if log_callback:
+                log_callback(f"RECHAZADA {var_code}: varianza = 0")
+            return False
+
+        return True
+
+
+    def _fill_missing_values(self,
+                            aligned_series: pd.Series,
+                            overlap_data: pd.Series) -> pd.Series:
+        """Rellenar valores faltantes en la serie."""
+        # Forward-fill para fechas futuras
+        aligned_series = aligned_series.fillna(method="ffill")
+
+        # Backward-fill (máx 3 meses) para fechas pasadas
+        aligned_series = aligned_series.fillna(method="bfill", limit=3)
+
+        # Si AÚN hay NaN, rellenar con media del overlap
+        if aligned_series.isna().any():
+            mean_overlap = overlap_data.mean()
+            aligned_series = aligned_series.fillna(mean_overlap)
+
+        return aligned_series
+
+
+    def _log_final_summary(self, exog_df: pd.DataFrame, log_callback) -> None:
+        """Registrar resumen final de variables preparadas."""
+        if not log_callback:
+            return
+
+        log_callback("=" * 60)
+        log_callback(f"Variables preparadas: {len(exog_df.columns)}")
+        log_callback("ESCALA: ORIGINAL (sin StandardScaler)")
+        log_callback("Rangos:")
+        for col in exog_df.columns:
+            log_callback(f"    - {col}: [{exog_df[col].min():.2f}, {exog_df[col].max():.2f}]")
+        log_callback("=" * 60)
 
     def _align_exog_to_saidi(self,
                         exog_series: pd.DataFrame,
@@ -1436,300 +1636,239 @@ class ValidationService:
         except (ValueError, TypeError, ZeroDivisionError, FloatingPointError):
             return 0.0
 
-    def _generar_grafica_validacion(self,
-                          datos_entrenamiento: pd.Series,
-                          datos_validacion: pd.Series,
-                          predicciones_validacion: pd.Series,
-                          order: tuple,
-                          seasonal_order: tuple,
-                          metricas: dict,
-                          pct_validacion: float,
-                          transformation: str,
-                          exog_info: dict | None = None,
-                          simulation_config: dict | None = None) -> str | None:
+    def _generar_grafica_validacion(
+        self,
+        config: ValidationPlotConfig,
+    ) -> str | None:
         """Generar grafica de validacion con metricas alineadas y soporte COMPLETO para simulacion."""
         try:
-            if datos_entrenamiento.empty or datos_validacion.empty or predicciones_validacion.empty:
+            # Validar datos
+            if not self._validar_datos_grafica(config):
                 return None
 
-            temp_dir = tempfile.gettempdir()
-            timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")  # noqa: UP017
-            plot_path = Path(temp_dir) / f"saidi_validation_{timestamp}.png"
-
-            plt.style.use("default")
+            # Crear archivo y figura
+            plot_path = self._crear_archivo_temporal("saidi_validation")
             fig = plt.figure(figsize=(16, 10), dpi=100)
+            plt.style.use("default")
 
-            # Detectar si hay simulacion
-            simulation_applied = simulation_config and simulation_config.get("enabled", False)
+            # Detectar simulación
+            simulation_applied = config.simulation_config and config.simulation_config.get("enabled", False)
 
-            # Grafica principal - datos de entrenamiento
-            plt.plot(datos_entrenamiento.index, datos_entrenamiento.to_numpy(),
-                    label=f"Datos de Entrenamiento ({100-int(pct_validacion*100)}% - {len(datos_entrenamiento)} obs.)",
-                    color="blue", linewidth=3, marker="o", markersize=5)
+            # Graficar componentes
+            self._plot_training_data(config)
+            self._plot_validation_and_predictions(config, simulation_applied=simulation_applied)
+            self._plot_info_boxes(config, simulation_applied=simulation_applied)
 
-            ultimo_punto_entrenamiento = datos_entrenamiento.iloc[-1]
-            fecha_ultimo_entrenamiento = datos_entrenamiento.index[-1]
+            # Configurar ejes y título
+            self._configurar_ejes_validacion(config)
+            self._configurar_titulo_validacion(simulation_applied=simulation_applied)
 
-            # Conectar entrenamiento con validacion
-            fechas_validacion_extendidas = [fecha_ultimo_entrenamiento, *datos_validacion.index]
-            valores_validacion_extendidos = [ultimo_punto_entrenamiento, *datos_validacion.to_numpy()]
-            valores_prediccion_extendidos = [ultimo_punto_entrenamiento, *predicciones_validacion.to_numpy()]
-
-            # Datos reales de validacion
-            plt.plot(fechas_validacion_extendidas, valores_validacion_extendidos,
-                    label=f"Datos Reales de Validacion ({int(pct_validacion*100)}% - {len(datos_validacion)} obs.)",
-                    color="navy", linewidth=3, linestyle=":", marker="s", markersize=7)
-
-            # ========== PREDICCIONES CON ETIQUETA SEGÚN SIMULACIÓN ==========
-            if simulation_applied:
-                summary = simulation_config.get("summary", {})
-                escenario_icon = "🌡️"
-                escenario_name = summary.get("escenario", "N/A")
-                exog_label = f" [{escenario_icon} SIMULADO: {escenario_name}]"
-                pred_color = "red"
-                pred_linestyle = "-"
-                pred_linewidth = 3.5
-            elif exog_info:
-                exog_label = " [+EXOG]"
-                pred_color = "orange"
-                pred_linestyle = "-"
-                pred_linewidth = 3
-            else:
-                exog_label = ""
-                pred_color = "orange"
-                pred_linestyle = "-"
-                pred_linewidth = 3
-
-            plt.plot(fechas_validacion_extendidas, valores_prediccion_extendidos,
-                    label=f"Predicciones del Modelo ({transformation.upper()}){exog_label}",
-                    color=pred_color, linewidth=pred_linewidth, linestyle=pred_linestyle,
-                    marker="^", markersize=7, zorder=5)
-
-            # Etiquetas de valores - datos de entrenamiento
-            for x, y in zip(datos_entrenamiento.index, datos_entrenamiento.to_numpy(), strict=False):
-                plt.text(x, y+0.3, f"{y:.1f}", color="blue", fontsize=8,
-                        ha="center", va="bottom", rotation=0, alpha=0.9, weight="bold")
-
-            # Etiquetas de valores - datos reales de validacion
-            for x, y in zip(datos_validacion.index, datos_validacion.to_numpy(), strict=False):
-                plt.text(x, y+0.4, f"{y:.1f}", color="navy", fontsize=9,
-                        ha="center", va="bottom", rotation=0, weight="bold")
-
-            # Etiquetas de valores - predicciones
-            for x, y in zip(predicciones_validacion.index, predicciones_validacion.to_numpy(), strict=False):
-                plt.text(x, y-0.5, f"{y:.1f}", color=pred_color, fontsize=9,
-                        ha="center", va="top", rotation=0, weight="bold")
-
-            # Area de error entre real y prediccion
-            plt.fill_between(fechas_validacion_extendidas,
-                            valores_validacion_extendidos,
-                            valores_prediccion_extendidos,
-                            alpha=0.2, color="red",
-                            label="Area de Error")
-
-            # Linea divisoria entre entrenamiento y validacion
-            if not datos_entrenamiento.empty:
-                separacion_x = datos_entrenamiento.index[-1]
-                plt.axvline(x=separacion_x, color="gray", linestyle="--", alpha=0.8, linewidth=2)
-
-                y_limits = plt.ylim()
-                y_pos = y_limits[1] * 0.75
-                plt.text(separacion_x, y_pos, "Division\nEntrenamiento/Validacion",
-                        ha="center", va="center", color="gray", fontsize=10, weight="bold",
-                        bbox={"boxstyle": "round,pad=0.3", "facecolor": "lightgray", "alpha": 0.9, "edgecolor": "gray"})
-
-            # ========== CUADRO DE METRICAS ==========
-            info_metricas = (f"METRICAS VALIDACION\n"
-                            f"RMSE: {metricas['rmse']:.3f} | MAE: {metricas['mae']:.3f}\n"
-                            f"MAPE: {metricas['mape']:.1f}% | R2: {metricas['r2_score']:.3f}\n"
-                            f"Precision: {metricas['precision_final']:.1f}%")
-
-            plt.text(0.01, 0.24, info_metricas, transform=plt.gca().transAxes,
-                    fontsize=10, verticalalignment="top",
-                    bbox={"boxstyle": "round,pad=0.5", "facecolor": "lightblue", "alpha": 0.9, "edgecolor": "navy"})
-
-            # ========== CUADRO DE ESTABILIDAD Y COMPLEJIDAD ==========
-            stability = metricas.get("stability_score", 0)
-            complexity = metricas.get("complexity", 0)
-            composite = metricas.get("composite_score", 0)
-
-            info_estabilidad = (f"ESTABILIDAD & COMPLEJIDAD\n"
-                            f"Stability Score: {stability:.1f}/100\n"
-                            f"Complejidad: {complexity} params\n"
-                            f"Composite Score: {composite:.3f}")
-
-            plt.text(0.01, 0.09, info_estabilidad, transform=plt.gca().transAxes,
-                    fontsize=9, verticalalignment="top",
-                    bbox={"boxstyle": "round,pad=0.4", "facecolor": "wheat", "alpha": 0.9, "edgecolor": "orange"})
-
-            # ========== CUADRO DE PARAMETROS DEL MODELO ==========
-            info_parametros = (f"PARAMETROS + {transformation.upper()}\n"
-                            f"order = {order} | seasonal = {seasonal_order}\n"
-                            f"Train: {len(datos_entrenamiento)} | Valid: {len(datos_validacion)}")
-
-            if simulation_applied:
-                summary = simulation_config.get("summary", {})
-                info_parametros += f"\nSIMULACION: {summary.get('escenario', 'N/A')}"
-                info_parametros += f"\nAlcance: {simulation_config.get('alcance_meses', 'N/A')} meses"
-            elif exog_info:
-                info_parametros += f"\nVariables exogenas: {len(exog_info)}"
-
-            plt.text(0.985, 0.08, info_parametros, transform=plt.gca().transAxes,
-                    fontsize=9, verticalalignment="top", horizontalalignment="right",
-                    bbox={"boxstyle": "round,pad=0.4", "facecolor": "lightgreen", "alpha": 0.9, "edgecolor": "green"})
-
-            # ========== CUADRO DE INFORMACIÓN DE SIMULACIÓN ==========
-            if simulation_applied:
-                summary = simulation_config.get("summary", {})
-                escenario = summary.get("escenario", "N/A")
-                dias_simulados = summary.get("dias_simulados", "N/A")
-                alcance = simulation_config.get("alcance_meses", "N/A")
-
-                info_simulacion = (f"SIMULACIÓN CLIMÁTICA\n"
-                                f"Escenario: {escenario}\n"
-                                f"Días simulados: {dias_simulados}\n"
-                                f"Alcance: {alcance} mes(es)\n"
-                                f"Condiciones HIPOTÉTICAS")
-
-                plt.text(0.985, 0.30, info_simulacion, transform=plt.gca().transAxes,
-                        fontsize=9, verticalalignment="top", horizontalalignment="right",
-                        bbox={"boxstyle": "round,pad=0.5", "facecolor": "#FFEBEE", "alpha": 0.95,
-                                "edgecolor": "#F44336", "linewidth": 2},
-                        color="darkred", weight="bold")
-
-            # ========== INDICADOR DE CALIDAD ==========
-            precision = metricas["precision_final"]
-
-            precision_excelente = 60
-            precision_buena = 40
-            precision_aceptable = 20
-
-            if precision >= precision_excelente:
-                interpretacion = "EXCELENTE"
-                color_interp = "green"
-            elif precision >= precision_buena:
-                interpretacion = "BUENO"
-                color_interp = "limegreen"
-            elif precision >= precision_aceptable:
-                interpretacion = "ACEPTABLE"
-                color_interp = "orange"
-            else:
-                interpretacion = "LIMITADO"
-                color_interp = "red"
-
-            # Si hay simulacion, agregar indicador
-            if simulation_applied:
-                interpretacion += "\n[SIMULADO]"
-
-            plt.text(0.985, 0.97, f"{interpretacion}\n{precision:.1f}%",
-                    transform=plt.gca().transAxes, fontsize=12, weight="bold",
-                    verticalalignment="top", horizontalalignment="right",
-                    bbox={"boxstyle": "round,pad=0.5", "facecolor": color_interp, "alpha": 0.8, "edgecolor": "black"},
-                    color="black")
-
-            # ========== CONFIGURAR EJES ==========
-            ax = plt.gca()
-
-            if not datos_entrenamiento.empty and not datos_validacion.empty:
-                x_min = datos_entrenamiento.index[0]
-                x_max = datos_validacion.index[-1]
-            elif not datos_entrenamiento.empty:
-                x_min = datos_entrenamiento.index[0]
-                x_max = datos_entrenamiento.index[-1]
-            else:
-                all_dates = [*datos_entrenamiento.index, *datos_validacion.index]
-                x_min = min(all_dates)
-                x_max = max(all_dates)
-
-            plt.xlim(x_min, x_max)
-
-            all_values = [*datos_entrenamiento.to_numpy(), *datos_validacion.to_numpy(), *predicciones_validacion.to_numpy()]
-            y_min = min(all_values) * 0.92
-            y_max = max(all_values) * 1.08
-            plt.ylim(y_min, y_max)
-
-            # Configurar etiquetas de fechas
-            meses_espanol = ["Ene", "Feb", "Mar", "Abr", "May", "Jun",
-                            "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"]
-
-            ax.xaxis.set_major_locator(mdates.MonthLocator(interval=1))
-
-            fechas_mensuales = pd.date_range(start=x_min, end=x_max, freq="MS")
-            labels_mensuales = []
-            meses = 12
-
-            for fecha in fechas_mensuales:
-                mes_nombre = meses_espanol[fecha.month - 1]
-                if fecha.month == 1 or len(fechas_mensuales) <= meses:
-                    labels_mensuales.append(f"{mes_nombre}\n{fecha.year}")
-                else:
-                    labels_mensuales.append(mes_nombre)
-
-            if len(fechas_mensuales) > 0:
-                ax.set_xticks(fechas_mensuales)
-                ax.set_xticklabels(labels_mensuales, rotation=45, ha="right", fontsize=9)
-
-            # ========== TITULO CON INFO DE SIMULACION ==========
-            title_text = f"Validacion Modelo: SARIMAX{order}x{seasonal_order} + {transformation.upper()}"
-
-            if simulation_applied:
-                summary = simulation_config.get("summary", {})
-                escenario_name = summary.get("escenario", "N/A").upper()
-                title_text += f" [SIMULACIÓN: {escenario_name}]"
-            elif exog_info:
-                title_text += " [+EXOG]"
-
-            plt.title(title_text, fontsize=18, fontweight="bold", pad=25)
-
-            plt.xlabel("Fecha", fontsize=14, weight="bold")
-            plt.ylabel("SAIDI (minutos)", fontsize=14, weight="bold")
-
-            plt.legend(fontsize=11, loc="upper center", bbox_to_anchor=(0.25, -0.08),
-                    ncol=2, frameon=True, shadow=True, fancybox=True)
-
-            plt.grid(True, alpha=0.4, linestyle="-", linewidth=0.8)
-
-            plt.tight_layout()
-            plt.subplots_adjust(top=0.93, bottom=0.35, left=0.038, right=0.787)
-
-            # ========== NOTA AL PIE CON INFO DE SIMULACION ==========
-            footer_text = f"Transformacion: {transformation.upper()} - Precision calculada como OptimizationService"
-            footer_color = "lightyellow"
-            footer_edge_color = "darkblue"
-            footer_text_color = "darkblue"
-            footer_linewidth = 1
-
-            if simulation_applied:
-                summary = simulation_config.get("summary", {})
-                escenario = summary.get("escenario", "N/A").upper()
-                dias = summary.get("dias_simulados", "N/A")
-                alcance = simulation_config.get("alcance_meses", "N/A")
-
-                footer_text = f"VALIDACIÓN CON SIMULACIÓN CLIMÁTICA - Escenario: {escenario} ({dias} días, {alcance} meses)"
-                footer_text += "Métricas bajo condiciones HIPOTÉTICAS simuladas"
-                footer_color = "#FFEBEE"
-                footer_edge_color = "#F44336"
-                footer_text_color = "darkred"
-                footer_linewidth = 2
-            elif exog_info:
-                footer_text += f" - Con {len(exog_info)} variables exogenas"
-
-            footer_text += f" - Validacion: {metricas['validation_pct']:.0f}% test"
-
-            plt.figtext(0.5, 0.02, footer_text,
-                    ha="center", fontsize=12, style="italic", color=footer_text_color, weight="bold",
-                    bbox={"boxstyle": "round,pad=0.4", "facecolor": footer_color, "alpha": 0.9,
-                            "edgecolor": footer_edge_color, "linewidth": footer_linewidth})
-
+            # Guardar
             plt.savefig(plot_path, dpi=100, bbox_inches="tight", facecolor="white", edgecolor="none")
             plt.close(fig)
+
+            self.plot_file_path = str(plot_path)
+            return str(plot_path)
 
         except (ValueError, KeyError, IndexError, OSError) as e:
             print(f"Error generando grafica de validacion: {e}")
             return None
+
+    def _validar_datos_grafica(self, config: ValidationPlotConfig) -> bool:
+        """Validar que los datos de la gráfica sean válidos."""
+        return (
+            config.datos_entrenamiento is not None
+            and len(config.datos_entrenamiento) > 0
+            and config.datos_validacion is not None
+            and len(config.datos_validacion) > 0
+            and config.predicciones_validacion is not None
+            and len(config.predicciones_validacion) > 0
+        )
+
+
+    def _crear_archivo_temporal(self, prefix: str) -> Path:
+        """Crear archivo temporal para gráfica."""
+        temp_dir = tempfile.gettempdir()
+        timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")  # noqa: UP017
+        filename = f"{prefix}_{timestamp}.png"
+        return Path(temp_dir) / filename
+
+
+    def _plot_training_data(self, config: ValidationPlotConfig) -> None:
+        """Graficar datos de entrenamiento."""
+        plt.plot(
+            config.datos_entrenamiento.index,
+            config.datos_entrenamiento.values,
+            color="#2E86AB",
+            linewidth=2,
+            label="Datos Históricos (Entrenamiento)",
+            marker="o",
+            markersize=4,
+            alpha=0.8,
+        )
+
+
+    def _plot_validation_and_predictions(
+    self,
+    config: ValidationPlotConfig,
+    *,  # Forzar keyword-only arguments
+    simulation_applied: bool,
+    ) -> None:
+        """Graficar datos de validación y predicciones."""
+        # Datos reales de validación
+        plt.plot(
+            config.datos_validacion.index,
+            config.datos_validacion.values,
+            color="#A23B72",
+            linewidth=2,
+            label="Datos Reales (Validación)",
+            marker="o",
+            markersize=5,
+            alpha=0.9,
+        )
+
+        # Predicciones
+        pred_label = (
+            "Predicciones (Con Simulación Climática)"
+            if simulation_applied
+            else "Predicciones del Modelo"
+        )
+        pred_color = "#FF6B35" if simulation_applied else "#F18F01"
+
+        plt.plot(
+            config.predicciones_validacion.index,
+            config.predicciones_validacion.values,
+            color=pred_color,
+            linewidth=2.5,
+            label=pred_label,
+            marker="s",
+            markersize=5,
+            linestyle="--",
+            alpha=0.9,
+        )
+
+    def _plot_info_boxes(
+    self,
+    config: ValidationPlotConfig,
+    *,  # Forzar keyword-only arguments
+    simulation_applied: bool,
+    ) -> None:
+        """Graficar cajas de información con métricas."""
+        # Preparar texto de métricas
+        metrics_text = self._format_metrics_text(config.metricas)
+
+        # Preparar texto de parámetros
+        params_text = self._format_params_text(config)
+
+        # Caja de métricas
+        plt.text(
+            0.02, 0.98,
+            metrics_text,
+            transform=plt.gca().transAxes,
+            fontsize=9,
+            verticalalignment="top",
+            bbox={"boxstyle": "round,pad=0.8", "facecolor": "lightyellow", "alpha": 0.9},
+            family="monospace",
+        )
+
+        # Caja de parámetros
+        plt.text(
+            0.98, 0.98,
+            params_text,
+            transform=plt.gca().transAxes,
+            fontsize=9,
+            verticalalignment="top",
+            horizontalalignment="right",
+            bbox={"boxstyle": "round,pad=0.8", "facecolor": "lightblue", "alpha": 0.9},
+            family="monospace",
+        )
+
+        # Advertencia de simulación si aplica
+        if simulation_applied:
+            self._plot_simulation_warning(config)
+
+
+    def _format_metrics_text(self, metricas: dict) -> str:
+        """Formatear texto de métricas."""
+        return (
+            f"MÉTRICAS DE VALIDACIÓN\n"
+            f"{'='*25}\n"
+            f"RMSE:      {metricas['rmse']:.2f} min\n"
+            f"MAE:       {metricas['mae']:.2f} min\n"
+            f"MAPE:      {metricas['mape']:.1f}%\n"
+            f"R²:        {metricas['r2_score']:.3f}\n"
+            f"Precisión: {metricas['precision_final']:.1f}%\n"
+            f"Validación: {metricas['validation_pct']:.0f}% ({metricas['n_test']} meses)"
+        )
+
+
+    def _format_params_text(self, config: ValidationPlotConfig) -> str:
+        """Formatear texto de parámetros."""
+        return (
+            f"PARÁMETROS DEL MODELO\n"
+            f"{'='*25}\n"
+            f"Order: {config.order}\n"
+            f"Seasonal: {config.seasonal_order}\n"
+            f"Transformación: {config.transformation.upper()}\n"
+            f"Variables Exógenas: {'Sí' if config.exog_info else 'No'}"
+        )
+
+
+    def _plot_simulation_warning(self, config: ValidationPlotConfig) -> None:
+        """Graficar advertencia de simulación."""
+        if not config.simulation_config:
+            return
+
+        summary = config.simulation_config.get("summary", {})
+        escenario = summary.get("escenario", "N/A")
+        dias = summary.get("dias_simulados", "N/A")
+
+        warning_text = (
+            f"SIMULACIÓN CLIMÁTICA APLICADA\n"
+            f"Escenario: {escenario}\n"
+            f"Días simulados: {dias}"
+        )
+
+        plt.text(
+            0.50, 0.02,
+            warning_text,
+            transform=plt.gca().transAxes,
+            fontsize=8,
+            verticalalignment="bottom",
+            horizontalalignment="center",
+            bbox={"boxstyle": "round,pad=0.6", "facecolor": "orange", "alpha": 0.8},
+            family="monospace",
+        )
+
+
+    def _configurar_ejes_validacion(self, config: ValidationPlotConfig) -> None:  # noqa: ARG002
+        """Configurar ejes de la gráfica."""
+        plt.xlabel("Fecha", fontsize=12, fontweight="bold")
+        plt.ylabel("SAIDI (minutos)", fontsize=12, fontweight="bold")
+        plt.legend(loc="best", fontsize=10, framealpha=0.9)
+        plt.grid(True, alpha=0.3, linestyle="--")
+
+        # Formatear fechas en eje X
+        ax = plt.gca()
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
+        ax.xaxis.set_major_locator(mdates.MonthLocator(interval=3))
+        plt.xticks(rotation=45, ha="right")
+
+        plt.tight_layout()
+
+
+    def _configurar_titulo_validacion(
+    self,
+    *,  # Forzar keyword-only arguments
+    simulation_applied: bool,
+    ) -> None:
+        """Configurar título de la gráfica."""
+        if simulation_applied:
+            titulo = "Validación del Modelo SARIMAX con Simulación Climática"
         else:
-            self.plot_file_path = str(plot_path)
-        return str(plot_path)
+            titulo = "Validación del Modelo SARIMAX"
+
+        plt.title(titulo, fontsize=14, fontweight="bold", pad=20)
 
     def cleanup_plot_file(self):
         """Limpiar archivo temporal de grafica."""
