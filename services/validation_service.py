@@ -16,7 +16,11 @@ from scipy import stats
 from sklearn.metrics import mean_squared_error
 from sklearn.preprocessing import StandardScaler
 from statsmodels.tsa.statespace.sarimax import SARIMAX
-
+# En la sección de imports (línea ~18)
+from services.climate_simulation_service import (
+    ClimateSimulationService,
+    SimulationConfig,  # ← AGREGAR ESTO
+)
 from services.climate_simulation_service import ClimateSimulationService
 
 warnings.filterwarnings("ignore")
@@ -746,7 +750,10 @@ class ValidationService:
 
 
     def _apply_climate_simulation(
-    self, exog_forecast_original, simulation_config, log_callback=None,
+    self,
+    exog_forecast_original,
+    simulation_config,
+    log_callback=None,
     ):
         """
         Aplicar simulación climática a variables SIN ESCALAR.
@@ -761,105 +768,215 @@ class ValidationService:
 
         """
         try:
-            # Validar que la simulación esté habilitada
-            if not simulation_config.get("enabled", False):
-                if log_callback:
-                    log_callback("Simulación NO habilitada, usando valores originales")
+            # Validar configuración
+            if not self._validate_simulation_config(simulation_config, log_callback):
                 return exog_forecast_original
 
-            if log_callback:
-                log_callback("=" * 60)
-                log_callback("APLICANDO SIMULACIÓN CLIMÁTICA EN VALIDACIÓN")
-                log_callback("=" * 60)
-                log_callback("   Entrada: valores originales SIN ESCALAR")
+            # Extraer parámetros
+            sim_params = self._extract_simulation_params(simulation_config)
 
-            escenario = simulation_config.get("scenario_name",
-                        simulation_config.get("escenario", "condiciones_normales"))
-
-            # Extraer configuración del slider
-            slider_adjustment = simulation_config.get("slider_adjustment", 0)
-            dias_base = simulation_config.get("dias_base", 30)
-            alcance_meses = simulation_config.get("alcance_meses", 3)
-            percentiles = simulation_config.get("percentiles", {})
-            regional_code = simulation_config.get("regional_code", "SAIDI_O")
-
-            # Validar que tengamos los datos necesarios
-            if not percentiles:
-                if log_callback:
-                    log_callback("ERROR: No hay percentiles disponibles para simulación")
-                    log_callback("Usando valores originales sin simulación")
+            # Validar percentiles
+            if not sim_params["percentiles"]:
+                self._log_missing_percentiles(log_callback)
                 return exog_forecast_original
 
-            if log_callback:
-                log_callback(f"   Escenario: {escenario}")
-                log_callback(f"   Regional: {regional_code}")
-                log_callback(f"   Slider: {slider_adjustment:+d} días sobre base de {dias_base}")
-                log_callback(f"   Alcance: {alcance_meses} mes(es)")
+            # Logging de configuración
+            self._log_simulation_config(sim_params, log_callback)
 
-            # Calcular factor de intensidad
-            dias_simulados = dias_base + slider_adjustment
-            intensity_adjustment = dias_simulados / dias_base if dias_base > 0 else 1.0
-
-            if log_callback:
-                log_callback(f"   Intensidad calculada: {intensity_adjustment:.2f}x")
-
-            # ========== APLICAR SIMULACIÓN ==========
-            try:
-                exog_simulated = self.simulation_service.apply_simulation(
-                    exog_forecast=exog_forecast_original,
-                    scenario_name=escenario,
-                    intensity_adjustment=intensity_adjustment,
-                    alcance_meses=alcance_meses,
-                    percentiles=percentiles,
-                    regional_code=regional_code,
-                )
-
-            except (ValueError, TypeError, KeyError, AttributeError, RuntimeError) as sim_error:
-                # CORREGIDO: BLE001 - Excepciones específicas
-                if log_callback:
-                    log_callback(f"ERROR en apply_simulation: {sim_error!s}")
-                    log_callback(traceback.format_exc())
-                    log_callback("FALLBACK: Usando valores originales sin simulación")
-                return exog_forecast_original
-            else:
-                # CORREGIDO: TRY300 - Código de éxito movido al else
-                if log_callback:
-                    log_callback("   ✓ Simulación aplicada correctamente en validación")
-
-                    # Mostrar cambios en el primer mes
-                    if alcance_meses >= 1 and len(exog_simulated) > 0:
-                        log_callback("\n Cambios en primer mes (validación):")
-                        for col in exog_simulated.columns:
-                            try:
-                                original_val = exog_forecast_original.iloc[0][col]
-                                simulated_val = exog_simulated.iloc[0][col]
-
-                                if original_val != 0:
-                                    change_pct = ((simulated_val - original_val) / original_val) * 100
-                                else:
-                                    change_pct = 0
-
-                                log_callback(
-                                    f"     - {col}: {original_val:.2f} → {simulated_val:.2f} "
-                                    f"({change_pct:+.1f}%)",
-                                )
-                            except (ValueError, TypeError, KeyError, IndexError):
-                                # CORREGIDO: BLE001 - Excepciones específicas
-                                log_callback(f"     - {col}: Error mostrando cambio")
-
-                    log_callback("\n   Salida: valores SIMULADOS (escala original)")
-                    log_callback("=" * 60)
-
-                return exog_simulated
+            # Aplicar simulación
+            exog_simulated = self._execute_simulation(
+                exog_forecast_original,
+                sim_params,
+                log_callback,
+            )
 
         except (ValueError, TypeError, KeyError, AttributeError) as e:
-            # CORREGIDO: BLE001 - Excepciones específicas para el try principal
             if log_callback:
                 log_callback(f"ERROR CRÍTICO en _apply_climate_simulation: {e!s}")
                 log_callback(traceback.format_exc())
-
-            # En caso de error total, retornar valores originales
             return exog_forecast_original
+        else:
+            return exog_simulated
+
+
+    def _validate_simulation_config(
+        self,
+        simulation_config,
+        log_callback,
+    ) -> bool:
+        """
+        Validar que la simulación esté habilitada.
+
+        Returns:
+            bool: True si está habilitada
+
+        """
+        if simulation_config.get("enabled", False):
+            return True
+
+        if log_callback:
+            log_callback("Simulación NO habilitada, usando valores originales")
+
+        return False
+
+
+    def _extract_simulation_params(self, simulation_config: dict) -> dict:
+        """
+        Extraer parámetros de configuración de simulación.
+
+        Returns:
+            dict: Parámetros extraídos y procesados
+
+        """
+        escenario = simulation_config.get(
+            "scenario_name",
+            simulation_config.get("escenario", "condiciones_normales"),
+        )
+
+        slider_adjustment = simulation_config.get("slider_adjustment", 0)
+        dias_base = simulation_config.get("dias_base", 30)
+        alcance_meses = simulation_config.get("alcance_meses", 3)
+        percentiles = simulation_config.get("percentiles", {})
+        regional_code = simulation_config.get("regional_code", "SAIDI_O")
+
+        # Calcular factor de intensidad
+        dias_simulados = dias_base + slider_adjustment
+        intensity_adjustment = dias_simulados / dias_base if dias_base > 0 else 1.0
+
+        return {
+            "escenario": escenario,
+            "slider_adjustment": slider_adjustment,
+            "dias_base": dias_base,
+            "alcance_meses": alcance_meses,
+            "percentiles": percentiles,
+            "regional_code": regional_code,
+            "intensity_adjustment": intensity_adjustment,
+        }
+
+
+    def _log_missing_percentiles(self, log_callback) -> None:
+        """Registrar error de percentiles faltantes."""
+        if not log_callback:
+            return
+
+        log_callback("ERROR: No hay percentiles disponibles para simulación")
+        log_callback("Usando valores originales sin simulación")
+
+
+    def _log_simulation_config(self, sim_params: dict, log_callback) -> None:
+        """Registrar configuración de simulación."""
+        if not log_callback:
+            return
+
+        log_callback("=" * 60)
+        log_callback("APLICANDO SIMULACIÓN CLIMÁTICA EN VALIDACIÓN")
+        log_callback("=" * 60)
+        log_callback("   Entrada: valores originales SIN ESCALAR")
+        log_callback(f"   Escenario: {sim_params['escenario']}")
+        log_callback(f"   Regional: {sim_params['regional_code']}")
+        log_callback(
+            f"   Slider: {sim_params['slider_adjustment']:+d} días "
+            f"sobre base de {sim_params['dias_base']}",
+        )
+        log_callback(f"   Alcance: {sim_params['alcance_meses']} mes(es)")
+        log_callback(f"   Intensidad calculada: {sim_params['intensity_adjustment']:.2f}x")
+
+
+    def _execute_simulation(
+    self,
+    exog_forecast_original,
+    sim_params: dict,
+    log_callback,
+    ):
+        """
+        Ejecutar la simulación climática.
+
+        Returns:
+            DataFrame con simulación aplicada
+
+        """
+        try:
+            # Crear objeto SimulationConfig
+            config = SimulationConfig(
+                scenario_name=sim_params["escenario"],
+                intensity_adjustment=sim_params["intensity_adjustment"],
+                alcance_meses=sim_params["alcance_meses"],
+                percentiles=sim_params["percentiles"],
+                regional_code=sim_params["regional_code"],
+            )
+
+            # Llamar con el objeto config (como en prediction_service)
+            exog_simulated = self.simulation_service.apply_simulation(
+                exog_forecast=exog_forecast_original,
+                config=config,  # ✓ Ahora usa el objeto SimulationConfig
+            )
+
+        except (ValueError, TypeError, KeyError, AttributeError, RuntimeError) as sim_error:
+            if log_callback:
+                log_callback(f"ERROR en apply_simulation: {sim_error!s}")
+                log_callback(traceback.format_exc())
+                log_callback("FALLBACK: Usando valores originales sin simulación")
+            return exog_forecast_original
+
+        else:
+            # Logging de éxito
+            self._log_simulation_success(
+                exog_forecast_original,
+                exog_simulated,
+                sim_params,
+                log_callback,
+            )
+            return exog_simulated
+
+
+    def _log_simulation_success(
+        self,
+        exog_original,
+        exog_simulated,
+        sim_params: dict,
+        log_callback,
+    ) -> None:
+        """Registrar éxito de simulación y cambios."""
+        if not log_callback:
+            return
+
+        log_callback("Simulación aplicada correctamente en validación")
+
+        # Mostrar cambios en el primer mes
+        if sim_params["alcance_meses"] >= 1 and len(exog_simulated) > 0:
+            self._log_first_month_changes(exog_original, exog_simulated, log_callback)
+
+        log_callback("\n   Salida: valores SIMULADOS (escala original)")
+        log_callback("=" * 60)
+
+
+    def _log_first_month_changes(
+        self,
+        exog_original,
+        exog_simulated,
+        log_callback,
+    ) -> None:
+        """Registrar cambios en el primer mes de simulación."""
+        log_callback("\n Cambios en primer mes (validación):")
+
+        for col in exog_simulated.columns:
+            try:
+                original_val = exog_original.iloc[0][col]
+                simulated_val = exog_simulated.iloc[0][col]
+
+                change_pct = (
+                    ((simulated_val - original_val) / original_val) * 100
+                    if original_val != 0
+                    else 0
+                )
+
+                log_callback(
+                    f"     - {col}: {original_val:.2f} → {simulated_val:.2f} "
+                    f"({change_pct:+.1f}%)",
+                )
+
+            except (ValueError, TypeError, KeyError, IndexError):
+                log_callback(f"     - {col}: Error mostrando cambio")
 
     def _get_transformation_for_regional(self, regional_code: str | None) -> str:
         """
@@ -1624,10 +1741,12 @@ class ValidationService:
             finally:
                 self.plot_file_path = None
 
-    def _diagnose_exog_coverage(self,
-                  serie_saidi: pd.Series,
-                  exog_df: pd.DataFrame,
-                  log_callback) -> bool:
+    def _diagnose_exog_coverage(
+    self,
+    serie_saidi: pd.Series,
+    exog_df: pd.DataFrame,
+    log_callback,
+    ) -> bool:
         """
         Diagnosticar cobertura temporal de variables exógenas.
 
@@ -1647,83 +1766,186 @@ class ValidationService:
 
         """
         try:
-            saidi_start = serie_saidi.index[0]
-            saidi_end = serie_saidi.index[-1]
-            exog_start = exog_df.index[0]
-            exog_end = exog_df.index[-1]
+            # Mostrar diagnóstico inicial
+            self._log_coverage_summary(serie_saidi, exog_df, log_callback)
 
-            if log_callback:
-                log_callback("=" * 60)
-                log_callback("DIAGNOSTICO DE COBERTURA EXOGENA")
-                log_callback("=" * 60)
-                log_callback(f"SAIDI: {saidi_start.strftime('%Y-%m')} a {saidi_end.strftime('%Y-%m')} ({len(serie_saidi)} obs)")
-                log_callback(f"EXOG:  {exog_start.strftime('%Y-%m')} a {exog_end.strftime('%Y-%m')} ({len(exog_df)} obs)")
+            # Ejecutar validaciones en secuencia
+            validations = [
+                self._validate_index_alignment(serie_saidi, exog_df, log_callback),
+                self._validate_no_nan_values(exog_df, log_callback),
+                self._validate_no_infinite_values(exog_df, log_callback),
+            ]
 
-            # 1. Verificar que los índices coinciden EXACTAMENTE
-            porcentaje_faltante = 20
-            if not exog_df.index.equals(serie_saidi.index):
-                if log_callback:
-                    log_callback("ADVERTENCIA: Indices no coinciden exactamente")
-
-                # Verificar fechas faltantes
-                missing_in_exog = [d for d in serie_saidi.index if d not in exog_df.index]
-
-                if missing_in_exog:
-                    pct_missing = len(missing_in_exog) / len(serie_saidi) * 100
-
-                    if log_callback:
-                        log_callback(f"Fechas SAIDI faltantes en EXOG: {len(missing_in_exog)} ({pct_missing:.1f}%)")
-
-                    # CRÍTICO: Si falta >20% de fechas, rechazar
-                    if pct_missing > porcentaje_faltante:
-                        if log_callback:
-                            log_callback("ERROR CRITICO: >20% de fechas faltantes")
-                            log_callback("Las variables exogenas NO cubren suficiente periodo historico")
-                        return False
-
-            # 2. Verificar que NO hay NaN en ninguna columna
-            if exog_df.isna().any().any():
-                nan_cols = exog_df.columns[exog_df.isna().any()].tolist()
-
-                if log_callback:
-                    log_callback("ERROR: Columnas con NaN encontradas:")
-                    for col in nan_cols:
-                        nan_count = exog_df[col].isna().sum()
-                        pct_nan = (nan_count / len(exog_df)) * 100
-                        log_callback(f"  - {col}: {nan_count} NaN ({pct_nan:.1f}%)")
-                    log_callback("Variables exogenas deben estar completamente rellenas")
-
+            # Si alguna validación crítica falla, retornar False
+            if not all(validations):
                 return False
 
-            # 3. Verificar valores infinitos
-            if np.isinf(exog_df.values).any():
-                if log_callback:
-                    log_callback("ERROR: Variables exogenas contienen valores infinitos")
-                return False
-
-            # 4. Verificar que hay varianza en las variables
-            zero_variance_vars = []
-            for col in exog_df.columns:
-                if exog_df[col].std() == 0:
-                    zero_variance_vars.append(col)
-
-            if zero_variance_vars and log_callback:
-                log_callback("ADVERTENCIA: Variables con varianza cero:")
-                for var in zero_variance_vars:
-                    log_callback(f"  - {var}")
-                log_callback("Estas variables no aportan informacion al modelo")
-                # No rechazar por esto, solo advertir
+            # Validación no crítica: verificar varianza
+            self._check_zero_variance_vars(exog_df, log_callback)
 
         except (IndexError, KeyError, ValueError, AttributeError) as e:
             if log_callback:
                 log_callback(f"ERROR durante diagnostico: {e}")
             return False
         else:
+            # CORREGIDO: Return movido al bloque else
             if log_callback:
                 log_callback("✓ Cobertura temporal y calidad de datos OK")
                 log_callback("=" * 60)
 
             return True
+
+
+    def _log_coverage_summary(
+        self,
+        serie_saidi: pd.Series,
+        exog_df: pd.DataFrame,
+        log_callback,
+    ) -> None:
+        """Mostrar resumen de cobertura temporal."""
+        if not log_callback:
+            return
+
+        saidi_start = serie_saidi.index[0]
+        saidi_end = serie_saidi.index[-1]
+        exog_start = exog_df.index[0]
+        exog_end = exog_df.index[-1]
+
+        log_callback("=" * 60)
+        log_callback("DIAGNOSTICO DE COBERTURA EXOGENA")
+        log_callback("=" * 60)
+        log_callback(
+            f"SAIDI: {saidi_start.strftime('%Y-%m')} a {saidi_end.strftime('%Y-%m')} "
+            f"({len(serie_saidi)} obs)",
+        )
+        log_callback(
+            f"EXOG:  {exog_start.strftime('%Y-%m')} a {exog_end.strftime('%Y-%m')} "
+            f"({len(exog_df)} obs)",
+        )
+
+
+    def _validate_index_alignment(
+        self,
+        serie_saidi: pd.Series,
+        exog_df: pd.DataFrame,
+        log_callback,
+    ) -> bool:
+        """
+        Validar que los índices coincidan exactamente.
+
+        Returns:
+            bool: True si la alineación es válida
+
+        """
+        # Si los índices son idénticos, validación exitosa
+        if exog_df.index.equals(serie_saidi.index):
+            return True
+
+        if log_callback:
+            log_callback("ADVERTENCIA: Indices no coinciden exactamente")
+
+        # Calcular fechas faltantes
+        missing_in_exog = [d for d in serie_saidi.index if d not in exog_df.index]
+
+        if not missing_in_exog:
+            return True
+
+        # Calcular porcentaje de datos faltantes
+        pct_missing = len(missing_in_exog) / len(serie_saidi) * 100
+
+        if log_callback:
+            log_callback(
+                f"Fechas SAIDI faltantes en EXOG: {len(missing_in_exog)} "
+                f"({pct_missing:.1f}%)",
+            )
+
+        # CRÍTICO: Rechazar si falta >20% de fechas
+        max_missing_pct = 20
+        if pct_missing > max_missing_pct:
+            if log_callback:
+                log_callback("ERROR CRITICO: >20% de fechas faltantes")
+                log_callback(
+                    "Las variables exogenas NO cubren suficiente periodo historico",
+                )
+            return False
+
+        return True
+
+
+    def _validate_no_nan_values(
+        self,
+        exog_df: pd.DataFrame,
+        log_callback,
+    ) -> bool:
+        """
+        Validar que no haya valores NaN en las columnas.
+
+        Returns:
+            bool: True si no hay NaN
+
+        """
+        if not exog_df.isna().any().any():
+            return True
+
+        # Identificar columnas con NaN
+        nan_cols = exog_df.columns[exog_df.isna().any()].tolist()
+
+        if log_callback:
+            log_callback("ERROR: Columnas con NaN encontradas:")
+            for col in nan_cols:
+                nan_count = exog_df[col].isna().sum()
+                pct_nan = (nan_count / len(exog_df)) * 100
+                log_callback(f"  - {col}: {nan_count} NaN ({pct_nan:.1f}%)")
+            log_callback("Variables exogenas deben estar completamente rellenas")
+
+        return False
+
+
+    def _validate_no_infinite_values(
+        self,
+        exog_df: pd.DataFrame,
+        log_callback,
+    ) -> bool:
+        """
+        Validar que no haya valores infinitos.
+
+        Returns:
+            bool: True si no hay infinitos
+
+        """
+        if not np.isinf(exog_df.values).any():
+            return True
+
+        if log_callback:
+            log_callback("ERROR: Variables exogenas contienen valores infinitos")
+
+        return False
+
+
+    def _check_zero_variance_vars(
+        self,
+        exog_df: pd.DataFrame,
+        log_callback,
+    ) -> None:
+        """
+        Verificar variables con varianza cero (validación no crítica).
+
+        Solo advierte, no falla la validación.
+        """
+        if not log_callback:
+            return
+
+        zero_variance_vars = [
+            col for col in exog_df.columns if exog_df[col].std() == 0
+        ]
+
+        if not zero_variance_vars:
+            return
+
+        log_callback("ADVERTENCIA: Variables con varianza cero:")
+        for var in zero_variance_vars:
+            log_callback(f"  - {var}")
+        log_callback("Estas variables no aportan informacion al modelo")
 
     def _get_correlation_for_var(self, var_code: str, regional_code: str) -> float:
         """
