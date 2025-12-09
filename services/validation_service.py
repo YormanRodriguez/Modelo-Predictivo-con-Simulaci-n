@@ -26,17 +26,6 @@ from services.climate_simulation_service import (
 warnings.filterwarnings("ignore")
 
 @dataclass
-class ValidationMetricsParams:
-    """Parámetros para el cálculo de métricas de validación."""
-
-    order: tuple
-    seasonal_order: tuple
-    transformation: str
-    with_exogenous: bool
-    pct_validacion: float
-    n_test: int
-
-@dataclass
 class VariableProcessingContext:
     """Contexto para procesar una variable exógena individual."""
 
@@ -48,6 +37,17 @@ class VariableProcessingContext:
     overlap_mask: pd.Series
     overlap_months: int
     regional_code: str
+
+@dataclass
+class ValidationMetricsParams:
+    """Parámetros para el cálculo de métricas de validación."""
+
+    order: tuple
+    seasonal_order: tuple
+    transformation: str
+    with_exogenous: bool
+    pct_validacion: float
+    n_test: int
 
 # Agregar al inicio del archivo con los otros dataclasses
 @dataclass
@@ -1078,56 +1078,98 @@ class ValidationService:
 
         """
         try:
-            # Validaciones iniciales
-            validation_result = self._validate_initial_inputs(
-                climate_data, regional_code, log_callback,
-            )
-            if not validation_result:
-                return None, None
-
-            # Validar y preparar índice datetime
-            climate_data = self._ensure_datetime_index(climate_data, log_callback)
-            if climate_data is None:
-                if log_callback:
-                    log_callback("ERROR: No se pudo procesar índice de fechas")
-                return None, None
-
-            # Análisis de cobertura temporal
-            overlap_info = self._analyze_temporal_coverage(
-                climate_data, df_saidi, log_callback,
-            )
-            if overlap_info is None:
-                return None, None
-
-            # Mapeo de columnas
-            climate_column_mapping = self._map_climate_columns(
-                climate_data, regional_code, log_callback,
-            )
-            if not climate_column_mapping:
-                return None, None
-
-            # Preparar variables exógenas
-            exog_df, exog_info = self._build_exogenous_dataframe(
-                climate_data,
-                df_saidi,
-                regional_code,
-                climate_column_mapping,
-                overlap_info,
-                log_callback,
+            # Ejecutar pipeline de preparación
+            pipeline_result = self._execute_exog_preparation_pipeline(
+                climate_data, df_saidi, regional_code, log_callback,
             )
 
-            if exog_df is None or exog_df.empty or exog_df.shape[1] == 0:
-                if log_callback:
-                    log_callback("ERROR: Ninguna variable aceptada")
+            if pipeline_result is None:
+                return None, None
+
+            exog_df, exog_info = pipeline_result
+
+            # Validar resultado final
+            if not self._validate_final_exog_result(exog_df, log_callback):
                 return None, None
 
             self._log_final_summary(exog_df, log_callback)
-            return exog_df, exog_info if exog_info else None
 
         except (ValueError, TypeError, KeyError, AttributeError, IndexError) as e:
             if log_callback:
                 log_callback(f"ERROR CRÍTICO: {e!s}")
             return None, None
+        else:
+            return exog_df, exog_info if exog_info else None
+
+
+    def _execute_exog_preparation_pipeline(
+        self,
+        climate_data: pd.DataFrame,
+        df_saidi: pd.DataFrame,
+        regional_code: str | None,
+        log_callback,
+    ) -> tuple[pd.DataFrame, dict] | None:
+        """
+        Ejecutar pipeline completo de preparación de variables exógenas.
+
+        Returns:
+            Tuple (exog_df, exog_info) o None si falla algún paso
+
+        """
+        # Paso 1: Validaciones iniciales
+        if not self._validate_initial_inputs(climate_data, regional_code, log_callback):
+            return None
+
+        # Paso 2: Preparar índice datetime
+        climate_data = self._ensure_datetime_index(climate_data, log_callback)
+        if climate_data is None:
+            if log_callback:
+                log_callback("ERROR: No se pudo procesar índice de fechas")
+            return None
+
+        # Paso 3: Análisis de cobertura temporal
+        overlap_info = self._analyze_temporal_coverage(
+            climate_data, df_saidi, log_callback,
+        )
+        if overlap_info is None:
+            return None
+
+        # Paso 4: Mapeo de columnas
+        climate_column_mapping = self._map_climate_columns(
+            climate_data, regional_code, log_callback,
+        )
+        if not climate_column_mapping:
+            return None
+
+        # Paso 5: Construir DataFrame final
+        exog_df, exog_info = self._build_exogenous_dataframe(
+            climate_data,
+            regional_code,
+            climate_column_mapping,
+            overlap_info,
+            log_callback,
+        )
+
+        return (exog_df, exog_info) if exog_df is not None else None
+
+
+    def _validate_final_exog_result(
+        self,
+        exog_df: pd.DataFrame | None,
+        log_callback,
+    ) -> bool:
+        """
+        Validar que el DataFrame de variables exógenas sea válido.
+
+        Returns:
+            bool: True si es válido, False si no
+
+        """
+        if exog_df is None or exog_df.empty or exog_df.shape[1] == 0:
+            if log_callback:
+                log_callback("ERROR: Ninguna variable aceptada")
+            return False
+        return True
 
 
     def _validate_initial_inputs(self,
@@ -1267,12 +1309,12 @@ class ValidationService:
                 best_match_score = matches
                 best_match = orig_col
 
-        return best_match if best_match_score >= 2 else None
+        mejor_score = 2
+        return best_match if best_match_score >= mejor_score else None
 
 
     def _build_exogenous_dataframe(self,
                                 climate_data: pd.DataFrame,
-                                df_saidi: pd.DataFrame,
                                 regional_code: str,
                                 climate_column_mapping: dict,
                                 overlap_info: dict,
@@ -1307,7 +1349,7 @@ class ValidationService:
         return (exog_df, exog_info) if not exog_df.empty else (None, None)
 
 
-    def _process_single_variable(self,
+    def _process_single_variable(self,  # noqa: PLR0913
                                 var_code: str,
                                 var_nombre: str,
                                 climate_data: pd.DataFrame,
@@ -1365,9 +1407,9 @@ class ValidationService:
             }
 
             if log_callback:
-                log_callback(f"✓ {var_code} -> ACEPTADA ({overlap_pct:.1f}% cobertura, escala original)")
+                log_callback(f" {var_code} -> ACEPTADA ({overlap_pct:.1f}% cobertura, escala original)")
 
-            return aligned_series, var_info
+            return aligned_series, var_info  # noqa: TRY300
 
         except (ValueError, TypeError, KeyError, IndexError) as e:
             if log_callback:
