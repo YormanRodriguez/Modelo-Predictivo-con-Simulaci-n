@@ -1,21 +1,17 @@
 # services/validation_service.py
 import json
-
-import matplotlib
-import numpy as np
-import pandas as pd
-
-matplotlib.use("Agg")
-
 import tempfile
 import traceback
 import warnings
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, ClassVar
 
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 from scipy import stats
 from sklearn.metrics import mean_squared_error
 from sklearn.preprocessing import StandardScaler
@@ -24,6 +20,17 @@ from statsmodels.tsa.statespace.sarimax import SARIMAX
 from services.climate_simulation_service import ClimateSimulationService
 
 warnings.filterwarnings("ignore")
+
+@dataclass
+class ValidationMetricsParams:
+    """Parámetros para el cálculo de métricas de validación."""
+
+    order: tuple
+    seasonal_order: tuple
+    transformation: str
+    with_exogenous: bool
+    pct_validacion: float
+    n_test: int
 
 class ValidationError(Exception):
     """Error general en el proceso de validación."""
@@ -537,15 +544,19 @@ class ValidationService:
                     progress_callback(85, "Calculando metricas de validacion...")
 
                 # Calcular metricas IDENTICO a OptimizationService
+                params = ValidationMetricsParams(
+                    order=order,
+                    seasonal_order=seasonal_order,
+                    transformation=transformation,
+                    with_exogenous=exog_df is not None,
+                    pct_validacion=pct_validacion,
+                    n_test=n_test,
+                )
+
                 metricas = self._calcular_metricas_validacion_optimized(
                     datos_validacion_original.values,
                     predicciones_original,
-                    order,
-                    seasonal_order,
-                    transformation,
-                    exog_df is not None,
-                    pct_validacion,
-                    n_test,
+                    params,
                 )
 
                 # Calcular complejidad del modelo (IDENTICO a OptimizationService)
@@ -1203,37 +1214,37 @@ class ValidationService:
 
     def _inverse_transformation(self, data: np.ndarray, transformation_type: str) -> np.ndarray:
         """Revertir transformacion a escala original."""
-        if transformation_type == "original":
-            return data
+        # Diccionario de transformaciones inversas
+        transformations = {
+            "original": lambda d: d,
+            "standard": lambda d: (
+                self.scaler.inverse_transform(d.reshape(-1, 1)).flatten()
+                if self.scaler is not None
+                else d
+            ),
+            "log": lambda d: np.exp(d),
+            "sqrt": lambda d: np.power(d, 2),
+            "boxcox": self._inverse_boxcox,
+        }
 
-        if transformation_type == "standard":
-            if self.scaler is not None:
-                return self.scaler.inverse_transform(data.reshape(-1, 1)).flatten()
-            return data
+        # Obtener la función de transformación o retornar datos sin cambios
+        transform_func = transformations.get(transformation_type, lambda d: d)
+        return transform_func(data)
 
-        if transformation_type == "log":
+
+    def _inverse_boxcox(self, data: np.ndarray) -> np.ndarray:
+        """Aplicar transformación inversa de Box-Cox."""
+        lambda_param = self.transformation_params.get("boxcox_lambda", 0)
+        if lambda_param == 0:
             return np.exp(data)
+        return np.power(data * lambda_param + 1, 1 / lambda_param)
 
-        if transformation_type == "boxcox":
-            lambda_param = self.transformation_params.get("boxcox_lambda", 0)
-            if lambda_param == 0:
-                return np.exp(data)
-            return np.power(data * lambda_param + 1, 1 / lambda_param)
-
-        if transformation_type == "sqrt":
-            return np.power(data, 2)
-
-        return data
-
-    def _calcular_metricas_validacion_optimized(self,
-                                               test_values: np.ndarray,
-                                               pred_values: np.ndarray,
-                                               order: tuple,
-                                               seasonal_order: tuple,
-                                               transformation: str,
-                                               with_exogenous: bool,
-                                               pct_validacion: float,
-                                               n_test: int) -> dict[str, float]:
+    def _calcular_metricas_validacion_optimized(
+    self,
+    test_values: np.ndarray,
+    pred_values: np.ndarray,
+    params: ValidationMetricsParams,
+    ) -> dict[str, float]:
         # Calcular RMSE
         rmse = np.sqrt(mean_squared_error(test_values, pred_values))
 
@@ -1264,8 +1275,8 @@ class ValidationService:
             "mape": mape,
             "r2_score": r2_score,
             "precision_final": precision_final,
-            "n_test": n_test,
-            "validation_pct": pct_validacion * 100,
+            "n_test": params.n_test,
+            "validation_pct": params.pct_validacion * 100,
         }
 
     def _calculate_stability_numpy(self,
