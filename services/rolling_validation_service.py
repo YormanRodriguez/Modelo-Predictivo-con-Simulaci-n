@@ -1,21 +1,17 @@
 # services/rolling_validation_service.py
 """Servicio de Validación Temporal con Rolling Forecast para SAIDI."""
 import json
-
-import matplotlib
-import numpy as np
-import pandas as pd
-
-matplotlib.use("Agg")
 import os
-import traceback
 import tempfile
+import traceback
 import warnings
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 from scipy import stats
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 from sklearn.preprocessing import StandardScaler
@@ -28,8 +24,8 @@ class RollingValidationService:
     """Servicio de validación temporal avanzada para modelos SAIDI."""
 
     # Mapeo de regionales a transformaciones
-    REGIONAL_TRANSFORMATIONS = {
-        "SAIDI_O": "boxcox",
+    EGIONAL_TRANSFORMATIONS: ClassVar[dict[str, str]] = {
+        "SAIDI_O": "original",
         "SAIDI_C": "original",
         "SAIDI_A": "original",
         "SAIDI_P": "boxcox",
@@ -38,72 +34,50 @@ class RollingValidationService:
     }
 
     # Variables exógenas por regional
-    REGIONAL_EXOG_VARS = {
-        "SAIDI_O": {  # Ocaña - 7 variables correlacionadas
-            "realfeel_min": "Temperatura aparente mínima",           # r=0.689 *** FUERTE
-            "windchill_avg": "Sensación térmica promedio",          # r=0.520 ** MODERADA-FUERTE
-            "dewpoint_avg": "Punto de rocío promedio",              # r=0.470 ** MODERADA-FUERTE
-            "windchill_max": "Sensación térmica máxima",            # r=0.464 ** MODERADA-FUERTE
-            "dewpoint_min": "Punto de rocío mínimo",                # r=0.456 ** MODERADA-FUERTE
-            "precipitation_max_daily": "Precipitación máxima diaria", # r=0.452
-            "precipitation_avg_daily": "Precipitación promedio diaria", # r=0.438
+    REGIONAL_EXOG_VARS: ClassVar[dict[str, dict[str, str]]] = {
+        "SAIDI_O": {
+            "realfeel_min": "Temperatura aparente mínima",
+            "windchill_avg": "Sensación térmica promedio",
+            "dewpoint_avg": "Punto de rocío promedio",
+            "windchill_max": "Sensación térmica máxima",
+            "dewpoint_min": "Punto de rocío mínimo",
+            "precipitation_max_daily": "Precipitación máxima diaria",
+            "precipitation_avg_daily": "Precipitación promedio diaria",
         },
-
-        "SAIDI_C": {  # Cúcuta - 4 variables correlacionadas
-            "realfeel_avg": "Temperatura aparente promedio",        # r=0.573 ** MODERADA-FUERTE
-            "pressure_rel_avg": "Presión relativa promedio",        # r=-0.358 (negativa)
-            "wind_speed_max": "Velocidad máxima del viento",        # r=0.356
-            "pressure_abs_avg": "Presión absoluta promedio",        # r=-0.356 (negativa)
+        "SAIDI_C": {
+            "realfeel_avg": "Temperatura aparente promedio",
+            "pressure_rel_avg": "Presión relativa promedio",
+            "wind_speed_max": "Velocidad máxima del viento",
+            "pressure_abs_avg": "Presión absoluta promedio",
         },
-
-        "SAIDI_T": {  # Tibú - 8 variables correlacionadas
-            "realfeel_avg": "Temperatura aparente promedio",        # r=0.906 *** MUY FUERTE
-            "wind_dir_avg": "Dirección promedio del viento",        # r=-0.400 (negativa)
-            "uv_index_avg": "Índice UV promedio",                   # r=0.385
-            "heat_index_avg": "Índice de calor promedio",           # r=0.363
-            "temperature_min": "Temperatura mínima",                # r=0.352
-            "windchill_min": "Sensación térmica mínima",            # r=0.340
-            "temperature_avg": "Temperatura promedio",              # r=0.338
-            "pressure_rel_avg": "Presión relativa promedio",        # r=-0.330 (negativa)
+        "SAIDI_T": {
+            "realfeel_avg": "Temperatura aparente promedio",
+            "wind_dir_avg": "Dirección promedio del viento",
+            "uv_index_avg": "Índice UV promedio",
+            "heat_index_avg": "Índice de calor promedio",
+            "temperature_min": "Temperatura mínima",
+            "windchill_min": "Sensación térmica mínima",
+            "temperature_avg": "Temperatura promedio",
+            "pressure_rel_avg": "Presión relativa promedio",
         },
-
-        "SAIDI_A": {  # Aguachica - 2 variables correlacionadas
-            "uv_index_max": "Índice UV máximo",                     # r=0.664 *** FUERTE
-            "days_with_rain": "Días con lluvia",                    # r=0.535 ** MODERADA-FUERTE
+        "SAIDI_A": {
+            "uv_index_max": "Índice UV máximo",
+            "days_with_rain": "Días con lluvia",
         },
-
-        "SAIDI_P": {  # Pamplona - 3 variables correlacionadas
-            "precipitation_total": "Precipitación total",           # r=0.577 ** MODERADA-FUERTE
-            "precipitation_avg_daily": "Precipitación promedio diaria", # r=0.552
-            "realfeel_min": "Temperatura aparente mínima",          # r=0.344
+        "SAIDI_P": {
+            "precipitation_total": "Precipitación total",
+            "precipitation_avg_daily": "Precipitación promedio diaria",
+            "realfeel_min": "Temperatura aparente mínima",
         },
     }
 
-    REGIONAL_ORDERS = {
-        "SAIDI_O": {
-            "order": (3, 1, 6),
-            "seasonal_order": (3, 1, 0, 12),
-        },
-        "SAIDI_C": {
-            "order": (3, 1, 2),
-            "seasonal_order": (1, 1, 2, 12),
-        },
-        "SAIDI_A": {
-            "order": (2, 1, 3),
-            "seasonal_order": (2, 1, 1, 12),
-        },
-        "SAIDI_P": {
-            "order": (4, 1, 3),
-            "seasonal_order": (1, 1, 4, 12),
-        },
-        "SAIDI_T": {
-            "order": (3, 1, 3),
-            "seasonal_order": (2, 1, 2, 12),
-        },
-        "SAIDI_Cens": {
-            "order": (4, 1, 3),
-            "seasonal_order": (1, 1, 4, 12),
-        },
+    REGIONAL_ORDERS: ClassVar[dict[str, dict[str, tuple]]] = {
+        "SAIDI_O": {"order": (3, 1, 6), "seasonal_order": (3, 1, 0, 12)},
+        "SAIDI_C": {"order": (3, 1, 2), "seasonal_order": (1, 1, 2, 12)},
+        "SAIDI_A": {"order": (2, 1, 3), "seasonal_order": (2, 1, 1, 12)},
+        "SAIDI_P": {"order": (4, 1, 3), "seasonal_order": (1, 1, 4, 12)},
+        "SAIDI_T": {"order": (3, 1, 3), "seasonal_order": (2, 1, 2, 12)},
+        "SAIDI_Cens": {"order": (4, 1, 3), "seasonal_order": (1, 1, 4, 12)},
     }
 
     def __init__(self):

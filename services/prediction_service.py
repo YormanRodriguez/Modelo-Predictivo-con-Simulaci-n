@@ -22,7 +22,10 @@ from sklearn.metrics import mean_squared_error
 from sklearn.preprocessing import StandardScaler
 from statsmodels.tsa.statespace.sarimax import SARIMAX
 
-from services.climate_simulation_service import ClimateSimulationService
+from services.climate_simulation_service import (
+    ClimateSimulationService,
+    SimulationConfig,
+)
 from services.export_service import ExportService
 from services.uncertainty_service import UncertaintyService
 
@@ -1331,7 +1334,6 @@ class PredictionService:
             msg = f"Error en prediccion: {e!s}"
             raise ValueError(msg) from e
 
-
     def _apply_climate_simulation(
         self, exog_forecast_original, simulation_config, log_callback=None,
     ):
@@ -1372,14 +1374,18 @@ class PredictionService:
             )
             self._log(log_callback, f"   Intensidad calculada: {intensity_adjustment:.2f}x")
 
-            # Aplicar simulación
-            exog_simulated = self.simulation_service.apply_simulation(
-                exog_forecast=exog_forecast_original,
+            simulation_config_obj = SimulationConfig(
                 scenario_name=config["escenario"],
                 intensity_adjustment=intensity_adjustment,
                 alcance_meses=config["alcance_meses"],
                 percentiles=config["percentiles"],
                 regional_code=config["regional_code"],
+            )
+
+            # Aplicar simulación con el objeto correcto
+            exog_simulated = self.simulation_service.apply_simulation(
+                exog_forecast=exog_forecast_original,
+                config=simulation_config_obj,  # ✓ Ahora pasa el objeto
             )
 
         except (KeyError, ValueError, TypeError, AttributeError) as e:

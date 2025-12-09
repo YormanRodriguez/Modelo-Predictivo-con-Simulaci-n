@@ -15,12 +15,13 @@ class UncertaintyService:
         self.bootstrap_samples = 1000  # Numero de muestras bootstrap
         self.confidence_level = 0.95
 
-    def calculate_prediction_intervals(self, model_results, n_steps, exog_forecast=None,
-                                     transformation_type="original",
-                                     transformation_params=None,
-                                     include_exog_uncertainty=False,
-                                     exog_std=None,
-                                     log_callback=None):
+    def calculate_prediction_intervals(self, model_results, n_steps, exog_forecast=None,  # noqa: C901, PLR0912, PLR0913, PLR0915
+                                 transformation_type="original",
+                                 transformation_params=None,
+                                 *,  # Force keyword-only arguments after this
+                                 include_exog_uncertainty=False,
+                                 exog_std=None,
+                                 log_callback=None):
         """
         Calcular intervalos de confianza robustos para predicciones.
 
@@ -30,7 +31,7 @@ class UncertaintyService:
             exog_forecast: Variables exogenas para prediccion (escaladas)
             transformation_type: Tipo de transformacion aplicada
             transformation_params: Parametros de la transformacion
-            include_exog_uncertainty: Si incluir incertidumbre de variables exogenas
+            include_exog_uncertainty: Si incluir incertidumbre de variables exogenas (keyword-only)
             exog_std: Desviaciones estandar de variables exogenas (en escala original)
             log_callback: Funcion para logging
 
@@ -48,8 +49,8 @@ class UncertaintyService:
             # Calcular intervalos en escala transformada
             alpha = 1 - self.confidence_level
             conf_int_transformed = pred.conf_int(alpha=alpha)
-            lower_transformed = conf_int_transformed.iloc[:, 0].values
-            upper_transformed = conf_int_transformed.iloc[:, 1].values
+            lower_transformed = conf_int_transformed.iloc[:, 0].to_numpy()
+            upper_transformed = conf_int_transformed.iloc[:, 1].to_numpy()
 
             # Revertir transformacion
             lower_parametric = self._inverse_transform(
@@ -138,6 +139,15 @@ class UncertaintyService:
                 avg_margin_pct = np.mean(margin_error / pred_mean_final) * 100
                 log_callback(f"  Margen de error promedio: {avg_margin_pct:.1f}% de la prediccion")
 
+        except (ValueError, KeyError, AttributeError) as e:
+            if log_callback:
+                log_callback(f"ERROR calculando intervalos de confianza: {e!s}")
+            # Fallback: usar intervalos parametricos simples
+            return self._fallback_intervals(
+                model_results, n_steps, exog_forecast,
+                transformation_type, transformation_params,
+            )
+        else:
             return {
                 "predictions": pred_mean_final,
                 "lower_bound": lower_final,
@@ -149,28 +159,36 @@ class UncertaintyService:
                 "parametric_upper": upper_parametric,
             }
 
-        except Exception as e:
-            if log_callback:
-                log_callback(f"ERROR calculando intervalos de confianza: {e!s}")
-            # Fallback: usar intervalos parametricos simples
-            return self._fallback_intervals(
-                model_results, n_steps, exog_forecast,
-                transformation_type, transformation_params,
-            )
-
-    def _bootstrap_residuals(self, model_results, n_steps, exog_forecast,
-                            transformation_type, transformation_params):
+    def _bootstrap_residuals(self, model_results, n_steps, exog_forecast,  # noqa: PLR0913
+                            transformation_type, transformation_params, rng=None):
         """
         Bootstrap de residuales para capturar incertidumbre del modelo.
 
         Metodo:
         1. Extraer residuales del modelo ajustado
         2. Para cada muestra bootstrap:
-           - Remuestrear residuales con reemplazo
-           - Generar nueva serie temporal agregando residuales remuestreados
-           - Re-ajustar modelo y predecir
+        - Remuestrear residuales con reemplazo
+        - Generar nueva serie temporal agregando residuales remuestreados
+        - Re-ajustar modelo y predecir
         3. Obtener distribucion de predicciones
+
+        Args:
+            model_results: Resultados del modelo SARIMAX ajustado.
+            n_steps: Número de pasos a predecir hacia adelante.
+            exog_forecast: Valores pronosticados de variables exógenas para el período de forecast.
+            transformation_type: Tipo de transformación aplicada a los datos ('log', 'boxcox', etc.).
+            transformation_params: Parámetros de la transformación aplicada.
+            rng: Generador de números aleatorios (np.random.Generator).
+                Si es None, se crea uno nuevo con default_rng().
+
+        Returns:
+            np.ndarray: Array con las predicciones bootstrap (bootstrap_samples x n_steps).
+
         """
+        # Inicializar generador de números aleatorios si no se proporciona
+        if rng is None:
+            rng = np.random.default_rng()
+
         residuals = model_results.resid
         n_obs = len(residuals)
 
@@ -182,9 +200,9 @@ class UncertaintyService:
         order = model_results.model.order
         seasonal_order = model_results.model.seasonal_order
 
-        for i in range(self.bootstrap_samples):
-            # Remuestrear residuales
-            resampled_residuals = np.random.choice(residuals, size=n_obs, replace=True)
+        for _ in range(self.bootstrap_samples):
+            # Remuestrear residuales usando el generador moderno
+            resampled_residuals = rng.choice(residuals, size=n_obs, replace=True)
 
             # Generar nueva serie con residuales remuestreados
             fitted_values = model_results.fittedvalues
@@ -202,9 +220,9 @@ class UncertaintyService:
                 )
                 new_results = new_model.fit(disp=False, maxiter=50, method="lbfgs")
 
-                # Predecir
+                # Predecir - usar .to_numpy() en lugar de .values
                 new_pred = new_results.get_forecast(steps=n_steps, exog=exog_forecast)
-                pred_transformed = new_pred.predicted_mean.values
+                pred_transformed = new_pred.predicted_mean.to_numpy()
 
                 # Revertir transformacion
                 pred_original = self._inverse_transform(
@@ -216,7 +234,7 @@ class UncertaintyService:
             except (ValueError, RuntimeError, np.linalg.LinAlgError):
                 # Si falla el ajuste, usar prediccion del modelo original
                 pred = model_results.get_forecast(steps=n_steps, exog=exog_forecast)
-                pred_transformed = pred.predicted_mean.values
+                pred_transformed = pred.predicted_mean.to_numpy()
                 pred_original = self._inverse_transform(
                     pred_transformed, transformation_type, transformation_params,
                 )
@@ -224,38 +242,56 @@ class UncertaintyService:
 
         return np.array(bootstrap_predictions)
 
-    def _propagate_exog_uncertainty(self, model_results, n_steps, exog_forecast, exog_std,
-                                   transformation_type, transformation_params):
+    def _propagate_exog_uncertainty(self, model_results, n_steps, exog_forecast, exog_std,  # noqa: PLR0913
+                                   transformation_type, transformation_params, rng=None):
         """
         Propagar incertidumbre de variables exogenas.
 
         Metodo:
         1. Para cada muestra:
-           - Generar valores de variables exogenas usando distribucion normal
-             con media = exog_forecast y std = exog_std
-           - Predecir usando estas variables exogenas perturbadas
+        - Generar valores de variables exogenas usando distribucion normal
+            con media = exog_forecast y std = exog_std
+        - Predecir usando estas variables exogenas perturbadas
         2. Obtener distribucion de predicciones
+
+        Args:
+            model_results: Resultados del modelo SARIMAX ajustado.
+            n_steps: Número de pasos a predecir hacia adelante.
+            exog_forecast: Valores pronosticados de variables exógenas (DataFrame o array).
+            exog_std: Desviación estándar de las variables exógenas para perturbación.
+            transformation_type: Tipo de transformación aplicada ('log', 'boxcox', etc.).
+            transformation_params: Parámetros de la transformación aplicada.
+            rng: Generador de números aleatorios (np.random.Generator).
+                Si es None, se crea uno nuevo con default_rng().
+
+        Returns:
+            np.ndarray: Array con las predicciones considerando incertidumbre exógena.
+
         """
+        # Inicializar generador de números aleatorios si no se proporciona
+        if rng is None:
+            rng = np.random.default_rng()
+
         n_samples = 500  # Menos muestras que bootstrap (mas rapido)
         exog_predictions = []
 
-        for i in range(n_samples):
+        for _ in range(n_samples):
             # Perturbar variables exogenas
             if isinstance(exog_forecast, pd.DataFrame):
                 exog_perturbed = exog_forecast.copy()
                 for col_idx, col in enumerate(exog_forecast.columns):
-                    # Agregar ruido gaussiano
-                    noise = np.random.normal(0, exog_std[col_idx], size=n_steps)
-                    exog_perturbed[col] = exog_forecast[col].values + noise
+                    # Agregar ruido gaussiano usando el generador moderno
+                    noise = rng.normal(0, exog_std[col_idx], size=n_steps)
+                    exog_perturbed[col] = exog_forecast[col].to_numpy() + noise
             else:
                 # Array numpy
-                noise = np.random.normal(0, exog_std, size=(n_steps, exog_forecast.shape[1]))
+                noise = rng.normal(0, exog_std, size=(n_steps, exog_forecast.shape[1]))
                 exog_perturbed = exog_forecast + noise
 
             try:
                 # Predecir con variables exogenas perturbadas
                 pred = model_results.get_forecast(steps=n_steps, exog=exog_perturbed)
-                pred_transformed = pred.predicted_mean.values
+                pred_transformed = pred.predicted_mean.to_numpy()
 
                 # Revertir transformacion
                 pred_original = self._inverse_transform(
@@ -267,7 +303,7 @@ class UncertaintyService:
             except (ValueError, RuntimeError, np.linalg.LinAlgError):
                 # Si falla, usar prediccion sin perturbacion
                 pred = model_results.get_forecast(steps=n_steps, exog=exog_forecast)
-                pred_transformed = pred.predicted_mean.values
+                pred_transformed = pred.predicted_mean.to_numpy()
                 pred_original = self._inverse_transform(
                     pred_transformed, transformation_type, transformation_params,
                 )
@@ -294,12 +330,12 @@ class UncertaintyService:
                            transformation_type, transformation_params):
         """Intervalos parametricos simples como fallback."""
         pred = model_results.get_forecast(steps=n_steps, exog=exog_forecast)
-        pred_mean_transformed = pred.predicted_mean.values
+        pred_mean_transformed = pred.predicted_mean.to_numpy()
 
         alpha = 1 - self.confidence_level
         conf_int_transformed = pred.conf_int(alpha=alpha)
-        lower_transformed = conf_int_transformed.iloc[:, 0].values
-        upper_transformed = conf_int_transformed.iloc[:, 1].values
+        lower_transformed = conf_int_transformed.iloc[:, 0].to_numpy()
+        upper_transformed = conf_int_transformed.iloc[:, 1].to_numpy()
 
         pred_mean_original = self._inverse_transform(
             pred_mean_transformed, transformation_type, transformation_params,
@@ -323,7 +359,7 @@ class UncertaintyService:
             "confidence_level": self.confidence_level,
         }
 
-    def calculate_exog_std_from_climate(self, climate_data, exog_vars, regional_code, log_callback=None):
+    def calculate_exog_std_from_climate(self, climate_data, exog_vars, regional_code, log_callback=None):  # noqa: ARG002
         """
         Calcular desviacion estandar de variables exogenas basada en variabilidad historica.
 
@@ -359,7 +395,7 @@ class UncertaintyService:
 
             return np.array(std_values)
 
-        except Exception as e:
+        except (ValueError, KeyError, AttributeError, TypeError) as e:
             if log_callback:
                 log_callback(f"ERROR calculando std de variables exogenas: {e!s}")
             # Fallback: retornar valores unitarios
