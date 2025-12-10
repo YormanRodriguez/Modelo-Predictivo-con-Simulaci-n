@@ -26,6 +26,73 @@ from services.climate_simulation_service import (
 warnings.filterwarnings("ignore")
 
 @dataclass
+class ExogValidationConfig:
+    """Configuración para preparar y validar variables exógenas."""
+
+    climate_data: pd.DataFrame | None
+    df: pd.DataFrame
+    regional_code: str | None
+    historico: pd.DataFrame
+    col_saidi: str
+    log_callback: Any
+
+@dataclass
+class ExogTrainingConfig:
+    """Configuración para preparar variables exógenas de entrenamiento."""
+
+    exog_df: pd.DataFrame
+    datos_entrenamiento_original: pd.Series
+    datos_validacion_original: pd.Series
+    simulation_applied: bool
+    simulation_config: dict | None
+    log_callback: Any
+
+@dataclass
+class SARIMAXFitConfig:
+    """Configuración para ajustar modelo SARIMAX."""
+
+    datos_entrenamiento_transformed: pd.Series
+    exog_train: pd.DataFrame | None
+    order: tuple
+    seasonal_order: tuple
+    transformation: str
+    log_callback: Any
+
+@dataclass
+class ValidationMetricsConfig:
+    """Configuración para logging de métricas de validación."""
+
+    simulation_applied: bool
+    simulation_config: dict | None
+    pct_validacion: float
+    n_test: int
+    exog_info: dict | None
+    log_callback: Any
+
+@dataclass
+class MetricsCalculationInput:
+    """Datos de entrada para calcular métricas de validación."""
+
+    datos_validacion_original: pd.Series
+    predicciones_original: np.ndarray
+    order: tuple
+    seasonal_order: tuple
+    transformation: str
+    exog_df: pd.DataFrame | None
+    pct_validacion: float
+    n_test: int
+
+@dataclass
+class PredictionGenerationConfig:
+    """Configuración para generar predicciones del modelo."""
+
+    n_test: int
+    exog_test: pd.DataFrame | None
+    transformation: str
+    simulation_applied: bool
+    log_callback: Any
+
+@dataclass
 class VariableProcessingContext:
     """Contexto para procesar una variable exógena individual."""
 
@@ -243,491 +310,716 @@ class ValidationService:
         return self.default_order, self.default_seasonal_order
 
     def run_validation(self,
-                    file_path: str | None = None,
-                    df_prepared: pd.DataFrame | None = None,
-                    order: tuple | None = None,
-                    seasonal_order: tuple | None = None,
-                    regional_code: str | None = None,
-                    climate_data: pd.DataFrame | None = None,
-                    simulation_config: dict | None = None,
-                    progress_callback = None,
-                    log_callback = None) -> dict[str, Any]:
-            """
-            Ejecutar validacion del modelo SARIMAX con transformacion especifica por regional.
+                file_path: str | None = None,
+                df_prepared: pd.DataFrame | None = None,
+                order: tuple | None = None,
+                seasonal_order: tuple | None = None,
+                regional_code: str | None = None,
+                climate_data: pd.DataFrame | None = None,
+                simulation_config: dict | None = None,
+                progress_callback = None,
+                log_callback = None) -> dict[str, Any]:
+        """Ejecutar validacion del modelo SARIMAX con transformacion especifica por regional."""
+        try:
+            # 1-3. Setup inicial
+            order, seasonal_order, transformation = self._setup_validation(
+                regional_code, log_callback,
+            )
 
-            Args:
-                file_path: Ruta del archivo SAIDI Excel
-                df_prepared: DataFrame de SAIDI ya preparado
-                order: Orden ARIMA (opcional - si None usa el optimizado/default de la regional)
-                seasonal_order: Orden estacional ARIMA (opcional - si None usa el optimizado/default)
-                regional_code: Código de la regional
-                climate_data: DataFrame con datos climáticos mensuales
-                simulation_config: Configuración de simulación climática (opcional)
-                progress_callback: Función para actualizar progreso
-                log_callback: Función para loguear mensajes
+            simulation_applied = simulation_config and simulation_config.get("enabled", False)
 
-            Returns:
-                Diccionario con resultados de validacion
+            # Log inicial
+            self._log_initial_validation_info(
+                order, seasonal_order, regional_code, transformation,
+                simulation_applied, simulation_config, log_callback,
+            )
 
-            """
-            try:
-                optimized_config = None
+            # 5. Cargar y preparar datos
+            df, col_saidi, historico = self._load_and_prepare_data(
+                file_path, df_prepared, log_callback, progress_callback,
+            )
 
-                if regional_code:
-                    optimized_config = self.load_optimized_config(regional_code)
+            # 6. Preparar variables exógenas
+            if progress_callback:
+                progress_callback(20, "Preparando variables exogenas...")
 
-                    if optimized_config and log_callback:
-                        log_callback("=" * 80)
-                        log_callback("USANDO CONFIGURACIÓN OPTIMIZADA")
-                        log_callback("=" * 80)
-                        log_callback(f"Regional: {regional_code}")
-                        log_callback(f"Transformación: {optimized_config['transformation'].upper()}")
-                        log_callback(f"Order: {optimized_config['order']}")
-                        log_callback(f"Seasonal: {optimized_config['seasonal_order']}")
-                        log_callback(f"Precisión documentada: {optimized_config['precision_final']:.1f}%")
-                        log_callback(f"Optimizado en: {optimized_config['optimization_date']}")
-                        log_callback("=" * 80)
+            exog_validation_config = ExogValidationConfig(
+                climate_data=climate_data,
+                df=df,
+                regional_code=regional_code,
+                historico=historico,
+                col_saidi=col_saidi,
+                log_callback=log_callback,
+            )
+            exog_df, exog_info = self._prepare_and_validate_exog(exog_validation_config)
 
-                # Obtener parámetros (prioriza optimizados > hardcoded > default)
-                if order is None or seasonal_order is None:
-                    order_regional, seasonal_regional = self._get_orders_for_regional(regional_code)
+            # 7-8. Dividir y transformar datos
+            (pct_validacion, n_test, datos_entrenamiento_original,
+            datos_validacion_original, datos_entrenamiento_transformed) = (
+                self._split_and_transform_data(
+                    historico, col_saidi, transformation, log_callback, progress_callback,
+                )
+            )
 
-                    if order is None:
-                        order = order_regional
-                    if seasonal_order is None:
-                        seasonal_order = seasonal_regional
+            # 9. Preparar variables exógenas para train/test
+            exog_training_config = ExogTrainingConfig(
+                exog_df=exog_df,
+                datos_entrenamiento_original=datos_entrenamiento_original,
+                datos_validacion_original=datos_validacion_original,
+                simulation_applied=simulation_applied,
+                simulation_config=simulation_config,
+                log_callback=log_callback,
+            )
+            exog_train, exog_test = self._prepare_exog_for_training(exog_training_config)
 
-                    if log_callback and regional_code and not optimized_config:
-                        regional_nombre = {
-                            "SAIDI_O": "Ocaña",
-                            "SAIDI_C": "Cúcuta",
-                            "SAIDI_A": "Aguachica",
-                            "SAIDI_P": "Pamplona",
-                            "SAIDI_T": "Tibú",
-                            "SAIDI_Cens": "CENS",
-                        }.get(regional_code, regional_code)
+            # 10-11. Entrenar y predecir
+            predicciones_validacion = self._train_and_predict(
+                datos_entrenamiento_transformed, exog_train, exog_test,
+                order, seasonal_order, transformation, n_test,
+                simulation_applied, log_callback, progress_callback,
+            )
 
-                        log_callback(f"Usando parametros default para regional {regional_nombre}")
-                        log_callback(f"   Order: {order}")
-                        log_callback(f"   Seasonal Order: {seasonal_order}")
+            # 12-13. Calcular métricas y loguear
+            metricas = self._compute_and_log_metrics(
+                datos_validacion_original, predicciones_validacion, order,
+                seasonal_order, transformation, exog_df, pct_validacion,
+                n_test, simulation_applied, simulation_config, exog_info,
+                log_callback, progress_callback,
+            )
 
-                # Determinar transformacion (prioriza optimizada)
-                transformation = self._get_transformation_for_regional(regional_code)
+            # 14. Generar gráfica
+            if progress_callback:
+                progress_callback(95, "Generando grafica de validacion...")
 
-                # Detectar si hay simulacion
-                simulation_applied = simulation_config and simulation_config.get("enabled", False)
+            plot_config = ValidationPlotConfig(
+                datos_entrenamiento=datos_entrenamiento_original,
+                datos_validacion=datos_validacion_original,
+                predicciones_validacion=predicciones_validacion,
+                order=order,
+                seasonal_order=seasonal_order,
+                metricas=metricas,
+                pct_validacion=pct_validacion,
+                transformation=transformation,
+                exog_info=exog_info,
+                simulation_config=simulation_config if simulation_applied else None,
+            )
+            plot_path = self._generar_grafica_validacion(plot_config)
 
-                if log_callback:
-                    log_callback(f"Iniciando validacion con parametros: order={order}, seasonal_order={seasonal_order}")
-                    log_callback(f"Regional: {regional_code} - Transformacion: {transformation.upper()}")
+            if progress_callback:
+                progress_callback(100, "Validacion completada exitosamente")
 
-                    if simulation_applied:
-                        log_callback("=" * 60)
-                        log_callback("VALIDACIÓN CON SIMULACIÓN CLIMÁTICA")
-                        log_callback("=" * 60)
+            # 15. Construir resultado
+            return self._build_validation_result(
+                metricas, order, seasonal_order, transformation, regional_code,
+                exog_df, simulation_applied, simulation_config, predicciones_validacion,
+                exog_info, datos_entrenamiento_original, datos_validacion_original,
+                pct_validacion, plot_path,
+            )
 
-                        summary = simulation_config.get("summary", {})
-                        log_callback(f"Escenario: {summary.get('escenario', 'N/A')}")
-                        log_callback(f"Alcance: {simulation_config.get('alcance_meses', 'N/A')} meses")
-                        log_callback(f"Días base: {simulation_config.get('dias_base', 'N/A')}")
-                        log_callback(f"Ajuste: {simulation_config.get('slider_adjustment', 0):+d} días")
-                        log_callback(f"Total días simulados: {summary.get('dias_simulados', 'N/A')}")
+        except ValidationDataError:
+            raise
+        except ModelFittingError:
+            raise
+        except PredictionError:
+            raise
+        except (KeyError, ValueError, pd.errors.EmptyDataError) as e:
+            if log_callback:
+                log_callback(f"ERROR: {e!s}")
+            msg = f"Error en validacion: {e!s}"
+            raise ValidationError(msg) from e
 
-                        # Mostrar variables que se modificarán
-                        if "variables_afectadas" in summary:
-                            log_callback("\nVariables climáticas a modificar:")
-                            vars_afectadas = summary["variables_afectadas"]
-                            for var_info in vars_afectadas.values():
-                                change = var_info.get("cambio_porcentual", 0)
-                                arrow = "↑" if change > 0 else "↓" if change < 0 else "→"
-                                log_callback(f"   {arrow} {var_info['nombre']}: {change:+.1f}%")
 
-                        log_callback("")
-                        log_callback("NOTA: Validación bajo condiciones climáticas HIPOTÉTICAS")
-                        log_callback("Las métricas reflejan el comportamiento del modelo")
-                        log_callback("bajo el escenario simulado, NO el clima real histórico")
-                        log_callback("=" * 60)
-                    else:
-                        log_callback("Modo: Validacion estandar (sin simulacion)")
+    def _log_initial_validation_info(self, order: tuple, seasonal_order: tuple,
+                                    regional_code: str | None, transformation: str,
+                                    simulation_applied: bool, simulation_config: dict | None,
+                                    log_callback) -> None:
+        """Loguear información inicial de validación."""
+        if not log_callback:
+            return
 
-                if progress_callback:
-                    progress_callback(10, "Cargando datos...")
+        log_callback(f"Iniciando validacion con parametros: order={order}, seasonal_order={seasonal_order}")
+        log_callback(f"Regional: {regional_code} - Transformacion: {transformation.upper()}")
 
-                # Cargar datos SAIDI
-                df = self._load_saidi_data(file_path, df_prepared, log_callback)
+        if simulation_applied:
+            self._log_simulation_info(simulation_config, log_callback)
+        else:
+            log_callback("Modo: Validacion estandar (sin simulacion)")
 
-                if log_callback:
-                    log_callback(f"Columnas encontradas: {df.columns.tolist()}")
+    def _setup_validation(self, regional_code: str | None, log_callback) -> tuple[tuple, tuple, str]:
+        """Configurar parámetros iniciales de validación."""
+        # Cargar configuración optimizada
+        optimized_config = None
+        if regional_code:
+            optimized_config = self.load_optimized_config(regional_code)
+            self._log_optimized_config(optimized_config, regional_code, log_callback)
 
-                # Asegurar indice datetime
-                df = self._ensure_datetime_index(df)
+        # Obtener órdenes del modelo
+        order, seasonal_order = self._get_validated_orders(
+            None, None, regional_code, optimized_config, log_callback,
+        )
 
-                # Buscar columna SAIDI
-                col_saidi = self._find_saidi_column(df)
+        # Determinar transformación
+        transformation = self._get_transformation_for_regional(regional_code)
 
-                historico = df[df[col_saidi].notna()]
+        return order, seasonal_order, transformation
 
-                meses = 12
-                self._validate_minimum_observations(historico, meses)
 
-                if log_callback:
-                    log_callback(f"Dataset: {len(historico)} observaciones")
-                    log_callback(f"Periodo: {historico.index[0].strftime('%Y-%m')} a {historico.index[-1].strftime('%Y-%m')}")
+    def _load_and_prepare_data(self, file_path: str | None, df_prepared: pd.DataFrame | None,
+                            log_callback, progress_callback) -> tuple[pd.DataFrame, str, pd.DataFrame]:
+        """Cargar y preparar datos SAIDI."""
+        if progress_callback:
+            progress_callback(10, "Cargando datos...")
 
-                if progress_callback:
-                    progress_callback(20, "Preparando variables exogenas...")
+        df = self._load_saidi_data(file_path, df_prepared, log_callback)
+        df = self._ensure_datetime_index(df)
+        col_saidi = self._find_saidi_column(df)
+        historico = df[df[col_saidi].notna()]
 
-                # Preparar variables exogenas (si disponibles)
-                exog_df = None
-                exog_info = None
+        self._validate_minimum_observations(historico, 12)
 
-                if climate_data is not None and not climate_data.empty:
-                    exog_df, exog_info = self._prepare_exogenous_variables(
-                        climate_data, df, regional_code, log_callback,
+        if log_callback:
+            log_callback(f"Dataset: {len(historico)} observaciones")
+            log_callback(
+                f"Periodo: {historico.index[0].strftime('%Y-%m')} a "
+                f"{historico.index[-1].strftime('%Y-%m')}",
+            )
+
+        return df, col_saidi, historico
+
+
+    def _split_and_transform_data(self, historico: pd.DataFrame, col_saidi: str,
+                                transformation: str, log_callback, progress_callback):
+        """Dividir datos y aplicar transformación."""
+        if progress_callback:
+            progress_callback(30, "Dividiendo datos para validacion...")
+
+        pct_validacion, n_test = self._calculate_validation_split(len(historico))
+        datos_entrenamiento_original = historico[col_saidi][:-n_test]
+        datos_validacion_original = historico[col_saidi][-n_test:]
+
+        if log_callback:
+            log_callback(
+                f"Division: {len(datos_entrenamiento_original)} datos entrenamiento, "
+                f"{len(datos_validacion_original)} datos validacion",
+            )
+            log_callback(f"Porcentaje validacion: {pct_validacion*100:.0f}%")
+
+        if progress_callback:
+            progress_callback(40, f"Aplicando transformacion {transformation.upper()}...")
+
+        train_transformed, transform_info = self._apply_transformation(
+            datos_entrenamiento_original.values, transformation,
+        )
+        datos_entrenamiento_transformed = pd.Series(
+            train_transformed, index=datos_entrenamiento_original.index,
+        )
+
+        if log_callback:
+            log_callback(f"Transformacion aplicada: {transform_info}")
+
+        return (pct_validacion, n_test, datos_entrenamiento_original,
+                datos_validacion_original, datos_entrenamiento_transformed)
+
+
+    def _train_and_predict(self, datos_entrenamiento_transformed: pd.Series,
+                        exog_train: pd.DataFrame | None, exog_test: pd.DataFrame | None,
+                        order: tuple, seasonal_order: tuple, transformation: str,
+                        n_test: int, simulation_applied: bool, log_callback, progress_callback):
+        """Entrenar modelo y generar predicciones."""
+        if progress_callback:
+            progress_callback(50, "Entrenando modelo SARIMAX con datos transformados...")
+
+        fit_config = SARIMAXFitConfig(
+            datos_entrenamiento_transformed=datos_entrenamiento_transformed,
+            exog_train=exog_train,
+            order=order,
+            seasonal_order=seasonal_order,
+            transformation=transformation,
+            log_callback=log_callback,
+        )
+        results = self._fit_sarimax_model(fit_config)
+
+        if progress_callback:
+            progress_callback(70, "Generando predicciones de validacion...")
+
+        prediction_config = PredictionGenerationConfig(
+            n_test=n_test,
+            exog_test=exog_test,
+            transformation=transformation,
+            simulation_applied=simulation_applied,
+            log_callback=log_callback,
+        )
+        predicciones_validacion = self._generate_predictions(results, prediction_config)
+
+        return predicciones_validacion
+
+
+    def _compute_and_log_metrics(self, datos_validacion_original: pd.Series,
+                                predicciones_validacion: pd.Series, order: tuple,
+                                seasonal_order: tuple, transformation: str,
+                                exog_df: pd.DataFrame | None, pct_validacion: float,
+                                n_test: int, simulation_applied: bool,
+                                simulation_config: dict | None, exog_info: dict | None,
+                                log_callback, progress_callback):
+        """Calcular métricas y generar logs."""
+        if progress_callback:
+            progress_callback(85, "Calculando metricas de validacion...")
+
+        metrics_input = MetricsCalculationInput(
+            datos_validacion_original=datos_validacion_original,
+            predicciones_original=predicciones_validacion.values,
+            order=order,
+            seasonal_order=seasonal_order,
+            transformation=transformation,
+            exog_df=exog_df,
+            pct_validacion=pct_validacion,
+            n_test=n_test,
+        )
+        metricas = self._calculate_all_metrics(metrics_input)
+
+        metrics_config = ValidationMetricsConfig(
+            simulation_applied=simulation_applied,
+            simulation_config=simulation_config,
+            pct_validacion=pct_validacion,
+            n_test=n_test,
+            exog_info=exog_info,
+            log_callback=log_callback,
+        )
+        self._log_validation_metrics(metricas, metrics_config)
+
+        return metricas
+
+
+    # Método auxiliar adicional para preparar y validar exógenas
+    def _prepare_and_validate_exog(self, config: ExogValidationConfig) -> tuple[pd.DataFrame | None, dict | None]:
+        """Preparar y validar variables exógenas."""
+        if config.climate_data is None or config.climate_data.empty:
+            if config.log_callback:
+                config.log_callback("No hay datos climaticos disponibles, validacion sin variables exogenas")
+            return None, None
+
+        exog_df, exog_info = self._prepare_exogenous_variables(
+            config.climate_data, config.df, config.regional_code, config.log_callback,
+        )
+
+        if exog_df is None:
+            if config.log_callback:
+                config.log_callback("No se pudieron preparar variables exogenas, continuando sin ellas")
+            return None, None
+
+        if config.log_callback:
+            config.log_callback(f"Variables exogenas disponibles: {len(exog_df.columns)}")
+
+        # Validar cobertura
+        if not self._diagnose_exog_coverage(config.historico[config.col_saidi], exog_df, config.log_callback):
+            if config.log_callback:
+                config.log_callback("=" * 60)
+                config.log_callback("ADVERTENCIA: Cobertura insuficiente")
+                config.log_callback("Las variables exogenas seran DESACTIVADAS")
+                config.log_callback("=" * 60)
+            return None, None
+
+        # Log de variables
+        if config.log_callback:
+            for var_data in exog_info.values():
+                config.log_callback(f"  - {var_data['nombre']}")
+            config.log_callback("Variables exogenas en escala ORIGINAL")
+            config.log_callback("SARIMAX las normalizara internamente")
+
+        # Guardar scaler (solo FIT, no transform)
+        self.exog_scaler = StandardScaler()
+        self.exog_scaler.fit(exog_df)
+
+        return exog_df, exog_info
+
+    def _log_optimized_config(self, optimized_config: dict, regional_code: str, log_callback) -> None:
+        """Loguear configuración optimizada."""
+        if not optimized_config or not log_callback:
+            return
+
+        log_callback("=" * 80)
+        log_callback("USANDO CONFIGURACIÓN OPTIMIZADA")
+        log_callback("=" * 80)
+        log_callback(f"Regional: {regional_code}")
+        log_callback(f"Transformación: {optimized_config['transformation'].upper()}")
+        log_callback(f"Order: {optimized_config['order']}")
+        log_callback(f"Seasonal: {optimized_config['seasonal_order']}")
+        log_callback(f"Precisión documentada: {optimized_config['precision_final']:.1f}%")
+        log_callback(f"Optimizado en: {optimized_config['optimization_date']}")
+        log_callback("=" * 80)
+
+
+    def _log_simulation_info(self, simulation_config: dict, log_callback) -> None:
+        """Loguear información de simulación climática."""
+        if not log_callback:
+            return
+
+        log_callback("=" * 60)
+        log_callback("VALIDACIÓN CON SIMULACIÓN CLIMÁTICA")
+        log_callback("=" * 60)
+
+        summary = simulation_config.get("summary", {})
+        log_callback(f"Escenario: {summary.get('escenario', 'N/A')}")
+        log_callback(f"Alcance: {simulation_config.get('alcance_meses', 'N/A')} meses")
+        log_callback(f"Días base: {simulation_config.get('dias_base', 'N/A')}")
+        log_callback(f"Ajuste: {simulation_config.get('slider_adjustment', 0):+d} días")
+        log_callback(f"Total días simulados: {summary.get('dias_simulados', 'N/A')}")
+
+        if "variables_afectadas" in summary:
+            log_callback("\nVariables climáticas a modificar:")
+            vars_afectadas = summary["variables_afectadas"]
+            for var_info in vars_afectadas.values():
+                change = var_info.get("cambio_porcentual", 0)
+                arrow = "↑" if change > 0 else "↓" if change < 0 else "→"
+                log_callback(f"   {arrow} {var_info['nombre']}: {change:+.1f}%")
+
+        log_callback("")
+        log_callback("NOTA: Validación bajo condiciones climáticas HIPOTÉTICAS")
+        log_callback("Las métricas reflejan el comportamiento del modelo")
+        log_callback("bajo el escenario simulado, NO el clima real histórico")
+        log_callback("=" * 60)
+
+
+    def _get_validated_orders(self, order: tuple | None, seasonal_order: tuple | None,
+                            regional_code: str | None, optimized_config: dict | None,
+                            log_callback) -> tuple[tuple, tuple]:
+        """Obtener y validar órdenes del modelo."""
+        if order is not None and seasonal_order is not None:
+            return order, seasonal_order
+
+        order_regional, seasonal_regional = self._get_orders_for_regional(regional_code)
+
+        final_order = order if order is not None else order_regional
+        final_seasonal = seasonal_order if seasonal_order is not None else seasonal_regional
+
+        if log_callback and regional_code and not optimized_config:
+            regional_nombres = {
+                "SAIDI_O": "Ocaña",
+                "SAIDI_C": "Cúcuta",
+                "SAIDI_A": "Aguachica",
+                "SAIDI_P": "Pamplona",
+                "SAIDI_T": "Tibú",
+                "SAIDI_Cens": "CENS",
+            }
+            nombre = regional_nombres.get(regional_code, regional_code)
+            log_callback(f"Usando parametros default para regional {nombre}")
+            log_callback(f"   Order: {final_order}")
+            log_callback(f"   Seasonal Order: {final_seasonal}")
+
+        return final_order, final_seasonal
+
+
+    def _calculate_validation_split(self, n_obs: int) -> tuple[float, int]:
+        """Calcular división de datos para validación."""
+        obser_mayor = 60
+        obser_menor = 36
+        if n_obs >= obser_mayor:
+            pct_validacion = 0.30
+        elif n_obs >= obser_menor:
+            pct_validacion = 0.25
+        else:
+            pct_validacion = 0.20
+
+        n_test = max(6, int(n_obs * pct_validacion))
+        return pct_validacion, n_test
+
+
+    def _prepare_exog_for_training(self, config: ExogTrainingConfig) -> tuple[pd.DataFrame | None, pd.DataFrame | None]:
+        """Preparar variables exógenas para entrenamiento y validación."""
+        if config.exog_df is None:
+            return None, None
+
+        try:
+            exog_train = config.exog_df.loc[config.datos_entrenamiento_original.index]
+
+            if config.simulation_applied:
+                exog_test = self._prepare_simulated_exog(
+                    config.exog_df,
+                    config.datos_validacion_original,
+                    config.simulation_config,
+                    config.log_callback,
+                )
+            else:
+                exog_test = config.exog_df.loc[config.datos_validacion_original.index]
+                if config.log_callback:
+                    config.log_callback("Variables de validación SIN simulación (escala original)")
+        except (KeyError, IndexError, ValueError) as e:
+            if config.log_callback:
+                config.log_callback(f"ERROR preparando variables exógenas: {e!s}")
+                config.log_callback(traceback.format_exc())
+                config.log_callback("ADVERTENCIA: Variables exógenas desactivadas por error")
+            return None, None
+        else:
+            # Logging solo si no hubo excepciones
+            if config.log_callback:
+                self._log_exog_preparation(
+                    exog_train,
+                    exog_test,
+                    simulation_applied=config.simulation_applied,
+                )
+
+            return exog_train, exog_test
+
+
+    def _prepare_simulated_exog(self, exog_df: pd.DataFrame,
+                                datos_validacion_original: pd.Series,
+                                simulation_config: dict,
+                                log_callback) -> pd.DataFrame:
+        """Preparar variables exógenas con simulación climática."""
+        if log_callback:
+            log_callback("=" * 60)
+            log_callback("PREPARANDO VALIDACIÓN CON SIMULACIÓN CLIMÁTICA")
+            log_callback("=" * 60)
+
+        exog_test_original = exog_df.loc[datos_validacion_original.index]
+
+        if log_callback:
+            log_callback("Variables de validación ANTES de simulación:")
+            log_callback(f"Periodo: {exog_test_original.index[0].strftime('%Y-%m')} a {exog_test_original.index[-1].strftime('%Y-%m')}")
+            log_callback(f"Variables: {len(exog_test_original.columns)}")
+            log_callback(f"Shape: {exog_test_original.shape}")
+
+        exog_test = self._apply_climate_simulation(
+            exog_test_original, simulation_config, log_callback,
+        )
+
+        if log_callback:
+            summary = simulation_config.get("summary", {})
+            log_callback("\nSimulación aplicada a periodo de validación:")
+            log_callback(f"- Escenario: {summary.get('escenario', 'N/A')}")
+            log_callback(f"- Alcance: {simulation_config.get('alcance_meses', 'N/A')} meses")
+            log_callback(f"- Días simulados: {summary.get('dias_simulados', 'N/A')}")
+            log_callback(f"- Periodos afectados: {len(exog_test)}")
+            log_callback("=" * 60)
+
+        return exog_test
+
+
+    def _log_exog_preparation(self, exog_train: pd.DataFrame,
+                        exog_test: pd.DataFrame,
+                        *,
+                        simulation_applied: bool) -> None:
+        """Loguear preparación de variables exógenas."""
+        print("\nVariables exógenas preparadas:")
+        print(f"  - Entrenamiento: {len(exog_train)} periodos x {exog_train.shape[1]} variables")
+        print(f"  - Validación: {len(exog_test)} periodos x {exog_test.shape[1]} variables")
+        modo = "CON SIMULACIÓN CLIMÁTICA" if simulation_applied else "SIN SIMULACIÓN"
+        print(f"  - Modo: {modo}")
+        print("  - Escala: ORIGINAL (SARIMAX normaliza internamente)")
+
+
+    def _fit_sarimax_model(self, config: SARIMAXFitConfig):
+        """Ajustar modelo SARIMAX."""
+        try:
+            model = SARIMAX(
+                config.datos_entrenamiento_transformed,
+                exog=config.exog_train,
+                order=config.order,
+                seasonal_order=config.seasonal_order,
+                enforce_stationarity=True,
+                enforce_invertibility=True,
+            )
+            results = model.fit(disp=False)
+        except (ValueError, np.linalg.LinAlgError) as e:
+            msg = f"Error ajustando modelo: {e!s}"
+            raise ModelFittingError(msg) from e
+        else:
+            # Logging solo si no hubo excepciones
+            if config.log_callback:
+                config.log_callback(
+                    f"Modelo SARIMAX ajustado con transformacion "
+                    f"{config.transformation.upper()}",
+                )
+                if config.exog_train is not None:
+                    config.log_callback(
+                        f"Modelo incluye {config.exog_train.shape[1]} variables exogenas",
                     )
 
-                    if exog_df is not None:
-                        if log_callback:
-                            log_callback(f"Variables exogenas disponibles: {len(exog_df.columns)}")
+            return results
 
-                        # ========== NUEVO: Validar cobertura como OptimizationService ==========
-                        if not self._diagnose_exog_coverage(historico[col_saidi], exog_df, log_callback):
-                            if log_callback:
-                                log_callback("=" * 60)
-                                log_callback("ADVERTENCIA: Cobertura insuficiente")
-                                log_callback("Las variables exogenas seran DESACTIVADAS")
-                                log_callback("=" * 60)
-                            exog_df = None
-                            exog_info = None
-                        else:
-                            # Solo si pasa la validación, continuar con las exógenas
-                            if log_callback:
-                                for var_data in exog_info.values():
-                                    log_callback(f"  - {var_data['nombre']}")
 
-                            if simulation_applied:
-                                # [Código de simulación - se omite por ahora]
-                                pass
-                            else:
-                                if log_callback:
-                                    log_callback("Variables exogenas en escala ORIGINAL")
-                                    log_callback("SARIMAX las normalizara internamente")
+    def _generate_predictions(self, results, config: PredictionGenerationConfig) -> pd.Series:
+        """Generar predicciones del modelo."""
+        try:
+            pred = results.get_forecast(steps=config.n_test, exog=config.exog_test)
+            predicciones_transformed = pred.predicted_mean
 
-                                # Guardar scaler solo para compatibilidad, pero NO transformar
-                                self.exog_scaler = StandardScaler()
-                                self.exog_scaler.fit(exog_df)  # Solo FIT, NO transform
-                                # exog_df permanece completamente SIN ESCALAR
-                    elif log_callback:
-                        log_callback("No se pudieron preparar variables exogenas, continuando sin ellas")
-                elif log_callback:
-                    log_callback("No hay datos climaticos disponibles, validacion sin variables exogenas")
+            predicciones_original = self._inverse_transformation(
+                predicciones_transformed.values, config.transformation,
+            )
 
-                if progress_callback:
-                    progress_callback(30, "Dividiendo datos para validacion...")
-
-                # Determinar porcentaje de validacion (IDENTICO a OptimizationService)
-                n_obervaciones_mayor_60 = 60
-                n_obervaciones_mayor_36 = 36
-                n_obs = len(historico)
-                if n_obs >= n_obervaciones_mayor_60:
-                    pct_validacion = 0.30
-                elif n_obs >= n_obervaciones_mayor_36:
-                    pct_validacion = 0.25
-                else:
-                    pct_validacion = 0.20
-
-                n_test = max(6, int(n_obs * pct_validacion))
-                datos_entrenamiento_original = historico[col_saidi][:-n_test]
-                datos_validacion_original = historico[col_saidi][-n_test:]
-
-                if log_callback:
-                    log_callback(f"Division: {len(datos_entrenamiento_original)} datos entrenamiento, {len(datos_validacion_original)} datos validacion")
-                    log_callback(f"Porcentaje validacion: {pct_validacion*100:.0f}%")
-
-                if progress_callback:
-                    progress_callback(40, f"Aplicando transformacion {transformation.upper()}...")
-
-                # Aplicar transformacion segun regional
-                train_transformed, transform_info = self._apply_transformation(
-                    datos_entrenamiento_original.values, transformation,
+            predicciones_validacion = pd.Series(
+                predicciones_original,
+                index=predicciones_transformed.index,
+            )
+        except (ValueError, KeyError) as e:
+            msg = f"Error generando predicciones: {e!s}"
+            raise PredictionError(msg) from e
+        else:
+            # Logging solo si no hubo excepciones
+            if config.log_callback:
+                config.log_callback(
+                    f"Predicciones generadas y revertidas a escala original para "
+                    f"{len(predicciones_validacion)} periodos",
                 )
-                datos_entrenamiento_transformed = pd.Series(train_transformed, index=datos_entrenamiento_original.index)
+                if config.simulation_applied:
+                    config.log_callback("(basadas en condiciones climaticas simuladas)")
 
-                if log_callback:
-                    log_callback(f"Transformacion aplicada: {transform_info}")
+            return predicciones_validacion
 
-                if progress_callback:
-                    progress_callback(50, "Entrenando modelo SARIMAX con datos transformados...")
 
-                # Preparar variables exogenas para entrenamiento y validacion
-                exog_train = None
-                exog_test = None
+    def _calculate_all_metrics(self, input_data: MetricsCalculationInput) -> dict:
+        """Calcular todas las métricas de validación."""
+        params = ValidationMetricsParams(
+            order=input_data.order,
+            seasonal_order=input_data.seasonal_order,
+            transformation=input_data.transformation,
+            with_exogenous=input_data.exog_df is not None,
+            pct_validacion=input_data.pct_validacion,
+            n_test=input_data.n_test,
+        )
 
-                if exog_df is not None:
-                    try:
-                        # Extraer variables para entrenamiento (sin escalar)
-                        exog_train = exog_df.loc[datos_entrenamiento_original.index]
+        metricas = self._calcular_metricas_validacion_optimized(
+            input_data.datos_validacion_original.values,
+            input_data.predicciones_original,
+            params,
+        )
 
-                        if simulation_applied:
-                            if log_callback:
-                                log_callback("=" * 60)
-                                log_callback("PREPARANDO VALIDACIÓN CON SIMULACIÓN CLIMÁTICA")
-                                log_callback("=" * 60)
+        complexity_penalty = sum(input_data.order) + sum(input_data.seasonal_order[:3])
+        composite_score = metricas["rmse"] + (complexity_penalty * 0.05)
 
-                            # Obtener variables SIN ESCALAR para el periodo de validación
-                            exog_test_original = exog_df.loc[datos_validacion_original.index]
+        stability_score = self._calculate_stability_numpy(
+            input_data.datos_validacion_original.values,
+            input_data.predicciones_original,
+            metricas["precision_final"],
+            metricas["mape"],
+        )
 
-                            if log_callback:
-                                log_callback("Variables de validación ANTES de simulación:")
-                                log_callback(f"Periodo: {exog_test_original.index[0].strftime('%Y-%m')} a {exog_test_original.index[-1].strftime('%Y-%m')}")
-                                log_callback(f"Variables: {len(exog_test_original.columns)}")
-                                log_callback(f"Shape: {exog_test_original.shape}")
+        metricas["composite_score"] = composite_score
+        metricas["stability_score"] = stability_score
+        metricas["complexity"] = complexity_penalty
 
-                            # Aplicar simulación (retorna en escala original)
-                            exog_test = self._apply_climate_simulation(
-                                exog_test_original, simulation_config, log_callback,
-                            )
+        return metricas
 
-                            if log_callback:
-                                summary = simulation_config.get("summary", {})
-                                log_callback("\nSimulación aplicada a periodo de validación:")
-                                log_callback(f"- Escenario: {summary.get('escenario', 'N/A')}")
-                                log_callback(f"- Alcance: {simulation_config.get('alcance_meses', 'N/A')} meses")
-                                log_callback(f"- Días simulados: {summary.get('dias_simulados', 'N/A')}")
-                                log_callback(f"- Periodos afectados: {len(exog_test)}")
-                                log_callback("=" * 60)
-                        else:
-                            # Sin simulación: usar directamente (sin escalar)
-                            exog_test = exog_df.loc[datos_validacion_original.index]
 
-                            if log_callback:
-                                log_callback("Variables de validación SIN simulación (escala original)")
+    def _log_validation_metrics(self, metricas: dict, config: ValidationMetricsConfig) -> None:
+        """Loguear métricas de validación."""
+        if not config.log_callback:
+            return
 
-                        # Validación de dimensiones
-                        if log_callback:
-                            log_callback("\nVariables exógenas preparadas:")
-                            log_callback(f"  - Entrenamiento: {len(exog_train)} periodos x {exog_train.shape[1]} variables")
-                            log_callback(f"  - Validación: {len(exog_test)} periodos x {exog_test.shape[1]} variables")
-                            if simulation_applied:
-                                log_callback("  - Modo: CON SIMULACIÓN CLIMÁTICA")
-                            else:
-                                log_callback("  - Modo: SIN SIMULACIÓN")
-                            log_callback("  - Escala: ORIGINAL (SARIMAX normaliza internamente)")
+        config.log_callback("=" * 60)
+        if config.simulation_applied:
+            config.log_callback("METRICAS DE VALIDACION CON SIMULACION CLIMATICA")
+            summary = config.simulation_config.get("summary", {})
+            config.log_callback(f"Escenario simulado: {summary.get('escenario', 'N/A')}")
+            config.log_callback(f"Alcance: {config.simulation_config.get('alcance_meses', 'N/A')} meses")
+        else:
+            config.log_callback("METRICAS DEL MODELO (Calculadas como OptimizationService)")
 
-                    except (KeyError, IndexError, ValueError) as e:
-                        if log_callback:
-                            log_callback(f"ERROR preparando variables exógenas: {e!s}")
-                            log_callback(traceback.format_exc())
+        config.log_callback("=" * 60)
+        config.log_callback(f"RMSE: {metricas['rmse']:.4f} minutos")
+        config.log_callback(f"MAE: {metricas['mae']:.4f} minutos")
+        config.log_callback(f"MAPE: {metricas['mape']:.1f}%")
+        config.log_callback(f"R2: {metricas['r2_score']:.3f}")
+        config.log_callback(f"PRECISION FINAL: {metricas['precision_final']:.1f}%")
+        config.log_callback(f"Stability Score: {metricas['stability_score']:.1f}/100")
+        config.log_callback(f"Complejidad del modelo: {metricas['complexity']} parametros")
+        config.log_callback(f"Composite Score: {metricas['composite_score']:.4f}")
 
-                        # Fallback: desactivar exógenas
-                        exog_train = None
-                        exog_test = None
+        interpretacion = self._get_precision_interpretation(metricas["precision_final"])
+        config.log_callback(f"INTERPRETACION: {interpretacion}")
+        config.log_callback(f"Validacion: {config.pct_validacion*100:.0f}% de datos como test ({config.n_test} meses)")
 
-                        if log_callback:
-                            log_callback("ADVERTENCIA: Variables exógenas desactivadas por error")
+        if config.simulation_applied:
+            self._log_simulation_warning(config.simulation_config, config.log_callback)
 
-                # Entrenar modelo con datos TRANSFORMADOS
-                try:
-                    model = SARIMAX(
-                        datos_entrenamiento_transformed,
-                        exog=exog_train,
-                        order=order,
-                        seasonal_order=seasonal_order,
-                        enforce_stationarity=True,
-                        enforce_invertibility=True,
-                    )
-                    results = model.fit(disp=False)
+        if config.exog_info:
+            self._log_exog_variables(
+                config.exog_info,
+                simulation_applied=config.simulation_applied,
+                log_callback=config.log_callback,
+            )
 
-                    if log_callback:
-                        log_callback(f"Modelo SARIMAX ajustado con transformacion {transformation.upper()}")
-                        if exog_train is not None:
-                            log_callback(f"Modelo incluye {exog_train.shape[1]} variables exogenas")
+        config.log_callback("=" * 60)
 
-                except (ValueError, np.linalg.LinAlgError) as e:
-                    msg = f"Error ajustando modelo: {e!s}"
-                    raise ModelFittingError(msg) from e
 
-                if progress_callback:
-                    progress_callback(70, "Generando predicciones de validacion...")
+    def _get_precision_interpretation(self, precision: float) -> str:
+        """Obtener interpretación de precisión."""
+        precision_menor = 20
+        precision_media = 40
+        precision_mayor = 60
+        if precision >= precision_mayor:
+            return "EXCELENTE - Predicciones muy confiables"
+        if precision >= precision_media:
+            return "BUENO - Predicciones confiables"
+        if precision >= precision_menor:
+            return "ACEPTABLE - Predicciones moderadamente confiables"
+        return "LIMITADO - Modelo poco confiable"
 
-                # Predecir en escala TRANSFORMADA
-                try:
-                    pred = results.get_forecast(steps=n_test, exog=exog_test)
-                    predicciones_transformed = pred.predicted_mean
 
-                    # Revertir predicciones a escala ORIGINAL
-                    predicciones_original = self._inverse_transformation(
-                        predicciones_transformed.values, transformation,
-                    )
+    def _log_simulation_warning(self, simulation_config: dict, log_callback) -> None:
+        """Loguear advertencia sobre simulación."""
+        summary = simulation_config.get("summary", {})
+        log_callback("")
+        log_callback("ADVERTENCIA: Métricas bajo condiciones climáticas SIMULADAS")
+        log_callback("Los valores reflejan el desempeño del modelo bajo el escenario:")
+        log_callback(f" '{summary.get('escenario', 'N/A')}' con {summary.get('dias_simulados', 'N/A')} días")
+        log_callback("Los valores reales pueden DIFERIR significativamente")
+        log_callback("si el clima no sigue este patrón hipotético")
 
-                    predicciones_validacion = pd.Series(predicciones_original, index=predicciones_transformed.index)
 
-                    if log_callback:
-                        log_callback(f"Predicciones generadas y revertidas a escala original para {len(predicciones_validacion)} periodos")
-                        if simulation_applied:
-                            log_callback("(basadas en condiciones climaticas simuladas)")
+    def _log_exog_variables(self, exog_info: dict, *, simulation_applied: bool, log_callback) -> None:
+        """Loguear variables exógenas utilizadas."""
+        log_callback("\nVariables exogenas utilizadas en validacion:")
+        for var_data in exog_info.values():
+            correlacion_str = f" (r={var_data['correlacion']:.3f})" if var_data.get("correlacion", 0) != 0 else ""
+            log_callback(f"  - {var_data['nombre']}{correlacion_str}")
 
-                except (ValueError, KeyError) as e:
-                    msg = f"Error generando predicciones: {e!s}"
-                    raise PredictionError(msg) from e
+        if simulation_applied:
+            log_callback("Estas variables fueron MODIFICADAS según el escenario simulado")
 
-                if progress_callback:
-                    progress_callback(85, "Calculando metricas de validacion...")
 
-                # Calcular metricas IDENTICO a OptimizationService
-                params = ValidationMetricsParams(
-                    order=order,
-                    seasonal_order=seasonal_order,
-                    transformation=transformation,
-                    with_exogenous=exog_df is not None,
-                    pct_validacion=pct_validacion,
-                    n_test=n_test,
-                )
-
-                metricas = self._calcular_metricas_validacion_optimized(
-                    datos_validacion_original.values,
-                    predicciones_original,
-                    params,
-                )
-
-                # Calcular complejidad del modelo (IDENTICO a OptimizationService)
-                complexity_penalty = sum(order) + sum(seasonal_order[:3])
-                composite_score = metricas["rmse"] + (complexity_penalty * 0.05)
-
-                # Calcular estabilidad (IDENTICO a OptimizationService)
-                stability_score = self._calculate_stability_numpy(
-                    datos_validacion_original.values,
-                    predicciones_original,
-                    metricas["precision_final"],
-                    metricas["mape"],
-                )
-
-                # Agregar métricas adicionales
-                metricas["composite_score"] = composite_score
-                metricas["stability_score"] = stability_score
-                metricas["complexity"] = complexity_penalty
-
-                if log_callback:
-                    log_callback("=" * 60)
-                    if simulation_applied:
-                        log_callback("METRICAS DE VALIDACION CON SIMULACION CLIMATICA")
-                        summary = simulation_config.get("summary", {})
-                        log_callback(f"Escenario simulado: {summary.get('escenario', 'N/A')}")
-                        log_callback(f"Alcance: {simulation_config.get('alcance_meses', 'N/A')} meses")
-                    else:
-                        log_callback("METRICAS DEL MODELO (Calculadas como OptimizationService)")
-
-                    log_callback("=" * 60)
-                    log_callback(f"RMSE: {metricas['rmse']:.4f} minutos")
-                    log_callback(f"MAE: {metricas['mae']:.4f} minutos")
-                    log_callback(f"MAPE: {metricas['mape']:.1f}%")
-                    log_callback(f"R2: {metricas['r2_score']:.3f}")
-                    log_callback(f"PRECISION FINAL: {metricas['precision_final']:.1f}%")
-                    log_callback(f"Stability Score: {stability_score:.1f}/100")
-                    log_callback(f"Complejidad del modelo: {complexity_penalty} parametros")
-                    log_callback(f"Composite Score: {composite_score:.4f}")
-
-                    # Interpretación de precisión
-                    precision_excelente = 60
-                    precision_buena = 40
-                    precision_aceptable = 20
-                    precision = metricas["precision_final"]
-                    if precision >= precision_excelente:
-                        interpretacion = "EXCELENTE - Predicciones muy confiables"
-                    elif precision >= precision_buena:
-                        interpretacion = "BUENO - Predicciones confiables"
-                    elif precision >= precision_aceptable:
-                        interpretacion = "ACEPTABLE - Predicciones moderadamente confiables"
-                    else:
-                        interpretacion = "LIMITADO - Modelo poco confiable"
-
-                    log_callback(f"INTERPRETACION: {interpretacion}")
-                    log_callback(f"Validacion: {pct_validacion*100:.0f}% de datos como test ({n_test} meses)")
-
-                    if simulation_applied:
-                        log_callback("")
-                        log_callback("ADVERTENCIA: Métricas bajo condiciones climáticas SIMULADAS")
-                        log_callback("Los valores reflejan el desempeño del modelo bajo el escenario:")
-                        log_callback(f" '{summary.get('escenario', 'N/A')}' con {summary.get('dias_simulados', 'N/A')} días")
-                        log_callback("Los valores reales pueden DIFERIR significativamente")
-                        log_callback("si el clima no sigue este patrón hipotético")
-
-                    if exog_info:
-                        log_callback("\nVariables exogenas utilizadas en validacion:")
-                        for var_data in exog_info.values():
-                            correlacion_str = f" (r={var_data['correlacion']:.3f})" if var_data.get("correlacion", 0) != 0 else ""
-                            log_callback(f"  - {var_data['nombre']}{correlacion_str}")
-
-                        if simulation_applied:
-                            log_callback("Estas variables fueron MODIFICADAS según el escenario simulado")
-
-                    log_callback("=" * 60)
-
-                if progress_callback:
-                    progress_callback(95, "Generando grafica de validacion...")
-
-                # Generar grafica con datos en escala ORIGINAL
-                plot_config = ValidationPlotConfig(
-                    datos_entrenamiento=datos_entrenamiento_original,
-                    datos_validacion=datos_validacion_original,
-                    predicciones_validacion=predicciones_validacion,
-                    order=order,
-                    seasonal_order=seasonal_order,
-                    metricas=metricas,
-                    pct_validacion=pct_validacion,
-                    transformation=transformation,
-                    exog_info=exog_info,
-                    simulation_config=simulation_config if simulation_applied else None,
-                )
-
-                plot_path = self._generar_grafica_validacion(plot_config)
-
-                if progress_callback:
-                    progress_callback(100, "Validacion completada exitosamente")
-
-                return {
-                    "success": True,
-                    "metrics": metricas,
-                    "model_params": {
-                        "order": order,
-                        "seasonal_order": seasonal_order,
-                        "transformation": transformation,
-                        "regional_code": regional_code,
-                        "with_exogenous": exog_df is not None,
-                        "with_simulation": simulation_applied,
-                        "complexity": complexity_penalty,
-                    },
-                    "predictions": {
-                        "mean": predicciones_validacion.to_dict(),
-                    },
-                    "exogenous_vars": exog_info,
-                    "simulation_config": simulation_config if simulation_applied else None,
-                    "training_count": len(datos_entrenamiento_original),
-                    "validation_count": len(datos_validacion_original),
-                    "validation_percentage": pct_validacion * 100,
-                    "training_period": {
-                        "start": datos_entrenamiento_original.index[0].strftime("%Y-%m"),
-                        "end": datos_entrenamiento_original.index[-1].strftime("%Y-%m"),
-                    },
-                    "validation_period": {
-                        "start": datos_validacion_original.index[0].strftime("%Y-%m"),
-                        "end": datos_validacion_original.index[-1].strftime("%Y-%m"),
-                    },
-                    "plot_file": plot_path,
-                }
-
-            except ValidationDataError:
-                raise
-            except ModelFittingError:
-                raise
-            except PredictionError:
-                raise
-            except (KeyError, ValueError, pd.errors.EmptyDataError) as e:
-                if log_callback:
-                    log_callback(f"ERROR: {e!s}")
-                msg = f"Error en validacion: {e!s}"
-                raise ValidationError(msg) from e
-
+    def _build_validation_result(self, metricas: dict, order: tuple,  # noqa: PLR0913
+                                seasonal_order: tuple, transformation: str,
+                                regional_code: str | None, exog_df: pd.DataFrame | None,
+                                simulation_applied: bool, simulation_config: dict | None,  # noqa: FBT001
+                                predicciones_validacion: pd.Series,
+                                exog_info: dict | None,
+                                datos_entrenamiento_original: pd.Series,
+                                datos_validacion_original: pd.Series,
+                                pct_validacion: float,
+                                plot_path: str) -> dict[str, Any]:
+        """Construir diccionario de resultados."""
+        return {
+            "success": True,
+            "metrics": metricas,
+            "model_params": {
+                "order": order,
+                "seasonal_order": seasonal_order,
+                "transformation": transformation,
+                "regional_code": regional_code,
+                "with_exogenous": exog_df is not None,
+                "with_simulation": simulation_applied,
+                "complexity": metricas["complexity"],
+            },
+            "predictions": {
+                "mean": predicciones_validacion.to_dict(),
+            },
+            "exogenous_vars": exog_info,
+            "simulation_config": simulation_config if simulation_applied else None,
+            "training_count": len(datos_entrenamiento_original),
+            "validation_count": len(datos_validacion_original),
+            "validation_percentage": pct_validacion * 100,
+            "training_period": {
+                "start": datos_entrenamiento_original.index[0].strftime("%Y-%m"),
+                "end": datos_entrenamiento_original.index[-1].strftime("%Y-%m"),
+            },
+            "validation_period": {
+                "start": datos_validacion_original.index[0].strftime("%Y-%m"),
+                "end": datos_validacion_original.index[-1].strftime("%Y-%m"),
+            },
+            "plot_file": plot_path,
+        }
 
     def _load_saidi_data(self, file_path: str | None, df_prepared: pd.DataFrame | None, log_callback) -> pd.DataFrame:
             """Carga los datos SAIDI desde archivo o DataFrame preparado."""
