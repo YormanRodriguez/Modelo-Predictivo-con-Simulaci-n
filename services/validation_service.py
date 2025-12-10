@@ -26,6 +26,39 @@ from services.climate_simulation_service import (
 warnings.filterwarnings("ignore")
 
 @dataclass
+class TrainAndPredictConfig:
+    """Configuración para entrenar modelo y generar predicciones."""
+
+    datos_entrenamiento_transformed: pd.Series
+    exog_train: pd.DataFrame | None
+    exog_test: pd.DataFrame | None
+    order: tuple
+    seasonal_order: tuple
+    transformation: str
+    n_test: int
+    simulation_applied: bool
+    log_callback: Any
+    progress_callback: Any
+
+@dataclass
+class MetricsComputationConfig:
+    """Configuración para calcular y loguear métricas."""
+
+    datos_validacion_original: pd.Series
+    predicciones_validacion: pd.Series
+    order: tuple
+    seasonal_order: tuple
+    transformation: str
+    exog_df: pd.DataFrame | None
+    pct_validacion: float
+    n_test: int
+    simulation_applied: bool
+    simulation_config: dict | None
+    exog_info: dict | None
+    log_callback: Any
+    progress_callback: Any
+
+@dataclass
 class ExogValidationConfig:
     """Configuración para preparar y validar variables exógenas."""
 
@@ -309,7 +342,7 @@ class ValidationService:
 
         return self.default_order, self.default_seasonal_order
 
-    def run_validation(self,
+    def run_validation(self,  # noqa: PLR0913
                 file_path: str | None = None,
                 df_prepared: pd.DataFrame | None = None,
                 order: tuple | None = None,
@@ -380,12 +413,22 @@ class ValidationService:
             )
 
             # 12-13. Calcular métricas y loguear
-            metricas = self._compute_and_log_metrics(
-                datos_validacion_original, predicciones_validacion, order,
-                seasonal_order, transformation, exog_df, pct_validacion,
-                n_test, simulation_applied, simulation_config, exog_info,
-                log_callback, progress_callback,
+            metrics_computation_config = MetricsComputationConfig(
+                datos_validacion_original=datos_validacion_original,
+                predicciones_validacion=predicciones_validacion,
+                order=order,
+                seasonal_order=seasonal_order,
+                transformation=transformation,
+                exog_df=exog_df,
+                pct_validacion=pct_validacion,
+                n_test=n_test,
+                simulation_applied=simulation_applied,
+                simulation_config=simulation_config,
+                exog_info=exog_info,
+                log_callback=log_callback,
+                progress_callback=progress_callback,
             )
+            metricas = self._compute_and_log_metrics(metrics_computation_config)
 
             # 14. Generar gráfica
             if progress_callback:
@@ -429,9 +472,9 @@ class ValidationService:
             raise ValidationError(msg) from e
 
 
-    def _log_initial_validation_info(self, order: tuple, seasonal_order: tuple,
+    def _log_initial_validation_info(self, order: tuple, seasonal_order: tuple,  # noqa: PLR0913
                                     regional_code: str | None, transformation: str,
-                                    simulation_applied: bool, simulation_config: dict | None,
+                                    simulation_applied: bool, simulation_config: dict | None,  # noqa: FBT001
                                     log_callback) -> None:
         """Loguear información inicial de validación."""
         if not log_callback:
@@ -521,10 +564,10 @@ class ValidationService:
                 datos_validacion_original, datos_entrenamiento_transformed)
 
 
-    def _train_and_predict(self, datos_entrenamiento_transformed: pd.Series,
+    def _train_and_predict(self, datos_entrenamiento_transformed: pd.Series,  # noqa: PLR0913
                         exog_train: pd.DataFrame | None, exog_test: pd.DataFrame | None,
                         order: tuple, seasonal_order: tuple, transformation: str,
-                        n_test: int, simulation_applied: bool, log_callback, progress_callback):
+                        n_test: int, simulation_applied: bool, log_callback, progress_callback):  # noqa: FBT001
         """Entrenar modelo y generar predicciones."""
         if progress_callback:
             progress_callback(50, "Entrenando modelo SARIMAX con datos transformados...")
@@ -554,41 +597,34 @@ class ValidationService:
         return predicciones_validacion
 
 
-    def _compute_and_log_metrics(self, datos_validacion_original: pd.Series,
-                                predicciones_validacion: pd.Series, order: tuple,
-                                seasonal_order: tuple, transformation: str,
-                                exog_df: pd.DataFrame | None, pct_validacion: float,
-                                n_test: int, simulation_applied: bool,
-                                simulation_config: dict | None, exog_info: dict | None,
-                                log_callback, progress_callback):
+    def _compute_and_log_metrics(self, config: MetricsComputationConfig):
         """Calcular métricas y generar logs."""
-        if progress_callback:
-            progress_callback(85, "Calculando metricas de validacion...")
+        if config.progress_callback:
+            config.progress_callback(85, "Calculando metricas de validacion...")
 
         metrics_input = MetricsCalculationInput(
-            datos_validacion_original=datos_validacion_original,
-            predicciones_original=predicciones_validacion.values,
-            order=order,
-            seasonal_order=seasonal_order,
-            transformation=transformation,
-            exog_df=exog_df,
-            pct_validacion=pct_validacion,
-            n_test=n_test,
+            datos_validacion_original=config.datos_validacion_original,
+            predicciones_original=config.predicciones_validacion.values,
+            order=config.order,
+            seasonal_order=config.seasonal_order,
+            transformation=config.transformation,
+            exog_df=config.exog_df,
+            pct_validacion=config.pct_validacion,
+            n_test=config.n_test,
         )
         metricas = self._calculate_all_metrics(metrics_input)
 
         metrics_config = ValidationMetricsConfig(
-            simulation_applied=simulation_applied,
-            simulation_config=simulation_config,
-            pct_validacion=pct_validacion,
-            n_test=n_test,
-            exog_info=exog_info,
-            log_callback=log_callback,
+            simulation_applied=config.simulation_applied,
+            simulation_config=config.simulation_config,
+            pct_validacion=config.pct_validacion,
+            n_test=config.n_test,
+            exog_info=config.exog_info,
+            log_callback=config.log_callback,
         )
         self._log_validation_metrics(metricas, metrics_config)
 
         return metricas
-
 
     # Método auxiliar adicional para preparar y validar exógenas
     def _prepare_and_validate_exog(self, config: ExogValidationConfig) -> tuple[pd.DataFrame | None, dict | None]:
