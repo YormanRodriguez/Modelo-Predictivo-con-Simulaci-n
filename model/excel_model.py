@@ -134,13 +134,8 @@ class ExcelModel(QObject):
         return has_year_month and has_saidi_columns
 
     def _save_validated_data(
-    self,
-    df: pd.DataFrame,
-    file_path: str,
-    validation_result: dict[str, Any],
-    *,
-    is_regional: bool,
-) -> None:
+        self, df: pd.DataFrame, file_path: str, validation_result: dict[str, Any], *, is_regional: bool,
+    ) -> None:
         """Guardar datos validados y emitir señales correspondientes."""
         self._excel_data = df
         self._file_path = file_path

@@ -204,12 +204,12 @@ class PredictionService:
             return None
         else:
             # Este código solo se ejecuta si NO hubo excepciones
-            print(f"[LOAD_CONFIG] ✓ Configuración cargada para {regional_code}")
-            print(f"[LOAD_CONFIG]   Transformación: {config['transformation']}")
-            print(f"[LOAD_CONFIG]   Order: {config['order']}")
-            print(f"[LOAD_CONFIG]   Seasonal: {config['seasonal_order']}")
-            print(f"[LOAD_CONFIG]   Precisión: {config['precision_final']:.1f}%")
-            print(f"[LOAD_CONFIG]   Optimizado: {config['optimization_date']}")
+            print(f"[LOAD_CONFIG] Configuración cargada para {regional_code}")
+            print(f"[LOAD_CONFIG] Transformación: {config['transformation']}")
+            print(f"[LOAD_CONFIG] Order: {config['order']}")
+            print(f"[LOAD_CONFIG] Seasonal: {config['seasonal_order']}")
+            print(f"[LOAD_CONFIG] Precisión: {config['precision_final']:.1f}%")
+            print(f"[LOAD_CONFIG] Optimizado: {config['optimization_date']}")
 
             return config
 
@@ -265,9 +265,9 @@ class PredictionService:
             seasonal_order = tuple(optimized_config["seasonal_order"])
 
             print(f"[ORDERS] Usando parámetros OPTIMIZADOS para {regional_code}")
-            print(f"[ORDERS]   Order: {order}")
-            print(f"[ORDERS]   Seasonal: {seasonal_order}")
-            print(f"[ORDERS]   Precisión documentada: {optimized_config['precision_final']:.1f}%")
+            print(f"[ORDERS] Order: {order}")
+            print(f"[ORDERS] Seasonal: {seasonal_order}")
+            print(f"[ORDERS] Precisión documentada: {optimized_config['precision_final']:.1f}%")
 
             return order, seasonal_order
 
@@ -278,15 +278,15 @@ class PredictionService:
             seasonal_order = config["seasonal_order"]
 
             print(f"[ORDERS] Usando parámetros DEFAULT para {regional_code}")
-            print(f"[ORDERS]   Order: {order}")
-            print(f"[ORDERS]   Seasonal: {seasonal_order}")
+            print(f"[ORDERS] Order: {order}")
+            print(f"[ORDERS] Seasonal: {seasonal_order}")
 
             return order, seasonal_order
 
         # FALLBACK: Usar valores por defecto genéricos
         print(f"[ORDERS] Usando parámetros FALLBACK para {regional_code}")
-        print(f"[ORDERS]   Order: {self.default_order}")
-        print(f"[ORDERS]   Seasonal: {self.default_seasonal_order}")
+        print(f"[ORDERS] Order: {self.default_order}")
+        print(f"[ORDERS] Seasonal: {self.default_seasonal_order}")
 
         return self.default_order, self.default_seasonal_order
 
@@ -375,9 +375,9 @@ class PredictionService:
             "SAIDI_Cens": "CENS",
         }.get(regional_code, regional_code)
 
-        log_callback(f"✓ Usando parametros default para regional {regional_nombre}")
-        log_callback(f"   Order: {order}")
-        log_callback(f"   Seasonal Order: {seasonal_order}")
+        log_callback(f"Usando parametros default para regional {regional_nombre}")
+        log_callback(f"Order: {order}")
+        log_callback(f"Seasonal Order: {seasonal_order}")
 
     def _resolve_model_parameters(
         self,
@@ -604,11 +604,11 @@ class PredictionService:
         log_callback("=" * 60)
         log_callback("METRICAS DEL MODELO (en escala original):")
         log_callback("=" * 60)
-        log_callback(f"  - RMSE: {metricas['rmse']:.4f} minutos")
-        log_callback(f"  - MAE: {metricas['mae']:.4f} minutos")
-        log_callback(f"  - MAPE: {metricas['mape']:.1f}%")
-        log_callback(f"  - R2 Score: {metricas['r2_score']:.4f}")
-        log_callback(f"  - Precision Final: {metricas['precision_final']:.1f}%")
+        log_callback(f"- RMSE: {metricas['rmse']:.4f} minutos")
+        log_callback(f"- MAE: {metricas['mae']:.4f} minutos")
+        log_callback(f"- MAPE: {metricas['mape']:.1f}%")
+        log_callback(f"- R2 Score: {metricas['r2_score']:.4f}")
+        log_callback(f"- Precision Final: {metricas['precision_final']:.1f}%")
         if "stability_score" in metricas:
             log_callback(f"  - Stability Score: {metricas['stability_score']:.1f}")
         log_callback(
@@ -1419,7 +1419,7 @@ class PredictionService:
             log_callback("=" * 60)
             log_callback("APLICANDO SIMULACIÓN CLIMÁTICA")
             log_callback("=" * 60)
-            log_callback("   Entrada: valores originales SIN ESCALAR")
+            log_callback("Entrada: valores originales SIN ESCALAR")
 
     def _extract_simulation_config(self, simulation_config):
         """Extraer y organizar configuración de simulación."""
@@ -1811,11 +1811,11 @@ class PredictionService:
             final_nan = aligned_series.isna().sum()
             if final_nan > 0:
                 if log_callback:
-                    log_callback(f"X RECHAZADA {var_code}: {final_nan} NaN finales")
+                    log_callback(f"RECHAZADA {var_code}: {final_nan} NaN finales")
                 return None
 
             if log_callback:
-                log_callback(f"✓ {var_code} -> ACEPTADA ({validacion['overlap_pct']:.1f}% cobertura, escala original)")
+                log_callback(f"{var_code} -> ACEPTADA ({validacion['overlap_pct']:.1f}% cobertura, escala original)")
 
             return {
                 "series": aligned_series,
@@ -1832,7 +1832,7 @@ class PredictionService:
 
         except (ValueError, TypeError, KeyError, IndexError) as e:
             if log_callback:
-                log_callback(f"X ERROR {var_code}: {e}")
+                log_callback(f"ERROR {var_code}: {e}")
             return None
 
 
@@ -1858,13 +1858,13 @@ class PredictionService:
         cobertura_minima = 80
         if overlap_pct < cobertura_minima:
             if log_callback:
-                log_callback(f"X RECHAZADA {var_code}: cobertura {overlap_pct:.1f}% < 80%")
+                log_callback(f"RECHAZADA {var_code}: cobertura {overlap_pct:.1f}% < 80%")
             return None
 
         var_std = overlap_data.std()
         if pd.isna(var_std) or var_std == 0:
             if log_callback:
-                log_callback(f"X RECHAZADA {var_code}: varianza = 0")
+                log_callback(f"RECHAZADA {var_code}: varianza = 0")
             return None
 
         return {
@@ -1894,9 +1894,9 @@ class PredictionService:
     def _log_resumen_variables(self, exog_df, log_callback):
         """Registrar resumen de variables preparadas."""
         log_callback("=" * 60)
-        log_callback(f"✓ Variables preparadas: {len(exog_df.columns)}")
-        log_callback("  ESCALA: ORIGINAL (sin StandardScaler)")
-        log_callback("  Rangos:")
+        log_callback(f"Variables preparadas: {len(exog_df.columns)}")
+        log_callback("ESCALA: ORIGINAL (sin StandardScaler)")
+        log_callback("Rangos:")
         for col in exog_df.columns:
             log_callback(f"    - {col}: [{exog_df[col].min():.2f}, {exog_df[col].max():.2f}]")
         log_callback("=" * 60)
@@ -2012,40 +2012,40 @@ class PredictionService:
         """
         correlations = {
             "SAIDI_O": {  # Ocaña
-                "realfeel_min": 0.689,              # *** FUERTE
-                "windchill_avg": 0.520,             # ** MODERADA-FUERTE
-                "dewpoint_avg": 0.470,              # ** MODERADA-FUERTE
-                "windchill_max": 0.464,             # ** MODERADA-FUERTE
-                "dewpoint_min": 0.456,              # ** MODERADA-FUERTE
+                "realfeel_min": 0.689,
+                "windchill_avg": 0.520,
+                "dewpoint_avg": 0.470,
+                "windchill_max": 0.464,
+                "dewpoint_min": 0.456,
                 "precipitation_max_daily": 0.452,
                 "precipitation_avg_daily": 0.438,
             },
 
             "SAIDI_C": {  # Cúcuta
-                "realfeel_avg": 0.573,              # ** MODERADA-FUERTE
-                "pressure_rel_avg": -0.358,         # Negativa
+                "realfeel_avg": 0.573,
+                "pressure_rel_avg": -0.358,
                 "wind_speed_max": 0.356,
-                "pressure_abs_avg": -0.356,         # Negativa
+                "pressure_abs_avg": -0.356,
             },
 
             "SAIDI_T": {  # Tibú
-                "realfeel_avg": 0.906,              # *** MUY FUERTE
-                "wind_dir_avg": -0.400,             # Negativa
+                "realfeel_avg": 0.906,
+                "wind_dir_avg": -0.400,
                 "uv_index_avg": 0.385,
                 "heat_index_avg": 0.363,
                 "temperature_min": 0.352,
                 "windchill_min": 0.340,
                 "temperature_avg": 0.338,
-                "pressure_rel_avg": -0.330,         # Negativa
+                "pressure_rel_avg": -0.330,
             },
 
             "SAIDI_A": {  # Aguachica
-                "uv_index_max": 0.664,              # *** FUERTE
-                "days_with_rain": 0.535,            # ** MODERADA-FUERTE
+                "uv_index_max": 0.664,
+                "days_with_rain": 0.535,
             },
 
             "SAIDI_P": {  # Pamplona
-                "precipitation_total": 0.577,       # ** MODERADA-FUERTE
+                "precipitation_total": 0.577,
                 "precipitation_avg_daily": 0.552,
                 "realfeel_min": 0.344,
             },
@@ -2159,7 +2159,7 @@ class PredictionService:
             self._check_variable_variance(exog_df, log_callback)
 
             if log_callback:
-                log_callback("✓ Cobertura temporal y calidad de datos OK")
+                log_callback("Cobertura temporal y calidad de datos OK")
                 log_callback("=" * 60)
 
         except (AttributeError, KeyError, IndexError, ValueError, TypeError) as e:
@@ -2884,10 +2884,10 @@ class PredictionService:
         if simulation_config and simulation_config.get("enabled", False):
             summary = simulation_config.get("summary", {})
             escenario_name = summary.get("escenario", "Simulado")
-            return f" [SIMULACION: {escenario_name}]"
+            return f"[SIMULACION: {escenario_name}]"
         if exog_info:
             vars_names = " + ".join(v["nombre"] for v in exog_info.values())
-            return f" [Con: {vars_names}]"
+            return f"[Con: {vars_names}]"
         return ""
 
     def _agregar_notas_pie(self, exog_info, simulation_config):

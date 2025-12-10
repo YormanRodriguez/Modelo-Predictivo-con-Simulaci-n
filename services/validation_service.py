@@ -20,7 +20,7 @@ from statsmodels.tsa.statespace.sarimax import SARIMAX
 # En la sección de imports (línea ~18)
 from services.climate_simulation_service import (
     ClimateSimulationService,
-    SimulationConfig,  # ← AGREGAR ESTO
+    SimulationConfig,
 )
 
 warnings.filterwarnings("ignore")
@@ -184,18 +184,18 @@ class ValidationService:
             return None
         else:
             # Este bloque se ejecuta solo si no hubo excepciones
-            print(f"[LOAD_CONFIG] ✓ Configuración cargada para {regional_code}")
-            print(f"[LOAD_CONFIG]   Transformación: {config['transformation']}")
-            print(f"[LOAD_CONFIG]   Order: {config['order']}")
-            print(f"[LOAD_CONFIG]   Seasonal: {config['seasonal_order']}")
-            print(f"[LOAD_CONFIG]   Precisión: {config['precision_final']:.1f}%")
-            print(f"[LOAD_CONFIG]   Optimizado: {config['optimization_date']}")
+            print(f"[LOAD_CONFIG]  Configuración cargada para {regional_code}")
+            print(f"[LOAD_CONFIG]  Transformación: {config['transformation']}")
+            print(f"[LOAD_CONFIG]  Order: {config['order']}")
+            print(f"[LOAD_CONFIG]  Seasonal: {config['seasonal_order']}")
+            print(f"[LOAD_CONFIG]  Precisión: {config['precision_final']:.1f}%")
+            print(f"[LOAD_CONFIG]  Optimizado: {config['optimization_date']}")
 
             return config
 
     def _get_orders_for_regional(self, regional_code):
         """
-        MÉTODO ACTUALIZADO: Obtener órdenes SARIMAX específicos para una regional.
+        Obtener órdenes SARIMAX específicos para una regional.
 
         Prioriza configuración optimizada sobre defaults hardcodeados.
 
@@ -217,9 +217,9 @@ class ValidationService:
             seasonal_order = tuple(optimized_config["seasonal_order"])
 
             print(f"[ORDERS] Usando parámetros OPTIMIZADOS para {regional_code}")
-            print(f"[ORDERS]   Order: {order}")
-            print(f"[ORDERS]   Seasonal: {seasonal_order}")
-            print(f"[ORDERS]   Precisión documentada: {optimized_config['precision_final']:.1f}%")
+            print(f"[ORDERS] Order: {order}")
+            print(f"[ORDERS] Seasonal: {seasonal_order}")
+            print(f"[ORDERS] Precisión documentada: {optimized_config['precision_final']:.1f}%")
 
             return order, seasonal_order
 
@@ -230,15 +230,15 @@ class ValidationService:
             seasonal_order = config["seasonal_order"]
 
             print(f"[ORDERS] Usando parámetros DEFAULT para {regional_code}")
-            print(f"[ORDERS]   Order: {order}")
-            print(f"[ORDERS]   Seasonal: {seasonal_order}")
+            print(f"[ORDERS] Order: {order}")
+            print(f"[ORDERS] Seasonal: {seasonal_order}")
 
             return order, seasonal_order
 
         # FALLBACK: Usar valores por defecto genéricos
         print(f"[ORDERS] Usando parámetros FALLBACK para {regional_code}")
-        print(f"[ORDERS]   Order: {self.default_order}")
-        print(f"[ORDERS]   Seasonal: {self.default_seasonal_order}")
+        print(f"[ORDERS] Order: {self.default_order}")
+        print(f"[ORDERS] Seasonal: {self.default_seasonal_order}")
 
         return self.default_order, self.default_seasonal_order
 
@@ -254,8 +254,6 @@ class ValidationService:
                     log_callback = None) -> dict[str, Any]:
             """
             Ejecutar validacion del modelo SARIMAX con transformacion especifica por regional.
-
-            Carga automáticamente parámetros optimizados si existen
 
             Args:
                 file_path: Ruta del archivo SAIDI Excel
@@ -481,9 +479,9 @@ class ValidationService:
 
                             if log_callback:
                                 log_callback("Variables de validación ANTES de simulación:")
-                                log_callback(f"  Periodo: {exog_test_original.index[0].strftime('%Y-%m')} a {exog_test_original.index[-1].strftime('%Y-%m')}")
-                                log_callback(f"  Variables: {len(exog_test_original.columns)}")
-                                log_callback(f"  Shape: {exog_test_original.shape}")
+                                log_callback(f"Periodo: {exog_test_original.index[0].strftime('%Y-%m')} a {exog_test_original.index[-1].strftime('%Y-%m')}")
+                                log_callback(f"Variables: {len(exog_test_original.columns)}")
+                                log_callback(f"Shape: {exog_test_original.shape}")
 
                             # Aplicar simulación (retorna en escala original)
                             exog_test = self._apply_climate_simulation(
@@ -492,11 +490,11 @@ class ValidationService:
 
                             if log_callback:
                                 summary = simulation_config.get("summary", {})
-                                log_callback("\n✓ Simulación aplicada a periodo de validación:")
-                                log_callback(f"  - Escenario: {summary.get('escenario', 'N/A')}")
-                                log_callback(f"  - Alcance: {simulation_config.get('alcance_meses', 'N/A')} meses")
-                                log_callback(f"  - Días simulados: {summary.get('dias_simulados', 'N/A')}")
-                                log_callback(f"  - Periodos afectados: {len(exog_test)}")
+                                log_callback("\nSimulación aplicada a periodo de validación:")
+                                log_callback(f"- Escenario: {summary.get('escenario', 'N/A')}")
+                                log_callback(f"- Alcance: {simulation_config.get('alcance_meses', 'N/A')} meses")
+                                log_callback(f"- Días simulados: {summary.get('dias_simulados', 'N/A')}")
+                                log_callback(f"- Periodos afectados: {len(exog_test)}")
                                 log_callback("=" * 60)
                         else:
                             # Sin simulación: usar directamente (sin escalar)
@@ -567,7 +565,7 @@ class ValidationService:
                     if log_callback:
                         log_callback(f"Predicciones generadas y revertidas a escala original para {len(predicciones_validacion)} periodos")
                         if simulation_applied:
-                            log_callback("  (basadas en condiciones climaticas simuladas)")
+                            log_callback("(basadas en condiciones climaticas simuladas)")
 
                 except (ValueError, KeyError) as e:
                     msg = f"Error generando predicciones: {e!s}"
@@ -648,11 +646,11 @@ class ValidationService:
 
                     if simulation_applied:
                         log_callback("")
-                        log_callback(" ADVERTENCIA: Métricas bajo condiciones climáticas SIMULADAS")
-                        log_callback("   Los valores reflejan el desempeño del modelo bajo el escenario:")
-                        log_callback(f"   '{summary.get('escenario', 'N/A')}' con {summary.get('dias_simulados', 'N/A')} días")
-                        log_callback("   Los valores reales pueden DIFERIR significativamente")
-                        log_callback("   si el clima no sigue este patrón hipotético")
+                        log_callback("ADVERTENCIA: Métricas bajo condiciones climáticas SIMULADAS")
+                        log_callback("Los valores reflejan el desempeño del modelo bajo el escenario:")
+                        log_callback(f" '{summary.get('escenario', 'N/A')}' con {summary.get('dias_simulados', 'N/A')} días")
+                        log_callback("Los valores reales pueden DIFERIR significativamente")
+                        log_callback("si el clima no sigue este patrón hipotético")
 
                     if exog_info:
                         log_callback("\nVariables exogenas utilizadas en validacion:")
@@ -719,7 +717,6 @@ class ValidationService:
                 }
 
             except ValidationDataError:
-                # Re-raise custom exceptions as-is
                 raise
             except ModelFittingError:
                 raise
@@ -916,15 +913,15 @@ class ValidationService:
         log_callback("=" * 60)
         log_callback("APLICANDO SIMULACIÓN CLIMÁTICA EN VALIDACIÓN")
         log_callback("=" * 60)
-        log_callback("   Entrada: valores originales SIN ESCALAR")
-        log_callback(f"   Escenario: {sim_params['escenario']}")
-        log_callback(f"   Regional: {sim_params['regional_code']}")
+        log_callback("Entrada: valores originales SIN ESCALAR")
+        log_callback(f"Escenario: {sim_params['escenario']}")
+        log_callback(f"Regional: {sim_params['regional_code']}")
         log_callback(
-            f"   Slider: {sim_params['slider_adjustment']:+d} días "
+            f"Slider: {sim_params['slider_adjustment']:+d} días "
             f"sobre base de {sim_params['dias_base']}",
         )
-        log_callback(f"   Alcance: {sim_params['alcance_meses']} mes(es)")
-        log_callback(f"   Intensidad calculada: {sim_params['intensity_adjustment']:.2f}x")
+        log_callback(f"Alcance: {sim_params['alcance_meses']} mes(es)")
+        log_callback(f"Intensidad calculada: {sim_params['intensity_adjustment']:.2f}x")
 
 
     def _execute_simulation(
@@ -950,10 +947,10 @@ class ValidationService:
                 regional_code=sim_params["regional_code"],
             )
 
-            # Llamar con el objeto config (como en prediction_service)
+            # Llamar con el objeto config
             exog_simulated = self.simulation_service.apply_simulation(
                 exog_forecast=exog_forecast_original,
-                config=config,  # ✓ Ahora usa el objeto SimulationConfig
+                config=config,
             )
 
         except (ValueError, TypeError, KeyError, AttributeError, RuntimeError) as sim_error:
@@ -991,7 +988,7 @@ class ValidationService:
         if sim_params["alcance_meses"] >= 1 and len(exog_simulated) > 0:
             self._log_first_month_changes(exog_original, exog_simulated, log_callback)
 
-        log_callback("\n   Salida: valores SIMULADOS (escala original)")
+        log_callback("\n  Salida: valores SIMULADOS (escala original)")
         log_callback("=" * 60)
 
 
@@ -1442,7 +1439,7 @@ class ValidationService:
         overlap_min = 80
         if overlap_pct < overlap_min:
             if log_callback:
-                log_callback(f"X RECHAZADA {var_code}: cobertura {overlap_pct:.1f}% < 80%")
+                log_callback(f"RECHAZADA {var_code}: cobertura {overlap_pct:.1f}% < 80%")
             return False, overlap_pct
 
         return True, overlap_pct
@@ -1620,8 +1617,7 @@ class ValidationService:
         ss_tot = np.sum((test_values - np.mean(test_values)) ** 2)
         r2_score = 1 - (ss_res / (ss_tot + epsilon))
 
-        # Calcular precision final (IDENTICO a OptimizationService)
-        # Fórmula: max(0, min(100, (1 - mape/100) * 100))
+        # Calcular precision final
         precision_final = max(0.0, min(100.0, (1 - mape/100) * 100))
 
         # Validación adicional
@@ -1971,7 +1967,7 @@ class ValidationService:
         else:
             # CORREGIDO: Return movido al bloque else
             if log_callback:
-                log_callback("✓ Cobertura temporal y calidad de datos OK")
+                log_callback("Cobertura temporal y calidad de datos OK")
                 log_callback("=" * 60)
 
             return True
@@ -2107,7 +2103,7 @@ class ValidationService:
         self,
         exog_df: pd.DataFrame,
         log_callback,
-    ) -> None:
+        ) -> None:
         """
         Verificar variables con varianza cero (validación no crítica).
 
@@ -2143,40 +2139,40 @@ class ValidationService:
         # Correlaciones REALES documentadas por regional
         correlations = {
             "SAIDI_O": {  # Ocaña
-                "realfeel_min": 0.689,              # *** FUERTE
-                "windchill_avg": 0.520,             # ** MODERADA-FUERTE
-                "dewpoint_avg": 0.470,              # ** MODERADA-FUERTE
-                "windchill_max": 0.464,             # ** MODERADA-FUERTE
-                "dewpoint_min": 0.456,              # ** MODERADA-FUERTE
+                "realfeel_min": 0.689,
+                "windchill_avg": 0.520,
+                "dewpoint_avg": 0.470,
+                "windchill_max": 0.464,
+                "dewpoint_min": 0.456,
                 "precipitation_max_daily": 0.452,
                 "precipitation_avg_daily": 0.438,
             },
 
             "SAIDI_C": {  # Cúcuta
-                "realfeel_avg": 0.573,              # ** MODERADA-FUERTE
-                "pressure_rel_avg": -0.358,         # Negativa
+                "realfeel_avg": 0.573,
+                "pressure_rel_avg": -0.358,
                 "wind_speed_max": 0.356,
-                "pressure_abs_avg": -0.356,         # Negativa
+                "pressure_abs_avg": -0.356,
             },
 
             "SAIDI_T": {  # Tibú
-                "realfeel_avg": 0.906,              # *** MUY FUERTE
-                "wind_dir_avg": -0.400,             # Negativa
+                "realfeel_avg": 0.906,
+                "wind_dir_avg": -0.400,
                 "uv_index_avg": 0.385,
                 "heat_index_avg": 0.363,
                 "temperature_min": 0.352,
                 "windchill_min": 0.340,
                 "temperature_avg": 0.338,
-                "pressure_rel_avg": -0.330,         # Negativa
+                "pressure_rel_avg": -0.330,
             },
 
             "SAIDI_A": {  # Aguachica
-                "uv_index_max": 0.664,              # *** FUERTE
-                "days_with_rain": 0.535,            # ** MODERADA-FUERTE
+                "uv_index_max": 0.664,
+                "days_with_rain": 0.535,
             },
 
             "SAIDI_P": {  # Pamplona
-                "precipitation_total": 0.577,       # ** MODERADA-FUERTE
+                "precipitation_total": 0.577,
                 "precipitation_avg_daily": 0.552,
                 "realfeel_min": 0.344,
             },

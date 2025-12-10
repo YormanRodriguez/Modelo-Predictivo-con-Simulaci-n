@@ -592,7 +592,7 @@ class OptimizationService:
     ) -> None:
         """Log de configuración guardada."""
         log_callback("\n" + "=" * 80)
-        log_callback("✓ CONFIGURACIÓN ÓPTIMA GUARDADA")
+        log_callback("CONFIGURACIÓN ÓPTIMA GUARDADA")
         log_callback("=" * 80)
         log_callback(
             f"Los parámetros óptimos de {regional_code} "
@@ -625,7 +625,7 @@ class OptimizationService:
         exog_df: pd.DataFrame,
     ) -> None:
         """Log de variables exógenas activas."""
-        print(f"[DEBUG_OPT] ✓ Variables exógenas activas: {len(exog_df.columns)} variables")
+        print(f"[DEBUG_OPT] Variables exógenas activas: {len(exog_df.columns)} variables")
         if log_callback:
             log_callback(f"Variables exogenas disponibles: {len(exog_df.columns)}")
 
@@ -776,7 +776,7 @@ class OptimizationService:
         Q_range = range(6)  # MA estacional # noqa: N806
         s_range = [12]
 
-        # Rangos de parámetros
+        # Rangos de parámetros para verificar el funcionamiento del servicio.
         #p_range = range(2)  # AR
         #d_range = range(2)  # Diferenciación
         #q_range = range(2)  # MA
@@ -1087,10 +1087,10 @@ class OptimizationService:
         """Imprimir fechas faltantes de forma resumida."""
         meses_faltantes = 5
         if len(missing_dates) <= meses_faltantes:
-            print(f"[DIAGNOSTICO]   Fechas faltantes: {missing_dates}")
+            print(f"[DIAGNOSTICO] Fechas faltantes: {missing_dates}")
         else:
-            print(f"[DIAGNOSTICO]   Primeras faltantes: {missing_dates[:3]}")
-            print(f"[DIAGNOSTICO]   Últimas faltantes: {missing_dates[-3:]}")
+            print(f"[DIAGNOSTICO] Primeras faltantes: {missing_dates[:3]}")
+            print(f"[DIAGNOSTICO] Últimas faltantes: {missing_dates[-3:]}")
 
     def _validate_nan_values(self, exog_df: pd.DataFrame, log_callback) -> bool:
         """Verificar que no hay valores NaN en las columnas."""
@@ -1219,7 +1219,7 @@ class OptimizationService:
 
             meses = 12
             if len(var_series) < meses:
-                print("[CLIMATE_PROJECTION]   ADVERTENCIA: Datos insuficientes, usando media")
+                print("[CLIMATE_PROJECTION] ADVERTENCIA: Datos insuficientes, usando media")
                 return np.full(len(context.forecast_dates), var_series.mean())
 
             # Calcular promedios mensuales ponderados
@@ -1296,10 +1296,10 @@ class OptimizationService:
 
             if log_callback:
                 log_callback(f"{col_name}:")
-                log_callback(f"  - Tendencia {trend_direction}: r={trend_info['r_value']:.3f}, p={trend_info['p_value']:.4f}")
-                log_callback(f"  - Cambio proyectado: {trend_info['slope']*12:.4f} por año")
+                log_callback(f"- Tendencia {trend_direction}: r={trend_info['r_value']:.3f}, p={trend_info['p_value']:.4f}")
+                log_callback(f"- Cambio proyectado: {trend_info['slope']*12:.4f} por año")
         else:
-            print(f"[CLIMATE_PROJECTION]   Sin tendencia significativa (r={trend_info['r_value']:.3f})")
+            print(f"[CLIMATE_PROJECTION] Sin tendencia significativa (r={trend_info['r_value']:.3f})")
             if log_callback:
                 log_callback(f"{col_name}: Sin tendencia (r={trend_info['r_value']:.3f})")
 
@@ -1339,8 +1339,8 @@ class OptimizationService:
         first_proj_value = projected_values[0]
         change_pct = ((first_proj_value - last_hist_value) / last_hist_value) * 100
 
-        print(f"[CLIMATE_PROJECTION]   Último histórico: {last_hist_value:.2f}")
-        print(f"[CLIMATE_PROJECTION]   Primera proyección: {first_proj_value:.2f} "
+        print(f"[CLIMATE_PROJECTION] Último histórico: {last_hist_value:.2f}")
+        print(f"[CLIMATE_PROJECTION] Primera proyección: {first_proj_value:.2f} "
             f"({change_pct:+.1f}% cambio)")
 
         if log_callback and trend_info["has_trend"]:
@@ -1354,8 +1354,8 @@ class OptimizationService:
                                 error: Exception,
                                 log_callback) -> np.ndarray:
         """Manejar errores en la proyección usando fallback."""
-        print(f"[CLIMATE_PROJECTION]   ERROR proyectando {col_name}: {error}")
-        print("[CLIMATE_PROJECTION]   Fallback: usando último valor conocido")
+        print(f"[CLIMATE_PROJECTION] ERROR proyectando {col_name}: {error}")
+        print("[CLIMATE_PROJECTION] Fallback: usando último valor conocido")
 
         last_value = var_series.iloc[-1]
 
@@ -2413,19 +2413,19 @@ class OptimizationService:
         # Forward-fill para meses futuros
         if extrapolation_months > 0:
             aligned_series = aligned_series.fillna(method="ffill")
-            print(f"[EXOG_ADAPTIVE]     Forward-fill: {extrapolation_months} meses")
+            print(f"[EXOG_ADAPTIVE] Forward-fill: {extrapolation_months} meses")
 
         # Backward-fill para meses pasados
         if backward_months > 0:
             aligned_series = aligned_series.fillna(method="bfill", limit=3)
-            print("[EXOG_ADAPTIVE]     Backward-fill: máx 3 meses")
+            print("[EXOG_ADAPTIVE] Backward-fill: máx 3 meses")
 
         # Rellenar remanentes con media del overlap
         if aligned_series.isna().any():
             mean_overlap = overlap_data.mean()
             filled_count = aligned_series.isna().sum()
             aligned_series = aligned_series.fillna(mean_overlap)
-            print(f"[EXOG_ADAPTIVE]     Rellenados {filled_count} NaN con media={mean_overlap:.2f}")
+            print(f"[EXOG_ADAPTIVE] Rellenados {filled_count} NaN con media={mean_overlap:.2f}")
 
         return aligned_series
 
@@ -2471,7 +2471,7 @@ class OptimizationService:
         log_callback(f"Variables exógenas preparadas: {len(exog_df.columns)} (EN ESCALA ORIGINAL)")
         for var_data in exog_info.values():
             log_callback(
-                f"  ✓ {var_data['nombre']} "
+                f"{var_data['nombre']} "
                 f"(datos_reales={var_data['datos_reales_overlap']}, "
                 f"varianza={var_data['varianza_overlap']:.2f})",
             )
@@ -2479,7 +2479,7 @@ class OptimizationService:
         if coverage_report["variables_rejected"]:
             log_callback(f"Variables rechazadas: {len(coverage_report['variables_rejected'])}")
             for var_nombre in coverage_report["variables_rejected"]:
-                log_callback(f"  X {var_nombre}")
+                log_callback(f"{var_nombre}")
 
         log_callback("NOTA: SARIMAX maneja escalado internamente, valores en escala original")
 
@@ -2832,12 +2832,12 @@ class OptimizationService:
             print(f"[SAVE_CONFIG] ERROR guardando configuración: {e}")
             return False
         else:
-            print(f"[SAVE_CONFIG] ✓ Configuración guardada para {regional_code}")
-            print(f"[SAVE_CONFIG]   Archivo: {config_file}")
-            print(f"[SAVE_CONFIG]   Transformación: {new_config['transformation']}")
-            print(f"[SAVE_CONFIG]   Order: {new_config['order']}")
-            print(f"[SAVE_CONFIG]   Seasonal: {new_config['seasonal_order']}")
-            print(f"[SAVE_CONFIG]   Precisión: {new_config['precision_final']:.1f}%")
+            print(f"[SAVE_CONFIG] Configuración guardada para {regional_code}")
+            print(f"[SAVE_CONFIG] Archivo: {config_file}")
+            print(f"[SAVE_CONFIG] Transformación: {new_config['transformation']}")
+            print(f"[SAVE_CONFIG] Order: {new_config['order']}")
+            print(f"[SAVE_CONFIG] Seasonal: {new_config['seasonal_order']}")
+            print(f"[SAVE_CONFIG] Precisión: {new_config['precision_final']:.1f}%")
             return True
 
 # FUNCIÓN WORKER PARA PROCESAMIENTO PARALELO
@@ -2856,7 +2856,6 @@ def _evaluate_model_worker(task: tuple) -> dict[str, Any] | None:
         temp_service = OptimizationService()
 
         # Evaluar modelo
-        # Se aplica noqa: SLF001 para permitir acceso explícito al método protegido
         # desde esta función worker auxiliar.
         metrics = temp_service._evaluate_single_model(  # noqa: SLF001
             serie_original, order, seasonal_order, transformation, exog_df,

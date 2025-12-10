@@ -61,11 +61,11 @@ class UncertaintyService:
             )
 
             if log_callback:
-                log_callback("  Intervalos parametricos calculados (baseline)")
+                log_callback("Intervalos parametricos calculados (baseline)")
 
             # METODO 2: Bootstrap de residuales para incertidumbre del modelo
             if log_callback:
-                log_callback(f"  Aplicando bootstrap de residuales ({self.bootstrap_samples} muestras)...")
+                log_callback(f"Aplicando bootstrap de residuales ({self.bootstrap_samples} muestras)...")
 
             bootstrap_preds = self._bootstrap_residuals(
                 model_results, n_steps, exog_forecast,
@@ -78,12 +78,12 @@ class UncertaintyService:
             mean_bootstrap = np.mean(bootstrap_preds, axis=0)
 
             if log_callback:
-                log_callback("  Bootstrap completado")
+                log_callback("Bootstrap completado")
 
             # METODO 3: Incorporar incertidumbre de variables exogenas
             if include_exog_uncertainty and exog_forecast is not None and exog_std is not None:
                 if log_callback:
-                    log_callback("  Propagando incertidumbre de variables exogenas...")
+                    log_callback("Propagando incertidumbre de variables exogenas...")
 
                 exog_uncertainty_preds = self._propagate_exog_uncertainty(
                     model_results, n_steps, exog_forecast, exog_std,
@@ -98,7 +98,7 @@ class UncertaintyService:
                 mean_combined = np.mean(combined_preds, axis=0)
 
                 if log_callback:
-                    log_callback("  Incertidumbre de variables exogenas incorporada")
+                    log_callback("Incertidumbre de variables exogenas incorporada")
 
                 # Usar intervalos combinados
                 lower_final = lower_combined
@@ -134,10 +134,10 @@ class UncertaintyService:
             margin_error = (upper_final - lower_final) / (2 * z_score)
 
             if log_callback:
-                log_callback(f"  Metodo final usado: {method_used}")
-                log_callback(f"  Nivel de confianza: {self.confidence_level*100:.0f}%")
+                log_callback(f"Metodo final usado: {method_used}")
+                log_callback(f"Nivel de confianza: {self.confidence_level*100:.0f}%")
                 avg_margin_pct = np.mean(margin_error / pred_mean_final) * 100
-                log_callback(f"  Margen de error promedio: {avg_margin_pct:.1f}% de la prediccion")
+                log_callback(f"Margen de error promedio: {avg_margin_pct:.1f}% de la prediccion")
 
         except (ValueError, KeyError, AttributeError) as e:
             if log_callback:
@@ -381,7 +381,7 @@ class UncertaintyService:
                     # Calcular std de la serie historica
                     var_std = climate_data[var].std()
 
-                    # Ajustar por tendencias estacionales (mayor incertidumbre en proyecciones futuras)
+                    # Ajustar por tendencias estacionales
                     # Factor de 1.5 para reflejar mayor incertidumbre en el futuro
                     var_std_adjusted = var_std * 1.5
 

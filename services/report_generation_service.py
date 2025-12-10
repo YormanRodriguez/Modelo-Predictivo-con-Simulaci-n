@@ -553,7 +553,7 @@ class ValidationReportService:
                 results_text += f"• {param}<br/>"
         else:
             results_text += """
-            <b>✓ Todos los parámetros mostraron estabilidad adecuada</b><br/>
+            <b> Todos los parámetros mostraron estabilidad adecuada</b><br/>
             """
 
         results_text += """
