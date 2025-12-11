@@ -1127,100 +1127,185 @@ class RollingValidationService:
         - Parameter Stability
         - Backtesting Multi-Horizonte
         """
-        # Criterios de calidad
-        rolling_rmse = rolling_results["rmse"]
-        rolling_precision = rolling_results["precision"]
-        cv_stability = cv_results["cv_stability_score"]
-        param_stability_score = param_stability["overall_stability_score"]
-        degradation_rate = backtesting_results["degradation_rate"]
-
-        # Puntajes individuales (0-100)
-        rolling_rmse_100_menor = 20.0
-        score_rolling = 100 if rolling_rmse < rolling_rmse_100_menor else (100 - min(50, (rolling_rmse - 2.0) * 20))
-        score_precision = rolling_precision
-        score_cv = cv_stability
-        score_params = param_stability_score
-        score_degradation = max(0, 100 + degradation_rate * 20)
-
-        # Puntaje global ponderado
-        confidence_level = (
-            score_rolling * 0.25 +
-            score_precision * 0.25 +
-            score_cv * 0.20 +
-            score_params * 0.20 +
-            score_degradation * 0.10
+        # Extraer métricas principales
+        metrics = self._extract_key_metrics(
+            rolling_results, cv_results, param_stability, backtesting_results,
         )
 
-        # Clasificación de calidad (ajustado a realidad de series temporales complejas)
-        cofidencia_lavel_mayor = 80
-        cofidencia_lavel_medio = 72
-        cofidencia_lavel_menor = 65
-        rolling_menor = 4.0
-        rolling_medio = 5.0
-        rolling_mayor = 6.5
-        rolling_precision_comp = 70
-        estabilidad_mayor = 80
-        estabilidad_media = 70
-        param_estabilidad_mayor = 75
-        param_estabilidad_medio = 65
-        param_estabilidad_menor = 60
-        degradacion = 4.0
-        intestabilidad = 2
-        if confidence_level >= cofidencia_lavel_mayor and rolling_rmse < rolling_menor and cv_stability >= estabilidad_mayor and param_stability_score >= param_estabilidad_mayor:
-            model_quality = "EXCELENTE"
-        elif confidence_level >= cofidencia_lavel_medio and rolling_rmse < rolling_medio and cv_stability >= estabilidad_media and param_stability_score >= param_estabilidad_medio:
-            model_quality = "CONFIABLE"
-        elif confidence_level >= cofidencia_lavel_menor and rolling_rmse < rolling_mayor:
-            model_quality = "CUESTIONABLE"
-        else:
-            model_quality = "NO CONFIABLE"
+        # Calcular scores de componentes
+        component_scores = self._calculate_component_scores(metrics)
 
-        # Recomendación
-        optimal_horizon = backtesting_results["optimal_horizon"]
+        # Calcular nivel de confianza global
+        confidence_level = self._calculate_confidence_level(component_scores)
 
-        if model_quality == "EXCELENTE":
-            recommendation = f"Usar para pronósticos hasta {optimal_horizon} meses con alta confianza"
-        elif model_quality == "CONFIABLE":
-            recommendation = f"Usar para pronósticos hasta {optimal_horizon} meses con precaución moderada"
-        elif model_quality == "CUESTIONABLE":
-            recommendation = "Usar solo para pronósticos de corto plazo (1-2 meses) con monitoreo continuo"
-        else:
-            recommendation = "No recomendado para uso productivo - Revisar especificación del modelo"
+        # Clasificar calidad del modelo
+        model_quality = self._classify_model_quality(metrics, confidence_level)
 
-        #Limitaciones (umbrales más realistas)
-        limitations = []
+        # Generar recomendación
+        recommendation = self._generate_recommendation(
+            model_quality, backtesting_results["optimal_horizon"],
+        )
 
-        if rolling_rmse > rolling_medio:
-            limitations.append(f"RMSE elevado en rolling forecast ({rolling_rmse:.2f} min)")
-
-        if cv_stability < cofidencia_lavel_menor:
-            limitations.append(f"Estabilidad limitada en CV (Score: {cv_stability:.1f})")
-
-        if param_stability_score < param_estabilidad_menor:
-            limitations.append(f"Parámetros inestables (Score: {param_stability_score:.1f})")
-
-        if abs(degradation_rate) > degradacion:
-            limitations.append(f"Degradación notable después de {optimal_horizon} meses ({degradation_rate:.1f}% por mes)")
-
-        if len(param_stability.get("unstable_params", [])) > intestabilidad:
-            limitations.append(f"{len(param_stability['unstable_params'])} coeficientes inestables detectados")
-
-        if rolling_precision < rolling_precision_comp:
-            limitations.append(f"Precisión promedio limitada ({rolling_precision:.1f}%)")
+        # Identificar limitaciones
+        limitations = self._identify_limitations(metrics, backtesting_results)
 
         return {
             "model_quality": model_quality,
             "confidence_level": confidence_level,
             "recommendation": recommendation,
             "limitations": limitations,
-            "component_scores": {
-                "rolling_forecast": score_rolling,
-                "precision": score_precision,
-                "cv_stability": score_cv,
-                "parameter_stability": score_params,
-                "degradation": score_degradation,
-            },
+            "component_scores": component_scores,
         }
+
+
+    def _extract_key_metrics(self,
+                            rolling_results: dict,
+                            cv_results: dict,
+                            param_stability: dict,
+                            backtesting_results: dict) -> dict:
+        """Extraer métricas clave de los resultados."""
+        return {
+            "rolling_rmse": rolling_results["rmse"],
+            "rolling_precision": rolling_results["precision"],
+            "cv_stability": cv_results["cv_stability_score"],
+            "param_stability_score": param_stability["overall_stability_score"],
+            "degradation_rate": backtesting_results["degradation_rate"],
+            "unstable_params_count": len(param_stability.get("unstable_params", [])),
+        }
+
+
+    def _calculate_component_scores(self, metrics: dict) -> dict:
+        """Calcular scores de componentes individuales."""
+        # Score RMSE
+        rolling_rmse_threshold = 20.0
+        score_rolling = (
+            100 if metrics["rolling_rmse"] < rolling_rmse_threshold
+            else (100 - min(50, (metrics["rolling_rmse"] - 2.0) * 20))
+        )
+
+        # Score degradación
+        score_degradation = max(0, 100 + metrics["degradation_rate"] * 20)
+
+        return {
+            "rolling_forecast": score_rolling,
+            "precision": metrics["rolling_precision"],
+            "cv_stability": metrics["cv_stability"],
+            "parameter_stability": metrics["param_stability_score"],
+            "degradation": score_degradation,
+        }
+
+
+    def _calculate_confidence_level(self, component_scores: dict) -> float:
+        """Calcular nivel de confianza global ponderado."""
+        weights = {
+            "rolling_forecast": 0.25,
+            "precision": 0.25,
+            "cv_stability": 0.20,
+            "parameter_stability": 0.20,
+            "degradation": 0.10,
+        }
+
+        return sum(
+            component_scores[component] * weight
+            for component, weight in weights.items()
+        )
+
+
+    def _classify_model_quality(self, metrics: dict, confidence_level: float) -> str:
+        """Clasificar calidad del modelo basado en métricas."""
+        quality_thresholds = {
+            "confidence": {"excelente": 80, "confiable": 72, "cuestionable": 65},
+            "rmse": {"menor": 4.0, "medio": 5.0, "mayor": 6.5},
+            "cv_stability": {"mayor": 80, "media": 70},
+            "param_stability": {"mayor": 75, "medio": 65},
+        }
+
+        # Verificar si es EXCELENTE
+        if (confidence_level >= quality_thresholds["confidence"]["excelente"] and
+            metrics["rolling_rmse"] < quality_thresholds["rmse"]["menor"] and
+            metrics["cv_stability"] >= quality_thresholds["cv_stability"]["mayor"] and
+            metrics["param_stability_score"] >= quality_thresholds["param_stability"]["mayor"]):
+            return "EXCELENTE"
+
+        # Verificar si es CONFIABLE
+        if (confidence_level >= quality_thresholds["confidence"]["confiable"] and
+            metrics["rolling_rmse"] < quality_thresholds["rmse"]["medio"] and
+            metrics["cv_stability"] >= quality_thresholds["cv_stability"]["media"] and
+            metrics["param_stability_score"] >= quality_thresholds["param_stability"]["medio"]):
+            return "CONFIABLE"
+
+        # Verificar si es CUESTIONABLE
+        if (confidence_level >= quality_thresholds["confidence"]["cuestionable"] and
+            metrics["rolling_rmse"] < quality_thresholds["rmse"]["mayor"]):
+            return "CUESTIONABLE"
+
+        return "NO CONFIABLE"
+
+
+    def _generate_recommendation(self, model_quality: str, optimal_horizon: int) -> str:
+        """Generar recomendación basada en la calidad del modelo."""
+        recommendations = {
+            "EXCELENTE": f"Usar para pronósticos hasta {optimal_horizon} meses con alta confianza",
+            "CONFIABLE": f"Usar para pronósticos hasta {optimal_horizon} meses con precaución moderada",
+            "CUESTIONABLE": "Usar solo para pronósticos de corto plazo (1-2 meses) con monitoreo continuo",
+            "NO CONFIABLE": "No recomendado para uso productivo - Revisar especificación del modelo",
+        }
+
+        return recommendations.get(model_quality, recommendations["NO CONFIABLE"])
+
+
+    def _identify_limitations(self, metrics: dict, backtesting_results: dict) -> list[str]:
+        """Identificar limitaciones del modelo."""
+        limitations = []
+
+        thresholds = {
+            "rmse_medio": 5.0,
+            "cv_stability_min": 65,
+            "param_stability_min": 60,
+            "degradacion_max": 4.0,
+            "precision_min": 70,
+            "unstable_params_max": 2,
+        }
+
+        # Verificar RMSE elevado
+        if metrics["rolling_rmse"] > thresholds["rmse_medio"]:
+            limitations.append(
+                f"RMSE elevado en rolling forecast ({metrics['rolling_rmse']:.2f} min)",
+            )
+
+        # Verificar estabilidad CV
+        if metrics["cv_stability"] < thresholds["cv_stability_min"]:
+            limitations.append(
+                f"Estabilidad limitada en CV (Score: {metrics['cv_stability']:.1f})",
+            )
+
+        # Verificar estabilidad de parámetros
+        if metrics["param_stability_score"] < thresholds["param_stability_min"]:
+            limitations.append(
+                f"Parámetros inestables (Score: {metrics['param_stability_score']:.1f})",
+            )
+
+        # Verificar degradación
+        if abs(metrics["degradation_rate"]) > thresholds["degradacion_max"]:
+            optimal_horizon = backtesting_results["optimal_horizon"]
+            limitations.append(
+                f"Degradación notable después de {optimal_horizon} meses "
+                f"({metrics['degradation_rate']:.1f}% por mes)",
+            )
+
+        # Verificar coeficientes inestables
+        if metrics["unstable_params_count"] > thresholds["unstable_params_max"]:
+            limitations.append(
+                f"{metrics['unstable_params_count']} coeficientes inestables detectados",
+            )
+
+        # Verificar precisión
+        if metrics["rolling_precision"] < thresholds["precision_min"]:
+            limitations.append(
+                f"Precisión promedio limitada ({metrics['rolling_precision']:.1f}%)",
+            )
+
+        return limitations
 
     def _get_transformation_for_regional(self, regional_code: str | None) -> str:
         """
