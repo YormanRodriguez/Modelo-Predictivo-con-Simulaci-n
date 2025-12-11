@@ -4,7 +4,7 @@ import json
 import tempfile
 import traceback
 import warnings
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -1845,7 +1845,7 @@ class RollingValidationService:
 
         try:
             temp_dir = tempfile.gettempdir()
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")  # noqa: UP017
             plot_path = Path(temp_dir) / f"saidi_rolling_validation_{timestamp}.png"
 
             plt.style.use("default")
@@ -1938,7 +1938,7 @@ class RollingValidationService:
 
                         ax3.plot(window_sizes, values, "o-", label=param_name, linewidth=2, markersize=4)
 
-                        # Banda de confianza ±1σ
+                        # Banda de confianza ±1(varianza)
                         ax3.fill_between(window_sizes,
                                         [mean_val - std_val] * len(window_sizes),
                                         [mean_val + std_val] * len(window_sizes),
@@ -2113,7 +2113,7 @@ class RollingValidationService:
             plt.tight_layout(rect=[0, 0.02, 1, 0.96])
 
             # Nota al pie
-            footer_text = f'Generado: {datetime.now().strftime("%Y-%m-%d %H:%M")} | Rolling Forecast + CV + Parameter Stability + Backtesting'
+            footer_text = f'Generado: {datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M")} | Rolling Forecast + CV + Parameter Stability + Backtesting'  # noqa: UP017
             plt.figtext(0.5, 0.01, footer_text,
                     ha="center", fontsize=9, style="italic", color="darkblue",
                     bbox={"boxstyle": "round,pad=0.4", "facecolor": "lightyellow", "alpha": 0.7})
