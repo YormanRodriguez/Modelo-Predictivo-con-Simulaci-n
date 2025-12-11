@@ -23,7 +23,7 @@ class RollingValidationService:
     """Servicio de validación temporal avanzada para modelos SAIDI."""
 
     # Mapeo de regionales a transformaciones
-    REGIONAL_TRANSFORMATIONS = {
+    REGIONAL_TRANSFORMATIONS: ClassVar[dict[str, str]] = {
         "SAIDI_O": "boxcox",
         "SAIDI_C": "original",
         "SAIDI_A": "original",
@@ -33,48 +33,48 @@ class RollingValidationService:
     }
 
     # Variables exógenas por regional
-    REGIONAL_EXOG_VARS = {
+    REGIONAL_EXOG_VARS: ClassVar[dict[str, dict[str, str]]] = {
         "SAIDI_O": {  # Ocaña - 7 variables correlacionadas
-            "realfeel_min": "Temperatura aparente mínima",           # r=0.689 *** FUERTE
-            "windchill_avg": "Sensación térmica promedio",          # r=0.520 ** MODERADA-FUERTE
-            "dewpoint_avg": "Punto de rocío promedio",              # r=0.470 ** MODERADA-FUERTE
-            "windchill_max": "Sensación térmica máxima",            # r=0.464 ** MODERADA-FUERTE
-            "dewpoint_min": "Punto de rocío mínimo",                # r=0.456 ** MODERADA-FUERTE
-            "precipitation_max_daily": "Precipitación máxima diaria", # r=0.452
-            "precipitation_avg_daily": "Precipitación promedio diaria", # r=0.438
+            "realfeel_min": "Temperatura aparente mínima",
+            "windchill_avg": "Sensación térmica promedio",
+            "dewpoint_avg": "Punto de rocío promedio",
+            "windchill_max": "Sensación térmica máxima",
+            "dewpoint_min": "Punto de rocío mínimo",
+            "precipitation_max_daily": "Precipitación máxima diaria",
+            "precipitation_avg_daily": "Precipitación promedio diaria",
         },
 
         "SAIDI_C": {  # Cúcuta - 4 variables correlacionadas
-            "realfeel_avg": "Temperatura aparente promedio",        # r=0.573 ** MODERADA-FUERTE
-            "pressure_rel_avg": "Presión relativa promedio",        # r=-0.358 (negativa)
-            "wind_speed_max": "Velocidad máxima del viento",        # r=0.356
-            "pressure_abs_avg": "Presión absoluta promedio",        # r=-0.356 (negativa)
+            "realfeel_avg": "Temperatura aparente promedio",
+            "pressure_rel_avg": "Presión relativa promedio",
+            "wind_speed_max": "Velocidad máxima del viento",
+            "pressure_abs_avg": "Presión absoluta promedio",
         },
 
         "SAIDI_T": {  # Tibú - 8 variables correlacionadas
-            "realfeel_avg": "Temperatura aparente promedio",        # r=0.906 *** MUY FUERTE
-            "wind_dir_avg": "Dirección promedio del viento",        # r=-0.400 (negativa)
-            "uv_index_avg": "Índice UV promedio",                   # r=0.385
-            "heat_index_avg": "Índice de calor promedio",           # r=0.363
-            "temperature_min": "Temperatura mínima",                # r=0.352
-            "windchill_min": "Sensación térmica mínima",            # r=0.340
-            "temperature_avg": "Temperatura promedio",              # r=0.338
-            "pressure_rel_avg": "Presión relativa promedio",        # r=-0.330 (negativa)
+            "realfeel_avg": "Temperatura aparente promedio",
+            "wind_dir_avg": "Dirección promedio del viento",
+            "uv_index_avg": "Índice UV promedio",
+            "heat_index_avg": "Índice de calor promedio",
+            "temperature_min": "Temperatura mínima",
+            "windchill_min": "Sensación térmica mínima",
+            "temperature_avg": "Temperatura promedio",
+            "pressure_rel_avg": "Presión relativa promedio",
         },
 
         "SAIDI_A": {  # Aguachica - 2 variables correlacionadas
-            "uv_index_max": "Índice UV máximo",                     # r=0.664 *** FUERTE
-            "days_with_rain": "Días con lluvia",                    # r=0.535 ** MODERADA-FUERTE
+            "uv_index_max": "Índice UV máximo",
+            "days_with_rain": "Días con lluvia",
         },
 
         "SAIDI_P": {  # Pamplona - 3 variables correlacionadas
-            "precipitation_total": "Precipitación total",           # r=0.577 ** MODERADA-FUERTE
-            "precipitation_avg_daily": "Precipitación promedio diaria", # r=0.552
-            "realfeel_min": "Temperatura aparente mínima",          # r=0.344
+            "precipitation_total": "Precipitación total",
+            "precipitation_avg_daily": "Precipitación promedio diaria",
+            "realfeel_min": "Temperatura aparente mínima",
         },
     }
 
-    REGIONAL_ORDERS = {
+    REGIONAL_ORDERS: ClassVar[dict[str, dict[str, tuple]]] = {
         "SAIDI_O": {
             "order": (3, 1, 6),
             "seasonal_order": (3, 1, 0, 12),
@@ -112,28 +112,24 @@ class RollingValidationService:
     def load_optimized_config(self, regional_code: str) -> dict[str, Any] | None:
         """
         Cargar configuración optimizada para una regional desde archivo JSON.
-        
+
         Args:
             regional_code: Código de la regional (ej: 'SAIDI_O')
-        
+
         Returns:
             Dict con configuración óptima o None si no existe
 
         """
-        # Ubicación del archivo de configuración
         config_file = Path(__file__).parent.parent / "config" / "optimized_models.json"
 
-        # Validar existencia del archivo
         if not config_file.exists():
             print("[ROLLING_LOAD_CONFIG] No existe archivo de configuraciones optimizadas")
             return None
 
         try:
-            # Cargar configuraciones
             with config_file.open(encoding="utf-8") as f:
                 configs = json.load(f)
 
-            # Buscar configuración de la regional
             if regional_code not in configs:
                 print(f"[ROLLING_LOAD_CONFIG] No hay configuración optimizada para {regional_code}")
                 return None
@@ -147,27 +143,27 @@ class RollingValidationService:
             print(f"[ROLLING_LOAD_CONFIG]   Precisión: {config['precision_final']:.1f}%")
             print(f"[ROLLING_LOAD_CONFIG]   Optimizado: {config['optimization_date']}")
 
-            return config
-
-        except (FileNotFoundError, json.JSONDecodeError, KeyError, OSError) as e:
+        except (FileNotFoundError, json.JSONDecodeError, KeyError, OSError) as exc:
             error_messages = {
                 FileNotFoundError: "Archivo de configuración no encontrado",
-                json.JSONDecodeError: f"Archivo JSON inválido: {e}",
-                KeyError: f"Clave faltante en configuración: {e}",
-                OSError: f"ERROR de E/S al leer archivo: {e}",
+                json.JSONDecodeError: f"Archivo JSON inválido: {exc}",
+                KeyError: f"Clave faltante en configuración: {exc}",
+                OSError: f"ERROR de E/S al leer archivo: {exc}",
             }
-            error_msg = error_messages.get(type(e), f"Error inesperado: {e}")
+            error_msg = error_messages.get(type(exc), f"Error inesperado: {exc}")
             print(f"[ROLLING_LOAD_CONFIG] ERROR: {error_msg}")
             return None
+        else:
+            return config
 
     def _get_correlation_for_var(self, var_code: str, regional_code: str) -> float:
         """
-        Obtener correlación documentada de una variable específica
-        
+        Obtener correlación documentada de una variable específica.
+
         Args:
             var_code: Código de la variable (ej: 'realfeel_min')
             regional_code: Código de la regional (ej: 'SAIDI_O')
-        
+
         Returns:
             float: Correlación documentada o 0.0 si no existe
 
@@ -223,12 +219,12 @@ class RollingValidationService:
     def _get_orders_for_regional(self, regional_code: str | None) -> tuple[tuple, tuple]:
         """
         Obtener órdenes SARIMAX específicos para una regional.
-        
+
         Prioriza configuración optimizada sobre defaults hardcodeados.
-        
+
         Args:
             regional_code: Código de la regional (ej: 'SAIDI_O')
-        
+
         Returns:
             Tuple de (order, seasonal_order) - Órdenes ARIMA y estacionales
 
@@ -269,204 +265,199 @@ class RollingValidationService:
 
         return self.default_order, self.default_seasonal_order
 
+    def _validate_data_length(self, data_original: pd.Series, min_length: int = 36) -> None:
+        """Validar que hay suficientes observaciones para validación temporal."""
+        if len(data_original) < min_length:
+            msg = f"Se necesitan al menos {min_length} observaciones para validación temporal"
+            raise ValueError(msg)
+
     def run_comprehensive_validation(self,
-                             file_path: str | None = None,
-                             df_prepared: pd.DataFrame | None = None,
-                             order: tuple | None = None,
-                             seasonal_order: tuple | None = None,
-                             regional_code: str | None = None,
-                             climate_data: pd.DataFrame | None = None,
-                             validation_months: int = 6,
-                             progress_callback=None,
-                             log_callback=None) -> dict[str, Any]:
-        """
-        Ejecutar análisis completo de validación temporal.
+                                file_path: str | None = None,
+                                df_prepared: pd.DataFrame | None = None,
+                                order: tuple | None = None,
+                                seasonal_order: tuple | None = None,
+                                regional_code: str | None = None,
+                                climate_data: pd.DataFrame | None = None,
+                                validation_months: int = 6,
+                                progress_callback=None,
+                                log_callback=None) -> dict[str, Any]:
+            """
+            Ejecutar análisis completo de validación temporal.
 
-        Args:
-            file_path: Ruta del archivo Excel SAIDI
-            df_prepared: DataFrame SAIDI ya preparado
-            order: Orden ARIMA (p, d, q) - opcional
-            seasonal_order: Orden estacional (P, D, Q, s) - opcional
-            regional_code: Código de la regional
-            climate_data: DataFrame con datos climáticos mensuales
-            validation_months: Cantidad de meses para validación
-            progress_callback: Función para actualizar progreso
-            log_callback: Función para logging
+            Args:
+                file_path: Ruta del archivo Excel SAIDI
+                df_prepared: DataFrame SAIDI ya preparado
+                order: Orden ARIMA (p, d, q) - opcional
+                seasonal_order: Orden estacional (P, D, Q, s) - opcional
+                regional_code: Código de la regional
+                climate_data: DataFrame con datos climáticos mensuales
+                validation_months: Cantidad de meses para validación
+                progress_callback: Función para actualizar progreso
+                log_callback: Función para logging
 
-        Returns:
-            Dict con resultados de validación completa
+            Returns:
+                Dict con resultados de validación completa
 
-        """
-        try:
-            # Cargar configuración optimizada si existe
-            optimized_config = None
-            if regional_code:
-                optimized_config = self.load_optimized_config(regional_code)
+            """
+            try:
+                optimized_config = None
+                if regional_code:
+                    optimized_config = self.load_optimized_config(regional_code)
 
-                if optimized_config and log_callback:
-                    log_callback("=" * 80)
-                    log_callback("USANDO CONFIGURACIÓN OPTIMIZADA")
-                    log_callback("=" * 80)
+                    if optimized_config and log_callback:
+                        log_callback("=" * 80)
+                        log_callback("USANDO CONFIGURACIÓN OPTIMIZADA")
+                        log_callback("=" * 80)
+                        log_callback(f"Regional: {regional_code}")
+                        log_callback(f"Transformación: {optimized_config['transformation'].upper()}")
+                        log_callback(f"Order: {optimized_config['order']}")
+                        log_callback(f"Seasonal: {optimized_config['seasonal_order']}")
+                        log_callback(f"Precisión documentada: {optimized_config['precision_final']:.1f}%")
+                        log_callback(f"Optimizado en: {optimized_config['optimization_date']}")
+                        log_callback("=" * 80)
+
+                if order is None or seasonal_order is None:
+                    order_regional, seasonal_regional = self._get_orders_for_regional(regional_code)
+
+                    if order is None:
+                        order = order_regional
+                    if seasonal_order is None:
+                        seasonal_order = seasonal_regional
+
+                    if log_callback and regional_code and not optimized_config:
+                        regional_nombre = {
+                            "SAIDI_O": "Ocaña",
+                            "SAIDI_C": "Cúcuta",
+                            "SAIDI_A": "Aguachica",
+                            "SAIDI_P": "Pamplona",
+                            "SAIDI_T": "Tibú",
+                            "SAIDI_Cens": "CENS",
+                        }.get(regional_code, regional_code)
+
+                        log_callback(f"Usando parametros default para regional {regional_nombre}")
+                        log_callback(f"   Order: {order}")
+                        log_callback(f"   Seasonal Order: {seasonal_order}")
+
+                transformation = self._get_transformation_for_regional(regional_code)
+
+                if log_callback:
+                    log_callback("=" * 60)
+                    log_callback("INICIANDO VALIDACIÓN TEMPORAL COMPLETA")
+                    log_callback("=" * 60)
                     log_callback(f"Regional: {regional_code}")
-                    log_callback(f"Transformación: {optimized_config['transformation'].upper()}")
-                    log_callback(f"Order: {optimized_config['order']}")
-                    log_callback(f"Seasonal: {optimized_config['seasonal_order']}")
-                    log_callback(f"Precisión documentada: {optimized_config['precision_final']:.1f}%")
-                    log_callback(f"Optimizado en: {optimized_config['optimization_date']}")
-                    log_callback("=" * 80)
+                    log_callback(f"Transformación: {transformation.upper()}")
+                    log_callback(f"Parámetros: order={order}, seasonal_order={seasonal_order}")
+                    log_callback(f"Meses de validación: {validation_months}")
 
-            # Resolver parámetros del modelo
-            if order is None or seasonal_order is None:
-                order_regional, seasonal_regional = self._get_orders_for_regional(regional_code)
+                if progress_callback:
+                    progress_callback(5, "Cargando y preparando datos...")
 
-                if order is None:
-                    order = order_regional
-                if seasonal_order is None:
-                    seasonal_order = seasonal_regional
+                data_original, exog_df, exog_info = self._load_and_prepare_data(
+                    file_path, df_prepared, regional_code, climate_data, log_callback,
+                )
 
-                if log_callback and regional_code and not optimized_config:
-                    regional_nombre = {
-                        "SAIDI_O": "Ocaña",
-                        "SAIDI_C": "Cúcuta",
-                        "SAIDI_A": "Aguachica",
-                        "SAIDI_P": "Pamplona",
-                        "SAIDI_T": "Tibú",
-                        "SAIDI_Cens": "CENS",
-                    }.get(regional_code, regional_code)
+                self._validate_data_length(data_original, min_length=36)
 
-                    log_callback(f"Usando parametros default para regional {regional_nombre}")
-                    log_callback(f"   Order: {order}")
-                    log_callback(f"   Seasonal Order: {seasonal_order}")
+                data_transformed, transform_info = self._apply_transformation(
+                    data_original.values, transformation,
+                )
+                data_transformed_series = pd.Series(data_transformed, index=data_original.index)
 
-            transformation = self._get_transformation_for_regional(regional_code)
+                if log_callback:
+                    log_callback(f"Datos preparados: {len(data_original)} observaciones")
+                    log_callback(f"Transformación aplicada: {transform_info}")
 
-            if log_callback:
-                log_callback("=" * 60)
-                log_callback("INICIANDO VALIDACIÓN TEMPORAL COMPLETA")
-                log_callback("=" * 60)
-                log_callback(f"Regional: {regional_code}")
-                log_callback(f"Transformación: {transformation.upper()}")
-                log_callback(f"Parámetros: order={order}, seasonal_order={seasonal_order}")
-                log_callback(f"Meses de validación: {validation_months}")
+                if progress_callback:
+                    progress_callback(10, "Ejecutando Rolling Forecast...")
 
-            if progress_callback:
-                progress_callback(5, "Cargando y preparando datos...")
+                rolling_results = self.run_rolling_forecast(
+                    data_original, data_transformed_series, exog_df,
+                    order, seasonal_order, transformation,
+                    validation_months, progress_callback, log_callback,
+                )
 
-            # Cargar y preparar datos
-            data_original, exog_df, exog_info = self._load_and_prepare_data(
-                file_path, df_prepared, regional_code, climate_data, log_callback,
-            )
+                if progress_callback:
+                    progress_callback(40, "Ejecutando Time Series CV...")
 
-            len_datos = 36
-            if len(data_original) < len_datos:
-                raise Exception("Se necesitan al menos 36 observaciones para validación temporal")
+                cv_results = self.run_time_series_cv(
+                    data_original, data_transformed_series, exog_df,
+                    order, seasonal_order, transformation,
+                    progress_callback, log_callback,
+                )
 
-            # Aplicar transformación
-            data_transformed, transform_info = self._apply_transformation(
-                data_original.values, transformation,
-            )
-            data_transformed_series = pd.Series(data_transformed, index=data_original.index)
+                if progress_callback:
+                    progress_callback(60, "Analizando estabilidad de parámetros...")
 
-            if log_callback:
-                log_callback(f"Datos preparados: {len(data_original)} observaciones")
-                log_callback(f"Transformación aplicada: {transform_info}")
+                param_stability = self.analyze_parameter_stability(
+                    data_original, data_transformed_series, exog_df,
+                    order, seasonal_order, transformation,
+                    progress_callback, log_callback,
+                )
 
-            # ROLLING FORECAST
-            if progress_callback:
-                progress_callback(10, "Ejecutando Rolling Forecast...")
+                if progress_callback:
+                    progress_callback(80, "Ejecutando backtesting...")
 
-            rolling_results = self.run_rolling_forecast(
-                data_original, data_transformed_series, exog_df,
-                order, seasonal_order, transformation,
-                validation_months, progress_callback, log_callback,
-            )
+                backtesting_results = self.run_backtesting(
+                    data_original, data_transformed_series, exog_df,
+                    order, seasonal_order, transformation,
+                    progress_callback, log_callback,
+                )
 
-            # 2 TIME SERIES CROSS-VALIDATION
-            if progress_callback:
-                progress_callback(40, "Ejecutando Time Series CV...")
+                final_diagnosis = self._generate_final_diagnosis(
+                    rolling_results, cv_results, param_stability, backtesting_results,
+                )
 
-            cv_results = self.run_time_series_cv(
-                data_original, data_transformed_series, exog_df,
-                order, seasonal_order, transformation,
-                progress_callback, log_callback,
-            )
+                if progress_callback:
+                    progress_callback(95, "Generando gráficas...")
 
-            # ANÁLISIS DE ESTABILIDAD DE PARÁMETROS
-            if progress_callback:
-                progress_callback(60, "Analizando estabilidad de parámetros...")
+                plot_path = self._generate_comprehensive_plots(
+                    rolling_results, cv_results, param_stability, backtesting_results,
+                    final_diagnosis, order, seasonal_order, transformation, exog_info,
+                )
 
-            param_stability = self.analyze_parameter_stability(
-                data_original, data_transformed_series, exog_df,
-                order, seasonal_order, transformation,
-                progress_callback, log_callback,
-            )
+                if progress_callback:
+                    progress_callback(100, "Validación completada")
 
-            # BACKTESTING MULTI-HORIZONTE
-            if progress_callback:
-                progress_callback(80, "Ejecutando backtesting...")
+                if log_callback:
+                    log_callback("\n" + "=" * 60)
+                    log_callback("DIAGNÓSTICO FINAL")
+                    log_callback("=" * 60)
+                    log_callback(f"Calidad del Modelo: {final_diagnosis['model_quality']}")
+                    log_callback(f"Nivel de Confianza: {final_diagnosis['confidence_level']:.1f}%")
+                    log_callback(f"Recomendación: {final_diagnosis['recommendation']}")
+                    log_callback(f"\nPrecisión Rolling Forecast: {rolling_results['precision']:.1f}%")
+                    log_callback("(Validación temporal walk-forward - Gold standard)")
 
-            backtesting_results = self.run_backtesting(
-                data_original, data_transformed_series, exog_df,
-                order, seasonal_order, transformation,
-                progress_callback, log_callback,
-            )
+                    if final_diagnosis["limitations"]:
+                        log_callback("\nLimitaciones identificadas:")
+                        for lim in final_diagnosis["limitations"]:
+                            log_callback(f"  • {lim}")
 
-            # DIAGNÓSTICO FINAL (sin split_precision)
-            final_diagnosis = self._generate_final_diagnosis(
-                rolling_results, cv_results, param_stability, backtesting_results,
-            )
-
-            if progress_callback:
-                progress_callback(95, "Generando gráficas...")
-
-            # Generar gráficas
-            plot_path = self._generate_comprehensive_plots(
-                rolling_results, cv_results, param_stability, backtesting_results,
-                final_diagnosis, order, seasonal_order, transformation, exog_info,
-            )
-
-            if progress_callback:
-                progress_callback(100, "Validación completada")
-
-            if log_callback:
-                log_callback("\n" + "=" * 60)
-                log_callback("DIAGNÓSTICO FINAL")
-                log_callback("=" * 60)
-                log_callback(f"Calidad del Modelo: {final_diagnosis['model_quality']}")
-                log_callback(f"Nivel de Confianza: {final_diagnosis['confidence_level']:.1f}%")
-                log_callback(f"Recomendación: {final_diagnosis['recommendation']}")
-                log_callback(f"\nPrecisión Rolling Forecast: {rolling_results['precision']:.1f}%")
-                log_callback("(Validación temporal walk-forward - Gold standard)")
-
-                if final_diagnosis["limitations"]:
-                    log_callback("\nLimitaciones identificadas:")
-                    for lim in final_diagnosis["limitations"]:
-                        log_callback(f"  • {lim}")
-
-            return {
-                "success": True,
-                "validation_analysis": {
-                    "rolling_forecast": rolling_results,
-                    "cross_validation": cv_results,
-                    "parameter_stability": param_stability,
-                    "backtesting": backtesting_results,
-                    "final_diagnosis": final_diagnosis,
-                },
-                "model_params": {
-                    "order": order,
-                    "seasonal_order": seasonal_order,
-                    "transformation": transformation,
-                    "regional_code": regional_code,
-                    "with_exogenous": exog_df is not None,
-                },
-                "exogenous_vars": exog_info,
-                "plot_file": plot_path,
-            }
-
-        except Exception as e:
-            if log_callback:
-                log_callback(f"ERROR: {e!s}")
-            raise Exception(f"Error en validación temporal: {e!s}")
+            except (ValueError, RuntimeError, KeyError, FileNotFoundError) as exc:
+                if log_callback:
+                    log_callback(f"ERROR: {exc!s}")
+                msg = f"Error en validación temporal: {exc!s}"
+                raise RuntimeError(msg) from exc
+            else:
+                return {
+                    "success": True,
+                    "validation_analysis": {
+                        "rolling_forecast": rolling_results,
+                        "cross_validation": cv_results,
+                        "parameter_stability": param_stability,
+                        "backtesting": backtesting_results,
+                        "final_diagnosis": final_diagnosis,
+                    },
+                    "model_params": {
+                        "order": order,
+                        "seasonal_order": seasonal_order,
+                        "transformation": transformation,
+                        "regional_code": regional_code,
+                        "with_exogenous": exog_df is not None,
+                    },
+                    "exogenous_vars": exog_info,
+                    "plot_file": plot_path,
+                }
 
     def run_rolling_forecast(self,
                             data_original: pd.Series,
@@ -793,7 +784,7 @@ class RollingValidationService:
                                log_callback=None) -> dict[str, Any]:
         """Analizar estabilidad de parámetros ARIMA/SARIMA."""
         if log_callback:
-            log_callback("\n⚙ ANÁLISIS DE ESTABILIDAD DE PARÁMETROS")
+            log_callback("\nANÁLISIS DE ESTABILIDAD DE PARÁMETROS")
 
         n_total = len(data_original)
         window_sizes = []
@@ -1836,20 +1827,21 @@ class RollingValidationService:
         return result
 
     def _generate_comprehensive_plots(self,
-                                 rolling_results: dict,
-                                 cv_results: dict,
-                                 param_stability: dict,
-                                 backtesting_results: dict,
-                                 final_diagnosis: dict,
-                                 order: tuple,
-                                 seasonal_order: tuple,
-                                 transformation: str,
-                                 exog_info: dict | None) -> str | None:
+                             rolling_results: dict,
+                             cv_results: dict,
+                             param_stability: dict,
+                             backtesting_results: dict,
+                             final_diagnosis: dict,
+                             order: tuple,
+                             seasonal_order: tuple,
+                             transformation: str,
+                             exog_info: dict | None) -> str | None:
         """Generar panel de gráficas comprehensiv."""
 
         def _raise_no_dates_error():
             """Lanzar error cuando no hay fechas disponibles."""
-            raise ValueError("No hay fechas disponibles para graficar en Rolling Forecast")
+            msg = "No hay fechas disponibles para graficar en Rolling Forecast"
+            raise ValueError(msg)
 
         try:
             temp_dir = tempfile.gettempdir()
@@ -1946,7 +1938,7 @@ class RollingValidationService:
 
                         ax3.plot(window_sizes, values, "o-", label=param_name, linewidth=2, markersize=4)
 
-                        # Banda de confianza ±1(varianza)
+                        # Banda de confianza ±1σ
                         ax3.fill_between(window_sizes,
                                         [mean_val - std_val] * len(window_sizes),
                                         [mean_val + std_val] * len(window_sizes),
@@ -2008,7 +2000,7 @@ class RollingValidationService:
             labels = [L.get_label() for L in lines]
             ax4.legend(lines, labels, fontsize=9, loc="lower left")
 
-            # Panel 5: Diagnóstico Completo (SIN split_precision)
+            # Panel 5: Diagnóstico Completo
             ax5 = plt.subplot(2, 3, 5)
             ax5.axis("off")
 
@@ -2038,12 +2030,12 @@ class RollingValidationService:
     {recommendation}
 
     MÉTRICAS CLAVE:
-    • Rolling Forecast RMSE: {rolling_results['rmse']:.2f} min
-    • Precisión Rolling: {rolling_results['precision']:.1f}%
-    • CV Stability Score: {cv_results['cv_stability_score']:.1f}/100
-    • Parameter Stability: {param_stability['overall_stability_score']:.1f}/100
-    • Horizonte óptimo: {backtesting_results['optimal_horizon']} meses
-    • Degradación: {backtesting_results['degradation_rate']:.2f}% por mes
+    - Rolling Forecast RMSE: {rolling_results['rmse']:.2f} min
+    - Precisión Rolling: {rolling_results['precision']:.1f}%
+    - CV Stability Score: {cv_results['cv_stability_score']:.1f}/100
+    - Parameter Stability: {param_stability['overall_stability_score']:.1f}/100
+    - Horizonte óptimo: {backtesting_results['optimal_horizon']} meses
+    - Degradación: {backtesting_results['degradation_rate']:.2f}% por mes
 
     NOTA: Rolling Forecast (walk-forward) es el gold
     standard para validación temporal de series de tiempo.
@@ -2130,13 +2122,14 @@ class RollingValidationService:
                     facecolor="white", edgecolor="none")
             plt.close(fig)
 
-        except (OSError, ValueError, KeyError, TypeError) as e:
-            print(f"Error generando gráficas: {e}")
-            traceback.print_exc()
-            return None
-        else:
             self.plot_file_path = str(plot_path)
             return str(plot_path)
+
+        except (OSError, ValueError, KeyError, TypeError, IndexError) as exc:
+            print(f"Error generando gráficas: {exc}")
+            print(f"Tipo de error: {type(exc).__name__}")
+            traceback.print_exc()
+            return None
 
     def cleanup_plot_file(self):
         """Limpiar archivo temporal de gráfica."""
