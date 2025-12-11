@@ -1348,64 +1348,129 @@ class RollingValidationService:
                             climate_data: pd.DataFrame | None,
                             log_callback) -> tuple[pd.Series, pd.DataFrame | None, dict | None]:
         """Cargar y preparar datos SAIDI + variables exógenas."""
-        # Cargar datos SAIDI
-        if df_prepared is not None:
-            df = df_prepared.copy()
-        elif file_path is not None:
-            df = pd.read_excel(file_path, sheet_name="Hoja1")
-        else:
-            raise ValueError("Debe proporcionar file_path o df_prepared")
+        # Paso 1: Cargar datos SAIDI
+        df = self._load_saidi_dataframe(file_path, df_prepared)
 
-        # Asegurar índice datetime
-        if not isinstance(df.index, pd.DatetimeIndex):
-            if "Fecha" in df.columns:
-                df["Fecha"] = pd.to_datetime(df["Fecha"])
-                df = df.set_index("Fecha")
-            else:
-                df.iloc[:, 0] = pd.to_datetime(df.iloc[:, 0])
-                df = df.set_index(df.columns[0])
+        # Paso 2: Asegurar índice datetime
+        df = self._ensure_datetime_index_for_saidi(df)
 
-        # Buscar columna SAIDI
-        col_saidi = None
-        if "SAIDI" in df.columns:
-            col_saidi = "SAIDI"
-        elif "SAIDI Histórico" in df.columns:
-            col_saidi = "SAIDI Histórico"
+        # Paso 3: Extraer serie SAIDI
+        data_original = self._extract_saidi_series(df)
 
-        if col_saidi is None:
-            raise KeyError("No se encontró la columna SAIDI")
-
-        data_original = df[df[col_saidi].notna()][col_saidi]
-
-        # Preparar variables exógenas
-        exog_df = None
-        exog_info = None
-
-        if climate_data is not None and not climate_data.empty:
-            exog_df, exog_info = self._prepare_exogenous_variables(
-                climate_data, df, regional_code, log_callback,
-            )
-
-            if exog_df is not None:
-                if not self._diagnose_exog_coverage(data_original, exog_df, log_callback):
-                    if log_callback:
-                        log_callback("=" * 60)
-                        log_callback("ADVERTENCIA: Cobertura insuficiente")
-                        log_callback("Las variables exógenas serán DESACTIVADAS")
-                        log_callback("=" * 60)
-                    exog_df = None
-                    exog_info = None
-                else:
-                    # Guardar scaler solo para compatibilidad (NO transformar)
-                    self.exog_scaler = StandardScaler()
-                    self.exog_scaler.fit(exog_df)
-
-                    if log_callback:
-                        log_callback("Variables exógenas preparadas en ESCALA ORIGINAL")
-                        log_callback("SARIMAX las normalizará internamente")
-                        log_callback("(Escalado manual eliminado para evitar doble normalización)")
+        # Paso 4: Preparar variables exógenas (si están disponibles)
+        exog_df, exog_info = self._prepare_and_validate_exogenous(
+            climate_data, df, regional_code, data_original, log_callback,
+        )
 
         return data_original, exog_df, exog_info
+
+
+    def _load_saidi_dataframe(self,
+                            file_path: str | None,
+                            df_prepared: pd.DataFrame | None) -> pd.DataFrame:
+        """Cargar DataFrame SAIDI desde archivo o DataFrame preparado."""
+        if df_prepared is not None:
+            return df_prepared.copy()
+
+        if file_path is not None:
+            return pd.read_excel(file_path, sheet_name="Hoja1")
+
+        msg = "Debe proporcionar file_path o df_prepared"
+        raise ValueError(msg)
+
+
+    def _ensure_datetime_index_for_saidi(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Asegurar que el DataFrame tenga índice datetime."""
+        if isinstance(df.index, pd.DatetimeIndex):
+            return df
+
+        # Intentar con columna "Fecha"
+        if "Fecha" in df.columns:
+            df = df.copy()
+            df["Fecha"] = pd.to_datetime(df["Fecha"])
+            return df.set_index("Fecha")
+
+        # Fallback: usar primera columna
+        df = df.copy()
+        df.iloc[:, 0] = pd.to_datetime(df.iloc[:, 0])
+        return df.set_index(df.columns[0])
+
+
+    def _extract_saidi_series(self, df: pd.DataFrame) -> pd.Series:
+        """Extraer serie SAIDI del DataFrame."""
+        col_saidi = self._find_saidi_column_name(df)
+        return df[df[col_saidi].notna()][col_saidi]
+
+
+    def _find_saidi_column_name(self, df: pd.DataFrame) -> str:
+        """Buscar nombre de columna SAIDI."""
+        saidi_columns = ["SAIDI", "SAIDI Histórico"]
+
+        for col_name in saidi_columns:
+            if col_name in df.columns:
+                return col_name
+
+        msg = "No se encontró la columna SAIDI"
+        raise KeyError(msg)
+
+
+    def _prepare_and_validate_exogenous(self,
+                                        climate_data: pd.DataFrame | None,
+                                        df: pd.DataFrame,
+                                        regional_code: str | None,
+                                        data_original: pd.Series,
+                                        log_callback) -> tuple[pd.DataFrame | None, dict | None]:
+        """Preparar y validar variables exógenas."""
+        # Sin datos climáticos, retornar None
+        if climate_data is None or climate_data.empty:
+            return None, None
+
+        # Preparar variables exógenas
+        exog_df, exog_info = self._prepare_exogenous_variables(
+            climate_data, df, regional_code, log_callback,
+        )
+
+        # Sin variables preparadas, retornar None
+        if exog_df is None:
+            return None, None
+
+        # Validar cobertura
+        if not self._diagnose_exog_coverage(data_original, exog_df, log_callback):
+            self._log_exog_deactivation(log_callback)
+            return None, None
+
+        # Variables válidas: configurar scaler y logging
+        self._setup_exog_scaler(exog_df)
+        self._log_exog_success(log_callback)
+
+        return exog_df, exog_info
+
+
+    def _log_exog_deactivation(self, log_callback) -> None:
+        """Loguear desactivación de variables exógenas."""
+        if not log_callback:
+            return
+
+        log_callback("=" * 60)
+        log_callback("ADVERTENCIA: Cobertura insuficiente")
+        log_callback("Las variables exógenas serán DESACTIVADAS")
+        log_callback("=" * 60)
+
+
+    def _setup_exog_scaler(self, exog_df: pd.DataFrame) -> None:
+        """Configurar scaler para variables exógenas (solo para compatibilidad)."""
+        self.exog_scaler = StandardScaler()
+        self.exog_scaler.fit(exog_df)
+
+
+    def _log_exog_success(self, log_callback) -> None:
+        """Loguear éxito en preparación de variables exógenas."""
+        if not log_callback:
+            return
+
+        log_callback("Variables exógenas preparadas en ESCALA ORIGINAL")
+        log_callback("SARIMAX las normalizará internamente")
+        log_callback("(Escalado manual eliminado para evitar doble normalización)")
 
     def _diagnose_exog_coverage(self,
                 serie_saidi: pd.Series,
@@ -1762,7 +1827,6 @@ class RollingValidationService:
                 log_callback(f"ERROR CRÍTICO: {e!s}")
             return None, None
         else:
-            # ✓ TRY300:Return movido al bloque else
             return exog_df, exog_info if exog_info else None
 
     def _align_exog_to_saidi(self,
