@@ -1,7 +1,6 @@
 # services/rolling_validation_service.py
 """Servicio de Validación Temporal con Rolling Forecast para SAIDI."""
 import json
-import os
 import tempfile
 import traceback
 import warnings
@@ -24,8 +23,8 @@ class RollingValidationService:
     """Servicio de validación temporal avanzada para modelos SAIDI."""
 
     # Mapeo de regionales a transformaciones
-    EGIONAL_TRANSFORMATIONS: ClassVar[dict[str, str]] = {
-        "SAIDI_O": "original",
+    REGIONAL_TRANSFORMATIONS = {
+        "SAIDI_O": "boxcox",
         "SAIDI_C": "original",
         "SAIDI_A": "original",
         "SAIDI_P": "boxcox",
@@ -34,50 +33,72 @@ class RollingValidationService:
     }
 
     # Variables exógenas por regional
-    REGIONAL_EXOG_VARS: ClassVar[dict[str, dict[str, str]]] = {
-        "SAIDI_O": {
-            "realfeel_min": "Temperatura aparente mínima",
-            "windchill_avg": "Sensación térmica promedio",
-            "dewpoint_avg": "Punto de rocío promedio",
-            "windchill_max": "Sensación térmica máxima",
-            "dewpoint_min": "Punto de rocío mínimo",
-            "precipitation_max_daily": "Precipitación máxima diaria",
-            "precipitation_avg_daily": "Precipitación promedio diaria",
+    REGIONAL_EXOG_VARS = {
+        "SAIDI_O": {  # Ocaña - 7 variables correlacionadas
+            "realfeel_min": "Temperatura aparente mínima",           # r=0.689 *** FUERTE
+            "windchill_avg": "Sensación térmica promedio",          # r=0.520 ** MODERADA-FUERTE
+            "dewpoint_avg": "Punto de rocío promedio",              # r=0.470 ** MODERADA-FUERTE
+            "windchill_max": "Sensación térmica máxima",            # r=0.464 ** MODERADA-FUERTE
+            "dewpoint_min": "Punto de rocío mínimo",                # r=0.456 ** MODERADA-FUERTE
+            "precipitation_max_daily": "Precipitación máxima diaria", # r=0.452
+            "precipitation_avg_daily": "Precipitación promedio diaria", # r=0.438
         },
-        "SAIDI_C": {
-            "realfeel_avg": "Temperatura aparente promedio",
-            "pressure_rel_avg": "Presión relativa promedio",
-            "wind_speed_max": "Velocidad máxima del viento",
-            "pressure_abs_avg": "Presión absoluta promedio",
+
+        "SAIDI_C": {  # Cúcuta - 4 variables correlacionadas
+            "realfeel_avg": "Temperatura aparente promedio",        # r=0.573 ** MODERADA-FUERTE
+            "pressure_rel_avg": "Presión relativa promedio",        # r=-0.358 (negativa)
+            "wind_speed_max": "Velocidad máxima del viento",        # r=0.356
+            "pressure_abs_avg": "Presión absoluta promedio",        # r=-0.356 (negativa)
         },
-        "SAIDI_T": {
-            "realfeel_avg": "Temperatura aparente promedio",
-            "wind_dir_avg": "Dirección promedio del viento",
-            "uv_index_avg": "Índice UV promedio",
-            "heat_index_avg": "Índice de calor promedio",
-            "temperature_min": "Temperatura mínima",
-            "windchill_min": "Sensación térmica mínima",
-            "temperature_avg": "Temperatura promedio",
-            "pressure_rel_avg": "Presión relativa promedio",
+
+        "SAIDI_T": {  # Tibú - 8 variables correlacionadas
+            "realfeel_avg": "Temperatura aparente promedio",        # r=0.906 *** MUY FUERTE
+            "wind_dir_avg": "Dirección promedio del viento",        # r=-0.400 (negativa)
+            "uv_index_avg": "Índice UV promedio",                   # r=0.385
+            "heat_index_avg": "Índice de calor promedio",           # r=0.363
+            "temperature_min": "Temperatura mínima",                # r=0.352
+            "windchill_min": "Sensación térmica mínima",            # r=0.340
+            "temperature_avg": "Temperatura promedio",              # r=0.338
+            "pressure_rel_avg": "Presión relativa promedio",        # r=-0.330 (negativa)
         },
-        "SAIDI_A": {
-            "uv_index_max": "Índice UV máximo",
-            "days_with_rain": "Días con lluvia",
+
+        "SAIDI_A": {  # Aguachica - 2 variables correlacionadas
+            "uv_index_max": "Índice UV máximo",                     # r=0.664 *** FUERTE
+            "days_with_rain": "Días con lluvia",                    # r=0.535 ** MODERADA-FUERTE
         },
-        "SAIDI_P": {
-            "precipitation_total": "Precipitación total",
-            "precipitation_avg_daily": "Precipitación promedio diaria",
-            "realfeel_min": "Temperatura aparente mínima",
+
+        "SAIDI_P": {  # Pamplona - 3 variables correlacionadas
+            "precipitation_total": "Precipitación total",           # r=0.577 ** MODERADA-FUERTE
+            "precipitation_avg_daily": "Precipitación promedio diaria", # r=0.552
+            "realfeel_min": "Temperatura aparente mínima",          # r=0.344
         },
     }
 
-    REGIONAL_ORDERS: ClassVar[dict[str, dict[str, tuple]]] = {
-        "SAIDI_O": {"order": (3, 1, 6), "seasonal_order": (3, 1, 0, 12)},
-        "SAIDI_C": {"order": (3, 1, 2), "seasonal_order": (1, 1, 2, 12)},
-        "SAIDI_A": {"order": (2, 1, 3), "seasonal_order": (2, 1, 1, 12)},
-        "SAIDI_P": {"order": (4, 1, 3), "seasonal_order": (1, 1, 4, 12)},
-        "SAIDI_T": {"order": (3, 1, 3), "seasonal_order": (2, 1, 2, 12)},
-        "SAIDI_Cens": {"order": (4, 1, 3), "seasonal_order": (1, 1, 4, 12)},
+    REGIONAL_ORDERS = {
+        "SAIDI_O": {
+            "order": (3, 1, 6),
+            "seasonal_order": (3, 1, 0, 12),
+        },
+        "SAIDI_C": {
+            "order": (3, 1, 2),
+            "seasonal_order": (1, 1, 2, 12),
+        },
+        "SAIDI_A": {
+            "order": (2, 1, 3),
+            "seasonal_order": (2, 1, 1, 12),
+        },
+        "SAIDI_P": {
+            "order": (4, 1, 3),
+            "seasonal_order": (1, 1, 4, 12),
+        },
+        "SAIDI_T": {
+            "order": (3, 1, 3),
+            "seasonal_order": (2, 1, 2, 12),
+        },
+        "SAIDI_Cens": {
+            "order": (4, 1, 3),
+            "seasonal_order": (1, 1, 4, 12),
+        },
     }
 
     def __init__(self):
@@ -91,10 +112,10 @@ class RollingValidationService:
     def load_optimized_config(self, regional_code: str) -> dict[str, Any] | None:
         """
         Cargar configuración optimizada para una regional desde archivo JSON.
-
+        
         Args:
             regional_code: Código de la regional (ej: 'SAIDI_O')
-
+        
         Returns:
             Dict con configuración óptima o None si no existe
 
@@ -141,12 +162,12 @@ class RollingValidationService:
 
     def _get_correlation_for_var(self, var_code: str, regional_code: str) -> float:
         """
-        Obtener correlación documentada de una variable específica.
-
+        Obtener correlación documentada de una variable específica
+        
         Args:
             var_code: Código de la variable (ej: 'realfeel_min')
             regional_code: Código de la regional (ej: 'SAIDI_O')
-
+        
         Returns:
             float: Correlación documentada o 0.0 si no existe
 
@@ -202,12 +223,12 @@ class RollingValidationService:
     def _get_orders_for_regional(self, regional_code: str | None) -> tuple[tuple, tuple]:
         """
         Obtener órdenes SARIMAX específicos para una regional.
-
+        
         Prioriza configuración optimizada sobre defaults hardcodeados.
-
+        
         Args:
             regional_code: Código de la regional (ej: 'SAIDI_O')
-
+        
         Returns:
             Tuple de (order, seasonal_order) - Órdenes ARIMA y estacionales
 
@@ -335,8 +356,9 @@ class RollingValidationService:
             data_original, exog_df, exog_info = self._load_and_prepare_data(
                 file_path, df_prepared, regional_code, climate_data, log_callback,
             )
-            observaciones_minimas = 36
-            if len(data_original) < observaciones_minimas:
+
+            len_datos = 36
+            if len(data_original) < len_datos:
                 raise Exception("Se necesitan al menos 36 observaciones para validación temporal")
 
             # Aplicar transformación
@@ -465,41 +487,36 @@ class RollingValidationService:
         n_validation = min(validation_months, int(n_total * 0.20))
         n_train_initial = n_total - n_validation
 
-        datos_minimos = 24
-        if n_train_initial < datos_minimos:
-            raise Exception("Insuficientes datos para training (mínimo 24 meses)")
+        n_train_24 = 24
+        if n_train_initial < n_train_24:
+            msg = "Insuficientes datos para training (mínimo 24 meses)"
+            raise ValueError(msg)
 
         monthly_predictions = []
         monthly_actuals = []
         monthly_errors = []
         monthly_dates = []
 
-        # Iterar mes a mes
         for i in range(n_validation):
             if progress_callback:
                 progress = 10 + int((i / n_validation) * 30)
                 progress_callback(progress, f"Rolling forecast: mes {i+1}/{n_validation}")
 
-            # Ventana de entrenamiento hasta t-1
             train_end_idx = n_train_initial + i
             train_data_trans = data_transformed.iloc[:train_end_idx]
             train_data_orig = data_original.iloc[:train_end_idx]
 
-            # Definir pred_date ANTES del bloque if
             pred_date = data_original.index[train_end_idx]
 
-            # Preparar exógenas para training y predicción
             exog_train = None
             exog_pred = None
 
             if exog_df is not None:
                 exog_train = exog_df.loc[train_data_orig.index]
 
-                # Verificar si hay datos exógenos reales para esa fecha
                 if pred_date in exog_df.index:
                     exog_pred = exog_df.loc[[pred_date]]
                 else:
-                    # NO EXTRAPOLAR - usar promedio histórico del mismo mes
                     pred_month = pred_date.month
                     historical_same_month = exog_df[exog_df.index.month == pred_month]
 
@@ -514,14 +531,13 @@ class RollingValidationService:
                     else:
                         exog_pred = None
 
-            # VALIDACIÓN: Verificar que no haya NaN en los datos
             if train_data_trans.isna().any() or (exog_train is not None and exog_train.isna().any().any()):
                 if log_callback:
                     log_callback(f" Iteración {i+1} contiene NaN - omitida")
                 continue
 
+            itera = 3
             try:
-                # Parámetros más robustos
                 model = SARIMAX(
                     train_data_trans,
                     exog=exog_train,
@@ -531,7 +547,6 @@ class RollingValidationService:
                     enforce_invertibility=False,
                 )
 
-                # Método de ajuste más estable
                 results = model.fit(
                     disp=False,
                     method="lbfgs",
@@ -539,19 +554,15 @@ class RollingValidationService:
                     low_memory=True,
                 )
 
-                # Predecir SOLO 1 mes adelante
                 forecast = results.get_forecast(steps=1, exog=exog_pred)
                 pred_transformed = forecast.predicted_mean.iloc[0]
 
-                # Revertir transformación
                 pred_original = self._inverse_transformation(
                     np.array([pred_transformed]), transformation,
                 )[0]
 
-                # Valor real en t
                 actual_original = data_original.iloc[train_end_idx]
 
-                # Calcular error
                 error = abs(pred_original - actual_original)
                 error_pct = (error / actual_original * 100) if actual_original > 0 else 0
 
@@ -560,38 +571,36 @@ class RollingValidationService:
                 monthly_errors.append(error)
                 monthly_dates.append(pred_date)
 
-                if log_callback and (i < 3 or i >= n_validation - 2):
+                if log_callback and (i < itera or i >= n_validation - 2):
                     log_callback(f"  Mes {i+1}: Pred={pred_original:.2f}, Real={actual_original:.2f}, Error={error_pct:.1f}%")
 
             except np.linalg.LinAlgError:
                 if log_callback:
                     log_callback(f" Iteración {i+1} falló (matriz singular) - omitida")
                 continue
-            except Exception as e:
+            except (ValueError, RuntimeError) as exc:
                 if log_callback:
-                    log_callback(f" Error en iteración {i+1}: {e!s} - omitida")
+                    log_callback(f" Error en iteración {i+1}: {exc!s} - omitida")
                 continue
 
-        # Calcular métricas acumulativas
+        rmse_mayor = 5.5
+        rmse_medio = 4.0
+        rmse_menor = 3.0
+        precision_mayor = 85
+        precision_medio = 78
+        precision_menor = 70
         if len(monthly_predictions) > 0:
             rmse = np.sqrt(mean_squared_error(monthly_actuals, monthly_predictions))
             mae = mean_absolute_error(monthly_actuals, monthly_predictions)
 
-            mape = np.mean([abs(a - p) / a * 100 for a, p in zip(monthly_actuals, monthly_predictions) if a > 0])
+            mape = np.mean([abs(a - p) / a * 100 for a, p in zip(monthly_actuals, monthly_predictions, strict=True) if a > 0])
             precision = max(0, min(100, (1 - mape / 100) * 100))
 
-            # CAMBIO 1: Clasificar calidad (ajustado a MAPE real de SAIDI)
-            rmse_maximo = 5.5
-            precision_minima = 70
-            rmse_media = 4.0
-            precision_media = 78
-            rmse_minima = 3.0
-            precision_maxima = 85
-            if rmse < rmse_minima and precision >= precision_maxima:
+            if rmse < rmse_menor and precision >= precision_mayor:
                 quality = "EXCELENTE"
-            elif rmse < rmse_media and precision >= precision_media:
+            elif rmse < rmse_medio and precision >= precision_medio:
                 quality = "BUENA"
-            elif rmse < rmse_maximo and precision >= precision_minima:
+            elif rmse < rmse_mayor and precision >= precision_menor:
                 quality = "REGULAR"
             else:
                 quality = "MALA"
@@ -608,7 +617,8 @@ class RollingValidationService:
                 "prediction_quality": quality,
                 "n_predictions": len(monthly_predictions),
             }
-        raise Exception("No se pudieron generar predicciones rolling")
+        msg = "No se pudieron generar predicciones rolling"
+        raise RuntimeError(msg)
 
     def run_time_series_cv(self,
                           data_original: pd.Series,
@@ -633,7 +643,6 @@ class RollingValidationService:
         rmse_scores = []
         precision_scores = []
 
-        # Calcular n_splits correctamente
         n_splits = 0
         temp_train_end = min_train
         while temp_train_end + val_size + test_size <= n_total:
@@ -656,7 +665,6 @@ class RollingValidationService:
             split_idx += 1
             iteration_count += 1
 
-            # SEGURIDAD: Detectar bucle infinito
             if iteration_count > max_iterations:
                 if log_callback:
                     log_callback(f" ALERTA: Detenido por seguridad tras {iteration_count} iteraciones")
@@ -667,7 +675,6 @@ class RollingValidationService:
                 progress = 40 + int((min(split_idx, n_splits) / n_splits) * 20)
                 progress_callback(progress, f"CV Split {split_idx}/{n_splits}")
 
-            # Definir splits
             train_end = current_train_end
             val_end = train_end + val_size
             test_end = val_end + test_size
@@ -676,7 +683,6 @@ class RollingValidationService:
             train_orig = data_original.iloc[:train_end]
             test_orig = data_original.iloc[val_end:test_end]
 
-            # Exógenas
             exog_train = None
             exog_test = None
             if exog_df is not None:
@@ -686,17 +692,15 @@ class RollingValidationService:
                 else:
                     exog_test = None
 
-            # VALIDACIÓN: Verificar que no haya NaN en los datos
-            split_fallados = 3
+            split_fallidos = 3
             if train_trans.isna().any() or (exog_train is not None and exog_train.isna().any().any()):
                 failed_splits += 1
-                if log_callback and failed_splits <= split_fallados:
+                if log_callback and failed_splits <= split_fallidos:
                     log_callback(f" Split {split_idx} contiene NaN - omitido")
                 current_train_end += step
                 continue
 
             try:
-                # Parámetros más robustos
                 model = SARIMAX(
                     train_trans,
                     exog=exog_train,
@@ -706,7 +710,6 @@ class RollingValidationService:
                     enforce_invertibility=False,
                 )
 
-                # Método de ajuste más estable
                 results = model.fit(
                     disp=False,
                     method="lbfgs",
@@ -714,14 +717,12 @@ class RollingValidationService:
                     low_memory=True,
                 )
 
-                # Predecir test
                 forecast = results.get_forecast(steps=test_size, exog=exog_test)
-                pred_trans = forecast.predicted_mean.values
+                pred_trans = forecast.predicted_mean.to_numpy()
                 pred_orig = self._inverse_transformation(pred_trans, transformation)
 
-                # Métricas
-                rmse = np.sqrt(mean_squared_error(test_orig.values, pred_orig))
-                mape = np.mean(abs((test_orig.values - pred_orig) / test_orig.values)) * 100
+                rmse = np.sqrt(mean_squared_error(test_orig.to_numpy(), pred_orig))
+                mape = np.mean(abs((test_orig.to_numpy() - pred_orig) / test_orig.to_numpy())) * 100
                 precision = max(0, min(100, (1 - mape / 100) * 100))
 
                 rmse_scores.append(rmse)
@@ -737,31 +738,31 @@ class RollingValidationService:
 
             except np.linalg.LinAlgError:
                 failed_splits += 1
-                if log_callback and failed_splits <= 3:
+                if log_callback and failed_splits <= split_fallidos:
                     log_callback(f" Split {split_idx} falló (matriz singular) - omitido")
                 continue
-            except Exception as e:
+            except (ValueError, RuntimeError) as exc:
                 failed_splits += 1
-                if log_callback and failed_splits <= 3:
-                    log_callback(f" Split {split_idx} falló: {str(e)[:50]} - omitido")
+                if log_callback and failed_splits <= split_fallidos:
+                    error_msg = str(exc)[:50]
+                    log_callback(f" Split {split_idx} falló: {error_msg} - omitido")
                 continue
 
             current_train_end += step
 
-        if len(rmse_scores) < split_fallados:
-            raise Exception(f"Insuficientes splits exitosos: {len(rmse_scores)}/3 mínimo")
+        len_rmse_3 = 3
+        if len(rmse_scores) < len_rmse_3:
+            msg = f"Insuficientes splits exitosos: {len(rmse_scores)}/3 mínimo"
+            raise ValueError(msg)
 
-        # Mostrar resumen de splits fallidos
         if failed_splits > 0 and log_callback:
             log_callback(f"i Total de splits omitidos: {failed_splits}/{n_splits} ({failed_splits/n_splits*100:.1f}%)")
 
-        # Estadísticas
         mean_rmse = np.mean(rmse_scores)
         std_rmse = np.std(rmse_scores)
         mean_precision = np.mean(precision_scores)
         precision_range = [min(precision_scores), max(precision_scores)]
 
-        # Score de estabilidad (0-100)
         cv_rmse = (std_rmse / mean_rmse * 100) if mean_rmse > 0 else 100
         stability_score = max(0, min(100, 100 - cv_rmse))
 
@@ -797,7 +798,6 @@ class RollingValidationService:
         n_total = len(data_original)
         window_sizes = []
 
-        # Ventanas crecientes desde 24 meses
         current = 24
         while current <= n_total:
             window_sizes.append(current)
@@ -810,9 +810,10 @@ class RollingValidationService:
             log_callback(f"Ventanas a evaluar: {window_sizes}")
 
         params_evolution = {}
-        window_sizes_success = []  # ← NUEVO: Solo ventanas exitosas
+        window_sizes_success = []
         failed_windows = 0
 
+        ventana_falladas = 2
         for idx, window in enumerate(window_sizes):
             if progress_callback:
                 progress = 60 + int((idx / len(window_sizes)) * 20)
@@ -825,12 +826,10 @@ class RollingValidationService:
             if exog_df is not None:
                 exog_train = exog_df.loc[train_orig.index]
 
-            # VALIDACIÓN: Verificar que no haya NaN
-            fallos_ventanas = 2
             if train_trans.isna().any() or (exog_train is not None and exog_train.isna().any().any()):
                 failed_windows += 1
-                if log_callback and failed_windows <= fallos_ventanas:
-                    log_callback(f"⚠ Ventana {window} contiene NaN - omitida")
+                if log_callback and failed_windows <= ventana_falladas:
+                    log_callback(f"Ventana {window} contiene NaN - omitida")
                 continue
 
             try:
@@ -850,10 +849,8 @@ class RollingValidationService:
                     low_memory=True,
                 )
 
-                # Registrar ventana exitosa
                 window_sizes_success.append(window)
 
-                # Extraer parámetros
                 params = results.params
 
                 for param_name, param_value in params.items():
@@ -861,44 +858,42 @@ class RollingValidationService:
                         params_evolution[param_name] = []
                     params_evolution[param_name].append(param_value)
 
-            except (np.linalg.LinAlgError, Exception) as e:
+            except (np.linalg.LinAlgError, ValueError, RuntimeError) as exc:
                 failed_windows += 1
-                if log_callback and failed_windows <= 2:
-                    log_callback(f"⚠ Ventana {window} falló: {str(e)[:50]} - omitida")
+                if log_callback and failed_windows <= ventana_falladas:
+                    error_msg = str(exc)[:50]
+                    log_callback(f"Ventana {window} falló: {error_msg} - omitida")
                 continue
 
-        ventana_exitosa = 2
-        if not params_evolution or len(window_sizes_success) < ventana_exitosa:
-            raise Exception(f"Insuficientes ventanas exitosas: {len(window_sizes_success)}/2 mínimo")
+        if not params_evolution or len(window_sizes_success) < ventana_falladas:
+            msg = f"Insuficientes ventanas exitosas: {len(window_sizes_success)}/2 mínimo"
+            raise ValueError(msg)
 
-        # ===== ANÁLISIS CORREGIDO CON FUNCIÓN LOGARÍTMICA SUAVIZADA =====
         param_analysis = {}
         unstable_params = []
-
-        mayor_division = 0.01
-        valor_minimo = 0.2
-        valor_medio = 0.5
-        valor_maximo = 1.0
-        valor_maximo_m = 2.0
+        abs_mean_menor = 0.01
+        abs_mean_meedio = 0.2
+        abs_mean_mayor = 0.5
+        value_range_mayor = 2.0
+        value_range_medio = 1.0
+        estabilidad_comp = 65
+        cv_comp = 1.5
         for param_name, values in params_evolution.items():
             if len(values) > 1:
                 mean_val = np.mean(values)
                 std_val = np.std(values)
                 value_range = max(values) - min(values)
 
-                if abs(mean_val) > mayor_division:
+                if abs(mean_val) > abs_mean_menor:
                     cv = abs(std_val / mean_val)
-                    # Usar log(1 + cv) para suavizar valores altos
-                    # cv=0.5 → 85, cv=1.0 → 70, cv=2.0 → 50, cv=5.0 → 30
                     stability_score = max(0, min(100, 100 - 15 * np.log1p(cv)))
-                # Método basado en rango absoluto
-                elif value_range < valor_minimo:
+                elif value_range < abs_mean_meedio:
                     stability_score = 95
-                elif value_range < valor_medio:
+                elif value_range < abs_mean_mayor:
                     stability_score = 80
-                elif value_range < valor_maximo:
+                elif value_range < value_range_medio:
                     stability_score = 65
-                elif value_range < valor_maximo_m:
+                elif value_range < value_range_mayor:
                     stability_score = 50
                 else:
                     stability_score = max(0, 50 - (value_range - 2.0) * 10)
@@ -909,38 +904,33 @@ class RollingValidationService:
                     "min": min(values),
                     "max": max(values),
                     "range": value_range,
-                    "cv": abs(std_val / mean_val) if abs(mean_val) > 0.01 else None,
+                    "cv": abs(std_val / mean_val) if abs(mean_val) > abs_mean_menor else None,
                     "stability_score": stability_score,
                     "values": values,
                 }
 
-                # Criterio de inestabilidad MÁS REALISTA
                 is_unstable = False
-                cv_mayor = 1.5
-                puntaje_menor = 65
 
-                if abs(mean_val) > mayor_division:
+                if abs(mean_val) > abs_mean_menor:
                     cv = abs(std_val / mean_val)
-                    # Inestable si CV > 1.5 Y score < 65
-                    if cv > cv_mayor and stability_score < puntaje_menor:
+                    if cv > cv_comp and stability_score < estabilidad_comp:
                         is_unstable = True
-                # Inestable si rango > 1.5 Y score < 65
-                elif value_range > cv_mayor and stability_score < puntaje_menor:
+                elif value_range > cv_comp and stability_score < estabilidad_comp:
                     is_unstable = True
 
                 if is_unstable:
                     unstable_params.append(param_name)
 
-        # Score global: promedio ponderado por tipo de parámetro
         ar_scores = [p["stability_score"] for name, p in param_analysis.items() if "ar." in name.lower()]
         ma_scores = [p["stability_score"] for name, p in param_analysis.items() if "ma." in name.lower()]
         exog_scores = [p["stability_score"] for name, p in param_analysis.items()
                        if "ar." not in name.lower() and "ma." not in name.lower() and "sigma" not in name.lower()]
 
-        # Ponderación: AR/MA más importantes (70%) que exógenas (30%)
         overall_stability = 0
         weight_sum = 0
-        weight_sum_equal = 0
+        overall_stability_mayor = 75
+        overall_stability_medio = 65
+        overall_stability_menor = 55
 
         if ar_scores:
             overall_stability += np.mean(ar_scores) * 0.35
@@ -954,21 +944,13 @@ class RollingValidationService:
             overall_stability += np.mean(exog_scores) * 0.30
             weight_sum += 0.30
 
-        if weight_sum > weight_sum_equal:
-            overall_stability = overall_stability / weight_sum
-        else:
-            overall_stability = 0
+        overall_stability = overall_stability / weight_sum if weight_sum > 0 else 0
 
-        # Interpretación REALISTA
-        estabilidad_maxima = 75
-        estabilidad_media = 65
-        estabilidad_menor = 55
-
-        if overall_stability >= estabilidad_maxima:
+        if overall_stability >= overall_stability_mayor:
             interpretation = "Los parámetros muestran ALTA estabilidad - Modelo robusto"
-        elif overall_stability >= estabilidad_media:
+        elif overall_stability >= overall_stability_medio:
             interpretation = "Los parámetros muestran BUENA estabilidad - Modelo confiable"
-        elif overall_stability >= estabilidad_menor:
+        elif overall_stability >= overall_stability_menor:
             interpretation = "Los parámetros muestran estabilidad MODERADA - Aceptable para producción"
         else:
             interpretation = "Los parámetros muestran BAJA estabilidad - Revisar especificación"
@@ -977,7 +959,6 @@ class RollingValidationService:
             log_callback(f"  Overall Stability Score: {overall_stability:.1f}/100")
             log_callback(f"  {interpretation}")
 
-            # Desglose por tipo
             if ar_scores:
                 log_callback(f"  AR params: {np.mean(ar_scores):.1f}/100 (n={len(ar_scores)})")
             if ma_scores:
@@ -1006,14 +987,14 @@ class RollingValidationService:
         }
 
     def run_backtesting(self,
-                       data_original: pd.Series,
-                       data_transformed: pd.Series,
-                       exog_df: pd.DataFrame | None,
-                       order: tuple,
-                       seasonal_order: tuple,
-                       transformation: str,
-                       progress_callback=None,
-                       log_callback=None) -> dict[str, Any]:
+                   data_original: pd.Series,
+                   data_transformed: pd.Series,
+                   exog_df: pd.DataFrame | None,
+                   order: tuple,
+                   seasonal_order: tuple,
+                   transformation: str,
+                   progress_callback=None,
+                   log_callback=None) -> dict[str, Any]:
         """Backtesting multi-horizonte."""
         if log_callback:
             log_callback("\n BACKTESTING MULTI-HORIZONTE")
@@ -1021,7 +1002,6 @@ class RollingValidationService:
         horizons = [1, 3, 6, 12]
         n_total = len(data_original)
 
-        # Puntos de inicio cada 6 meses desde mes 24
         backtest_points = []
         start_point = 24
         while start_point + max(horizons) < n_total:
@@ -1062,13 +1042,11 @@ class RollingValidationService:
                     if test_orig.index[-1] <= exog_df.index.max():
                         exog_test = exog_df.loc[test_orig.index]
 
-                # VALIDACIÓN: Verificar que no haya NaN en los datos
                 if train_trans.isna().any() or (exog_train is not None and exog_train.isna().any().any()):
                     failed_count += 1
                     continue
 
                 try:
-                    # Parámetros más robustos
                     model = SARIMAX(
                         train_trans,
                         exog=exog_train,
@@ -1078,7 +1056,6 @@ class RollingValidationService:
                         enforce_invertibility=False,
                     )
 
-                    # Método de ajuste más estable
                     results = model.fit(
                         disp=False,
                         method="lbfgs",
@@ -1087,18 +1064,18 @@ class RollingValidationService:
                     )
 
                     forecast = results.get_forecast(steps=horizon, exog=exog_test)
-                    pred_trans = forecast.predicted_mean.values
+                    pred_trans = forecast.predicted_mean.to_numpy()
                     pred_orig = self._inverse_transformation(pred_trans, transformation)
 
-                    rmse = np.sqrt(mean_squared_error(test_orig.values, pred_orig))
-                    mape = np.mean(abs((test_orig.values - pred_orig) / test_orig.values)) * 100
+                    rmse = np.sqrt(mean_squared_error(test_orig.to_numpy(), pred_orig))
+                    mape = np.mean(abs((test_orig.to_numpy() - pred_orig) / test_orig.to_numpy())) * 100
                     precision = max(0, min(100, (1 - mape / 100) * 100))
 
                     rmse_list.append(rmse)
                     precision_list.append(precision)
                     mape_list.append(mape)
 
-                except (np.linalg.LinAlgError, Exception):
+                except (np.linalg.LinAlgError, ValueError, RuntimeError):
                     failed_count += 1
                     continue
 
@@ -1111,7 +1088,6 @@ class RollingValidationService:
                     "n_failed": failed_count,
                 }
 
-        # Calcular degradación
         if 1 in metrics_by_horizon and len(metrics_by_horizon) > 1:
             baseline_precision = metrics_by_horizon[1]["precision"]
             max_horizon = max(metrics_by_horizon.keys())
@@ -1121,16 +1097,13 @@ class RollingValidationService:
         else:
             degradation_rate = 0
 
-        # Horizonte óptimo (mejor balance precision/utility)
         optimal_horizon = 1
         best_score = 0
-        precision_mayor = 75
-
+        precision = 75
         for h, m in metrics_by_horizon.items():
-            # Score = precision * factor de utilidad
             utility_factor = min(1.0, h / 6.0)
             score = m["precision"] * (0.7 + 0.3 * utility_factor)
-            if score > best_score and m["precision"] >= precision_mayor:
+            if score > best_score and m["precision"] >= precision:
                 best_score = score
                 optimal_horizon = h
 
@@ -1171,8 +1144,8 @@ class RollingValidationService:
         degradation_rate = backtesting_results["degradation_rate"]
 
         # Puntajes individuales (0-100)
-        rolling_condicion = 2.0
-        score_rolling = 100 if rolling_rmse < rolling_condicion else (100 - min(50, (rolling_rmse - 2.0) * 20))
+        rolling_rmse_100_menor = 20.0
+        score_rolling = 100 if rolling_rmse < rolling_rmse_100_menor else (100 - min(50, (rolling_rmse - 2.0) * 20))
         score_precision = rolling_precision
         score_cv = cv_stability
         score_params = param_stability_score
@@ -1187,27 +1160,26 @@ class RollingValidationService:
             score_degradation * 0.10
         )
 
-        # CAMBIO 2: Clasificación de calidad (ajustado a realidad de series temporales complejas)
-        confidencialidad_maxima = 80
-        confidencialidad_media = 72
-        confidencialidad_menor = 65
-        rolling_rmse_maxima = 6.5
-        rolling_rmse_media = 5.0
-        rolling_rmse_minima = 4.0
-        estabilidad_max = 80
-        estabilidad_med = 70
-        estabilidad_min = 65
-        param_estabilidad_max = 75
-        param_estabilidad_med = 65
-        param_estabilidad_min = 60
-        param_inestables = 2
-        rolling_precision_max = 70
-
-        if confidence_level >= confidencialidad_maxima and rolling_rmse < rolling_rmse_minima and cv_stability >= estabilidad_max and param_stability_score >= param_estabilidad_max:
+        # Clasificación de calidad (ajustado a realidad de series temporales complejas)
+        cofidencia_lavel_mayor = 80
+        cofidencia_lavel_medio = 72
+        cofidencia_lavel_menor = 65
+        rolling_menor = 4.0
+        rolling_medio = 5.0
+        rolling_mayor = 6.5
+        rolling_precision_comp = 70
+        estabilidad_mayor = 80
+        estabilidad_media = 70
+        param_estabilidad_mayor = 75
+        param_estabilidad_medio = 65
+        param_estabilidad_menor = 60
+        degradacion = 4.0
+        intestabilidad = 2
+        if confidence_level >= cofidencia_lavel_mayor and rolling_rmse < rolling_menor and cv_stability >= estabilidad_mayor and param_stability_score >= param_estabilidad_mayor:
             model_quality = "EXCELENTE"
-        elif confidence_level >= confidencialidad_media and rolling_rmse < rolling_rmse_media and cv_stability >= estabilidad_med and param_stability_score >= param_estabilidad_med:
+        elif confidence_level >= cofidencia_lavel_medio and rolling_rmse < rolling_medio and cv_stability >= estabilidad_media and param_stability_score >= param_estabilidad_medio:
             model_quality = "CONFIABLE"
-        elif confidence_level >= confidencialidad_menor and rolling_rmse < rolling_rmse_maxima:
+        elif confidence_level >= cofidencia_lavel_menor and rolling_rmse < rolling_mayor:
             model_quality = "CUESTIONABLE"
         else:
             model_quality = "NO CONFIABLE"
@@ -1224,25 +1196,25 @@ class RollingValidationService:
         else:
             recommendation = "No recomendado para uso productivo - Revisar especificación del modelo"
 
-        # CAMBIO 3: Limitaciones (umbrales más realistas)
+        #Limitaciones (umbrales más realistas)
         limitations = []
 
-        if rolling_rmse > rolling_rmse_media:
+        if rolling_rmse > rolling_medio:
             limitations.append(f"RMSE elevado en rolling forecast ({rolling_rmse:.2f} min)")
 
-        if cv_stability < estabilidad_min:
+        if cv_stability < cofidencia_lavel_menor:
             limitations.append(f"Estabilidad limitada en CV (Score: {cv_stability:.1f})")
 
-        if param_stability_score < param_estabilidad_min:
+        if param_stability_score < param_estabilidad_menor:
             limitations.append(f"Parámetros inestables (Score: {param_stability_score:.1f})")
 
-        if abs(degradation_rate) > rolling_rmse_minima:
+        if abs(degradation_rate) > degradacion:
             limitations.append(f"Degradación notable después de {optimal_horizon} meses ({degradation_rate:.1f}% por mes)")
 
-        if len(param_stability.get("unstable_params", [])) > param_inestables:
+        if len(param_stability.get("unstable_params", [])) > intestabilidad:
             limitations.append(f"{len(param_stability['unstable_params'])} coeficientes inestables detectados")
 
-        if rolling_precision < rolling_precision_max:
+        if rolling_precision < rolling_precision_comp:
             limitations.append(f"Precisión promedio limitada ({rolling_precision:.1f}%)")
 
         return {
@@ -1306,16 +1278,16 @@ class RollingValidationService:
         elif file_path is not None:
             df = pd.read_excel(file_path, sheet_name="Hoja1")
         else:
-            raise Exception("Debe proporcionar file_path o df_prepared")
+            raise ValueError("Debe proporcionar file_path o df_prepared")
 
         # Asegurar índice datetime
         if not isinstance(df.index, pd.DatetimeIndex):
             if "Fecha" in df.columns:
                 df["Fecha"] = pd.to_datetime(df["Fecha"])
-                df.set_index("Fecha", inplace=True)
+                df = df.set_index("Fecha")
             else:
                 df.iloc[:, 0] = pd.to_datetime(df.iloc[:, 0])
-                df.set_index(df.columns[0], inplace=True)
+                df = df.set_index(df.columns[0])
 
         # Buscar columna SAIDI
         col_saidi = None
@@ -1325,7 +1297,7 @@ class RollingValidationService:
             col_saidi = "SAIDI Histórico"
 
         if col_saidi is None:
-            raise Exception("No se encontró la columna SAIDI")
+            raise KeyError("No se encontró la columna SAIDI")
 
         data_original = df[df[col_saidi].notna()][col_saidi]
 
@@ -1342,7 +1314,7 @@ class RollingValidationService:
                 if not self._diagnose_exog_coverage(data_original, exog_df, log_callback):
                     if log_callback:
                         log_callback("=" * 60)
-                        log_callback(" ADVERTENCIA: Cobertura insuficiente")
+                        log_callback("ADVERTENCIA: Cobertura insuficiente")
                         log_callback("Las variables exógenas serán DESACTIVADAS")
                         log_callback("=" * 60)
                     exog_df = None
@@ -1360,9 +1332,9 @@ class RollingValidationService:
         return data_original, exog_df, exog_info
 
     def _diagnose_exog_coverage(self,
-                    serie_saidi: pd.Series,
-                    exog_df: pd.DataFrame,
-                    log_callback) -> bool:
+                serie_saidi: pd.Series,
+                exog_df: pd.DataFrame,
+                log_callback) -> bool:
         """
         Diagnosticar cobertura temporal de variables exógenas.
 
@@ -1395,7 +1367,7 @@ class RollingValidationService:
                 log_callback(f"EXOG:  {exog_start.strftime('%Y-%m')} a {exog_end.strftime('%Y-%m')} ({len(exog_df)} obs)")
 
             # 1 Verificar que los índices coinciden EXACTAMENTE
-            rechazo = 20
+            fallo_minimo = 20
             if not exog_df.index.equals(serie_saidi.index):
                 if log_callback:
                     log_callback("ADVERTENCIA: Índices no coinciden exactamente")
@@ -1410,20 +1382,20 @@ class RollingValidationService:
                         log_callback(f"Fechas SAIDI faltantes en EXOG: {len(missing_in_exog)} ({pct_missing:.1f}%)")
 
                     # CRÍTICO: Si falta >20% de fechas, rechazar
-                    if pct_missing > rechazo:
+                    if pct_missing > fallo_minimo:
                         if log_callback:
                             log_callback("ERROR CRÍTICO: >20% de fechas faltantes")
                             log_callback("Las variables exógenas NO cubren suficiente período histórico")
                         return False
 
             # 2 Verificar que NO hay NaN en ninguna columna
-            if exog_df.isnull().any().any():
-                nan_cols = exog_df.columns[exog_df.isnull().any()].tolist()
+            if exog_df.isna().any().any():
+                nan_cols = exog_df.columns[exog_df.isna().any()].tolist()
 
                 if log_callback:
                     log_callback("ERROR: Columnas con NaN encontradas:")
                     for col in nan_cols:
-                        nan_count = exog_df[col].isnull().sum()
+                        nan_count = exog_df[col].isna().sum()
                         pct_nan = (nan_count / len(exog_df)) * 100
                         log_callback(f"  - {col}: {nan_count} NaN ({pct_nan:.1f}%)")
                     log_callback("Variables exógenas deben estar completamente rellenas")
@@ -1442,29 +1414,28 @@ class RollingValidationService:
                 if exog_df[col].std() == 0:
                     zero_variance_vars.append(col)
 
-            if zero_variance_vars:
-                if log_callback:
-                    log_callback("ADVERTENCIA: Variables con varianza cero:")
-                    for var in zero_variance_vars:
-                        log_callback(f"  - {var}")
-                    log_callback("Estas variables no aportan información al modelo")
+            if zero_variance_vars and log_callback:
+                log_callback("ADVERTENCIA: Variables con varianza cero:")
+                for var in zero_variance_vars:
+                    log_callback(f"  - {var}")
+                log_callback("Estas variables no aportan información al modelo")
 
             if log_callback:
                 log_callback("Cobertura temporal y calidad de datos OK")
                 log_callback("=" * 60)
 
-            return True
-
-        except Exception as e:
+        except (IndexError, KeyError, AttributeError) as e:
             if log_callback:
                 log_callback(f"ERROR durante diagnóstico: {e}")
             return False
+        else:
+            return True
 
     def _prepare_exogenous_variables(self,
-                                    climate_data: pd.DataFrame,
-                                    df_saidi: pd.DataFrame,
-                                    regional_code: str | None,
-                                    log_callback) -> tuple[pd.DataFrame | None, dict | None]:
+                                climate_data: pd.DataFrame,
+                                df_saidi: pd.DataFrame,
+                                regional_code: str | None,
+                                log_callback) -> tuple[pd.DataFrame | None, dict | None]:
         """
         Preparar variables exógenas climáticas SIN ESCALAR.
 
@@ -1513,7 +1484,7 @@ class RollingValidationService:
                     climate_data = climate_data.copy()
                     climate_data[fecha_col] = pd.to_datetime(climate_data[fecha_col])
                     climate_data = climate_data.set_index(fecha_col)
-                except Exception as e:
+                except (ValueError, TypeError, KeyError) as e:
                     if log_callback:
                         log_callback(f" ERROR convirtiendo índice: {e!s}")
                     return None, None
@@ -1568,7 +1539,7 @@ class RollingValidationService:
             # Mapear cada variable con búsqueda flexible
             climate_column_mapping = {}
 
-            for var_code in exog_vars_config.keys():
+            for var_code in exog_vars_config:
                 var_normalized = var_code.lower().strip()
 
                 # Intento 1: Coincidencia exacta
@@ -1587,8 +1558,8 @@ class RollingValidationService:
                         best_match_score = matches
                         best_match = orig_col
 
-                mejor_score = 2
-                if best_match_score >= mejor_score:
+                mejor_de_2 = 2
+                if best_match_score >= mejor_de_2:
                     climate_column_mapping[var_code] = best_match
 
             if not climate_column_mapping:
@@ -1600,9 +1571,9 @@ class RollingValidationService:
             exog_df = pd.DataFrame(index=historico.index)
             exog_info = {}
             rejected_vars = []
-            cobertura_maxima = 80
-            cobertura_minima = 60
 
+            overlap_mayor = 80
+            cobertura_menor = 60
             for var_code, var_nombre in exog_vars_config.items():
                 climate_col = climate_column_mapping.get(var_code)
 
@@ -1625,7 +1596,7 @@ class RollingValidationService:
                     overlap_pct = (datos_reales_overlap / overlap_months) * 100
 
                     # CRÍTICO: Rechazar si cobertura < 80%
-                    if overlap_pct < cobertura_maxima:
+                    if overlap_pct < overlap_mayor:
                         rejected_vars.append((var_code, f"Cobertura {overlap_pct:.1f}% < 80%"))
                         if log_callback:
                             log_callback(f"RECHAZADA {var_code}: cobertura {overlap_pct:.1f}% < 80%")
@@ -1636,30 +1607,30 @@ class RollingValidationService:
                     if pd.isna(var_std) or var_std == 0:
                         rejected_vars.append((var_code, "Varianza = 0"))
                         if log_callback:
-                            log_callback(f" RECHAZADA {var_code}: varianza = 0")
+                            log_callback(f"RECHAZADA {var_code}: varianza = 0")
                         continue
 
                     # VALIDACIÓN 3: Cobertura en TODO el período histórico
                     coverage_total = aligned_series.notna().sum() / len(aligned_series) * 100
-                    if coverage_total < cobertura_minima:  # Al menos 60% de cobertura total
+                    if coverage_total < cobertura_menor:  # Al menos 60% de cobertura total
                         rejected_vars.append((var_code, f"Cobertura total {coverage_total:.1f}% < 60%"))
                         if log_callback:
                             log_callback(f" RECHAZADA {var_code}: cobertura total {coverage_total:.1f}% < 60%")
                         continue
 
                     # Forward-fill para fechas futuras
-                    aligned_series = aligned_series.fillna(method="ffill")
+                    aligned_series = aligned_series.ffill()
 
                     # Backward-fill (máx 3 meses) para fechas pasadas
-                    aligned_series = aligned_series.fillna(method="bfill", limit=3)
+                    aligned_series = aligned_series.bfill(limit=3)
 
                     # Si AÚN hay NaN, rellenar con media del overlap
-                    if aligned_series.isnull().any():
+                    if aligned_series.isna().any():
                         mean_overlap = overlap_data.mean()
                         aligned_series = aligned_series.fillna(mean_overlap)
 
                     # VERIFICACIÓN FINAL
-                    final_nan = aligned_series.isnull().sum()
+                    final_nan = aligned_series.isna().sum()
                     if final_nan > 0:
                         rejected_vars.append((var_code, f"{final_nan} NaN finales"))
                         if log_callback:
@@ -1676,14 +1647,14 @@ class RollingValidationService:
                         "scaled": False,
                         "datos_reales_overlap": int(datos_reales_overlap),
                         "overlap_coverage_pct": float(overlap_pct),
-                        "total_coverage_pct": float(coverage_total),  # ← NUEVO
+                        "total_coverage_pct": float(coverage_total),
                         "varianza_overlap": float(var_std),
                     }
 
                     if log_callback:
                         log_callback(f" ACEPTADA {var_code} (overlap={overlap_pct:.1f}%, total={coverage_total:.1f}%, r={exog_info[var_code]['correlacion']:.3f})")
 
-                except Exception as e:
+                except (KeyError, ValueError, TypeError) as e:
                     rejected_vars.append((var_code, f"Error: {str(e)[:50]}"))
                     if log_callback:
                         log_callback(f" ERROR {var_code}: {e}")
@@ -1710,12 +1681,13 @@ class RollingValidationService:
                         log_callback(f"     - {var}: {reason}")
                 log_callback("=" * 60)
 
-            return exog_df, exog_info if exog_info else None
-
-        except Exception as e:
+        except (ValueError, KeyError, AttributeError) as e:
             if log_callback:
                 log_callback(f"ERROR CRÍTICO: {e!s}")
             return None, None
+        else:
+            # ✓ TRY300:Return movido al bloque else
+            return exog_df, exog_info if exog_info else None
 
     def _align_exog_to_saidi(self,
                             exog_series: pd.DataFrame,
@@ -1784,30 +1756,30 @@ class RollingValidationService:
 
             # Logging detallado
             if log_callback:
-                log_callback(f"  - {var_code}: Alineación completada")
-                log_callback(f"      ✓ {n_direct} valores directos del clima")
+                log_callback(f"- {var_code}: Alineación completada")
+                log_callback(f"{n_direct} valores directos del clima")
                 if n_past > 0:
-                    log_callback(f"      ← {n_past} valores pasados (usando primer valor: {first_known_value:.2f})")
+                    log_callback(f"← {n_past} valores pasados (usando primer valor: {first_known_value:.2f})")
                 if n_future > 0:
-                    log_callback(f"      → {n_future} valores futuros (usando último valor: {last_known_value:.2f})")
+                    log_callback(f"→ {n_future} valores futuros (usando último valor: {last_known_value:.2f})")
                 if n_interpolated > 0:
-                    log_callback(f"      ≈ {n_interpolated} valores interpolados linealmente")
+                    log_callback(f"≈ {n_interpolated} valores interpolados linealmente")
 
             # Verificación final: NO debe haber NaN
             if result.isna().any():
                 n_nan = result.isna().sum()
                 if log_callback:
-                    log_callback(f"       ADVERTENCIA: {n_nan} NaN detectados después de alineación")
+                    log_callback(f"ADVERTENCIA: {n_nan} NaN detectados después de alineación")
                 # Último recurso: rellenar con media
-                result.fillna(result.mean(), inplace=True)
+                result = result.fillna(result.mean())
 
-            return result
-
-        except Exception as e:
+        except (KeyError, IndexError, ValueError, TypeError) as e:
             if log_callback:
                 log_callback(f"   Error alineando variable {var_code}: {e!s}")
                 log_callback(traceback.format_exc())
             return None
+        else:
+            return result
 
     def _apply_transformation(self, data: np.ndarray, transformation_type: str) -> tuple[np.ndarray, str]:
         """Aplicar transformación a los datos."""
@@ -1842,26 +1814,26 @@ class RollingValidationService:
     def _inverse_transformation(self, data: np.ndarray, transformation_type: str) -> np.ndarray:
         """Revertir transformación."""
         if transformation_type == "original":
-            return data
-
-        if transformation_type == "standard":
+            result = data
+        elif transformation_type == "standard":
             if self.scaler is not None:
-                return self.scaler.inverse_transform(data.reshape(-1, 1)).flatten()
-            return data
-
-        if transformation_type == "log":
-            return np.exp(data)
-
-        if transformation_type == "boxcox":
+                result = self.scaler.inverse_transform(data.reshape(-1, 1)).flatten()
+            else:
+                result = data
+        elif transformation_type == "log":
+            result = np.exp(data)
+        elif transformation_type == "boxcox":
             lambda_param = self.transformation_params.get("boxcox_lambda", 0)
             if lambda_param == 0:
-                return np.exp(data)
-            return np.power(data * lambda_param + 1, 1 / lambda_param)
+                result = np.exp(data)
+            else:
+                result = np.power(data * lambda_param + 1, 1 / lambda_param)
+        elif transformation_type == "sqrt":
+            result = np.power(data, 2)
+        else:
+            result = data
 
-        if transformation_type == "sqrt":
-            return np.power(data, 2)
-
-        return data
+        return result
 
     def _generate_comprehensive_plots(self,
                                  rolling_results: dict,
@@ -1873,11 +1845,16 @@ class RollingValidationService:
                                  seasonal_order: tuple,
                                  transformation: str,
                                  exog_info: dict | None) -> str | None:
-        """Generar panel de gráficas comprehensivo."""
+        """Generar panel de gráficas comprehensiv."""
+
+        def _raise_no_dates_error():
+            """Lanzar error cuando no hay fechas disponibles."""
+            raise ValueError("No hay fechas disponibles para graficar en Rolling Forecast")
+
         try:
             temp_dir = tempfile.gettempdir()
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            plot_path = os.path.join(temp_dir, f"saidi_rolling_validation_{timestamp}.png")
+            plot_path = Path(temp_dir) / f"saidi_rolling_validation_{timestamp}.png"
 
             plt.style.use("default")
             fig = plt.figure(figsize=(20, 14), dpi=100)
@@ -1894,17 +1871,17 @@ class RollingValidationService:
             if dates and len(dates) > 0:
                 dates_converted = [pd.to_datetime(d).to_pydatetime() if isinstance(d, (pd.Timestamp, str)) else d for d in dates]
             else:
-                raise ValueError("No hay fechas disponibles para graficar en Rolling Forecast")
+                _raise_no_dates_error()
 
             ax1.plot(dates_converted, actuals, "o-", label="Real", color="blue", linewidth=2, markersize=6)
             ax1.plot(dates_converted, predictions, "s--", label="Predicho", color="red", linewidth=2, markersize=6)
 
+            error_p_c_t = 20
             # Destacar errores grandes
-            error_pct_20 = 20
-            for i, (date, error, actual) in enumerate(zip(dates, errors, actuals)):
+            for date, error, actual, pred in zip(dates, errors, actuals, predictions, strict=True):
                 error_pct = (error / actual * 100) if actual > 0 else 0
-                if error_pct > error_pct_20:
-                    ax1.scatter(date, predictions[i], color="orange", s=150, marker="X",
+                if error_pct > error_p_c_t:
+                    ax1.scatter(date, pred, color="orange", s=150, marker="X",
                             edgecolors="darkred", linewidths=2, zorder=5)
 
             ax1.set_title("Rolling Forecast - Walk-Forward Validation", fontsize=13, fontweight="bold")
@@ -1921,7 +1898,7 @@ class RollingValidationService:
 
             textstr = f"RMSE: {rmse:.2f} min\nPrecisión: {precision:.1f}%\nCalidad: {quality}"
             ax1.text(0.02, 0.98, textstr, transform=ax1.transAxes, fontsize=9,
-                    verticalalignment="top", bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5))
+                    verticalalignment="top", bbox={"boxstyle": "round", "facecolor": "wheat", "alpha": 0.5})
 
             # Panel 2: Time Series CV - Stability
             ax2 = plt.subplot(2, 3, 2)
@@ -1936,7 +1913,7 @@ class RollingValidationService:
                             showmeans=True)
 
             colors = ["lightblue", "lightgreen"]
-            for patch, color in zip(bp["boxes"], colors):
+            for patch, color in zip(bp["boxes"], colors, strict=True):
                 patch.set_facecolor(color)
 
             ax2.set_title("Cross-Validation Stability", fontsize=13, fontweight="bold")
@@ -1949,7 +1926,7 @@ class RollingValidationService:
             if n_failed > 0:
                 textstr += f"\nSplits omitidos: {n_failed}"
             ax2.text(0.02, 0.98, textstr, transform=ax2.transAxes, fontsize=9,
-                    verticalalignment="top", bbox=dict(boxstyle="round", facecolor="lightyellow", alpha=0.5))
+                    verticalalignment="top", bbox={"boxstyle": "round", "facecolor": "lightyellow", "alpha": 0.5})
 
             # Panel 3: Parameter Stability
             ax3 = plt.subplot(2, 3, 3)
@@ -1958,7 +1935,7 @@ class RollingValidationService:
             window_sizes = param_stability["window_sizes"]
 
             # Seleccionar parámetros principales
-            main_params = [p for p in param_details.keys() if any(x in p.lower() for x in ["ar.", "ma.", "sigma"])][:5]
+            main_params = [p for p in param_details if any(x in p.lower() for x in ["ar.", "ma.", "sigma"])][:5]
 
             for param_name in main_params:
                 if param_name in param_details:
@@ -1969,7 +1946,7 @@ class RollingValidationService:
 
                         ax3.plot(window_sizes, values, "o-", label=param_name, linewidth=2, markersize=4)
 
-                        # Banda de confianza ±1σ
+                        # Banda de confianza ±1(varianza)
                         ax3.fill_between(window_sizes,
                                         [mean_val - std_val] * len(window_sizes),
                                         [mean_val + std_val] * len(window_sizes),
@@ -1987,7 +1964,7 @@ class RollingValidationService:
             if n_failed_windows > 0:
                 textstr += f"\nVentanas omitidas: {n_failed_windows}"
             ax3.text(0.02, 0.98, textstr, transform=ax3.transAxes, fontsize=9,
-                    verticalalignment="top", bbox=dict(boxstyle="round", facecolor="lightcyan", alpha=0.5))
+                    verticalalignment="top", bbox={"boxstyle": "round", "facecolor": "lightcyan", "alpha": 0.5})
 
             # Panel 4: Backtesting - Degradación por Horizonte
             ax4 = plt.subplot(2, 3, 4)
@@ -2088,7 +2065,7 @@ class RollingValidationService:
 
             ax5.text(0.05, 0.95, diagnosis_text, transform=ax5.transAxes,
                     fontsize=9, verticalalignment="top", family="monospace",
-                    bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.4))
+                    bbox={"boxstyle": "round", "facecolor": "wheat", "alpha": 0.4})
 
             # Indicador visual de calidad
             circle = plt.Circle((0.85, 0.5), 0.12, color=quality_color, alpha=0.7, transform=ax5.transAxes)
@@ -2114,9 +2091,9 @@ class RollingValidationService:
 
             labels = [friendly_names.get(c, c) for c in components]
 
-            green_80 = 80
-            orange_65 = 65
-            colors_bars = ["green" if s >= green_80 else "orange" if s >= orange_65 else "red" for s in scores]
+            verde = 80
+            naranja = 65
+            colors_bars = ["green" if s >= verde else "orange" if s >= naranja else "red" for s in scores]
 
             bars = ax6.barh(labels, scores, color=colors_bars, alpha=0.7, edgecolor="black")
 
@@ -2131,7 +2108,7 @@ class RollingValidationService:
             ax6.grid(True, alpha=0.3, axis="x")
 
             # Valores en barras
-            for i, (bar, score) in enumerate(zip(bars, scores)):
+            for bar, score in zip(bars, scores, strict=True):
                 width = bar.get_width()
                 ax6.text(width + 2, bar.get_y() + bar.get_height()/2,
                         f"{score:.1f}", ha="left", va="center", fontsize=9, fontweight="bold")
@@ -2147,26 +2124,26 @@ class RollingValidationService:
             footer_text = f'Generado: {datetime.now().strftime("%Y-%m-%d %H:%M")} | Rolling Forecast + CV + Parameter Stability + Backtesting'
             plt.figtext(0.5, 0.01, footer_text,
                     ha="center", fontsize=9, style="italic", color="darkblue",
-                    bbox=dict(boxstyle="round,pad=0.4", facecolor="lightyellow", alpha=0.7))
+                    bbox={"boxstyle": "round,pad=0.4", "facecolor": "lightyellow", "alpha": 0.7})
 
             plt.savefig(plot_path, dpi=100, bbox_inches="tight",
                     facecolor="white", edgecolor="none")
             plt.close(fig)
 
-            self.plot_file_path = plot_path
-            return plot_path
-
-        except Exception as e:
+        except (OSError, ValueError, KeyError, TypeError) as e:
             print(f"Error generando gráficas: {e}")
             traceback.print_exc()
             return None
+        else:
+            self.plot_file_path = str(plot_path)
+            return str(plot_path)
 
     def cleanup_plot_file(self):
         """Limpiar archivo temporal de gráfica."""
-        if self.plot_file_path and os.path.exists(self.plot_file_path):
+        if self.plot_file_path and Path(self.plot_file_path).exists():
             try:
-                os.remove(self.plot_file_path)
-            except Exception as e:
+                Path(self.plot_file_path).unlink()
+            except (OSError, PermissionError) as e:
                 print(f"Error eliminando archivo temporal: {e}")
             finally:
                 self.plot_file_path = None
