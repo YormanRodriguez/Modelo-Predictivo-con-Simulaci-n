@@ -6,7 +6,7 @@ import traceback
 import warnings
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, NamedTuple
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -18,6 +18,29 @@ from statsmodels.tsa.statespace.sarimax import SARIMAX
 
 warnings.filterwarnings("ignore")
 
+class ValidationOptions(NamedTuple):
+    """Opciones para validación temporal."""
+
+    validation_months: int
+    progress_callback: Any = None
+    log_callback: Any = None
+
+class ForecastConfig(NamedTuple):
+    """Configuración para una iteración de rolling forecast."""
+
+    order: tuple
+    seasonal_order: tuple
+    transformation: str
+    n_train_initial: int
+    n_validation: int
+
+
+class ForecastData(NamedTuple):
+    """Datos necesarios para rolling forecast."""
+
+    data_original: pd.Series
+    data_transformed: pd.Series
+    exog_df: pd.DataFrame | None
 
 class RollingValidationService:
     """Servicio de validación temporal avanzada para modelos SAIDI."""
@@ -171,40 +194,40 @@ class RollingValidationService:
         # Correlaciones REALES documentadas por regional
         correlations = {
             "SAIDI_O": {  # Ocaña
-                "realfeel_min": 0.689,              # *** FUERTE
-                "windchill_avg": 0.520,             # ** MODERADA-FUERTE
-                "dewpoint_avg": 0.470,              # ** MODERADA-FUERTE
-                "windchill_max": 0.464,             # ** MODERADA-FUERTE
-                "dewpoint_min": 0.456,              # ** MODERADA-FUERTE
+                "realfeel_min": 0.689,
+                "windchill_avg": 0.520,
+                "dewpoint_avg": 0.470,
+                "windchill_max": 0.464,
+                "dewpoint_min": 0.456,
                 "precipitation_max_daily": 0.452,
                 "precipitation_avg_daily": 0.438,
             },
 
             "SAIDI_C": {  # Cúcuta
-                "realfeel_avg": 0.573,              # ** MODERADA-FUERTE
-                "pressure_rel_avg": -0.358,         # Negativa
+                "realfeel_avg": 0.573,
+                "pressure_rel_avg": -0.358,
                 "wind_speed_max": 0.356,
-                "pressure_abs_avg": -0.356,         # Negativa
+                "pressure_abs_avg": -0.356,
             },
 
             "SAIDI_T": {  # Tibú
-                "realfeel_avg": 0.906,              # *** MUY FUERTE
-                "wind_dir_avg": -0.400,             # Negativa
+                "realfeel_avg": 0.906,
+                "wind_dir_avg": -0.400,
                 "uv_index_avg": 0.385,
                 "heat_index_avg": 0.363,
                 "temperature_min": 0.352,
                 "windchill_min": 0.340,
                 "temperature_avg": 0.338,
-                "pressure_rel_avg": -0.330,         # Negativa
+                "pressure_rel_avg": -0.330,
             },
 
             "SAIDI_A": {  # Aguachica
-                "uv_index_max": 0.664,              # *** FUERTE
-                "days_with_rain": 0.535,            # ** MODERADA-FUERTE
+                "uv_index_max": 0.664,
+                "days_with_rain": 0.535,
             },
 
             "SAIDI_P": {  # Pamplona
-                "precipitation_total": 0.577,       # ** MODERADA-FUERTE
+                "precipitation_total": 0.577,
                 "precipitation_avg_daily": 0.552,
                 "realfeel_min": 0.344,
             },
@@ -370,10 +393,16 @@ class RollingValidationService:
                 if progress_callback:
                     progress_callback(10, "Ejecutando Rolling Forecast...")
 
+                rolling_options = ValidationOptions(
+                    validation_months=validation_months,
+                    progress_callback=progress_callback,
+                    log_callback=log_callback,
+                )
+
                 rolling_results = self.run_rolling_forecast(
                     data_original, data_transformed_series, exog_df,
                     order, seasonal_order, transformation,
-                    validation_months, progress_callback, log_callback,
+                    rolling_options,
                 )
 
                 if progress_callback:
@@ -459,29 +488,225 @@ class RollingValidationService:
                     "plot_file": plot_path,
                 }
 
-    def run_rolling_forecast(self,
-                            data_original: pd.Series,
-                            data_transformed: pd.Series,
-                            exog_df: pd.DataFrame | None,
+    def _prepare_exog_data(self, exog_df: pd.DataFrame | None,
+                         train_data_orig: pd.Series,
+                         pred_date: pd.Timestamp,
+                         log_callback,
+                         *,
+                         is_first_iteration: bool) -> tuple[pd.DataFrame | None, pd.DataFrame | None]:
+        """Preparar datos exógenos para entrenamiento y predicción."""
+        if exog_df is None:
+            return None, None
+
+        exog_train = exog_df.loc[train_data_orig.index]
+
+        if pred_date in exog_df.index:
+            exog_pred = exog_df.loc[[pred_date]]
+        else:
+            exog_pred = self._get_historical_average_exog(
+                exog_df, pred_date, log_callback, is_first_iteration,
+            )
+
+        return exog_train, exog_pred
+
+
+    def _get_historical_average_exog(self, exog_df: pd.DataFrame,
+                                  pred_date: pd.Timestamp,
+                                  log_callback,
+                                  *,
+                                  is_first_iteration: bool) -> pd.DataFrame | None:
+        """Obtener promedio histórico de variables exógenas para un mes específico."""
+        pred_month = pred_date.month
+        historical_same_month = exog_df[exog_df.index.month == pred_month]
+
+        if len(historical_same_month) == 0:
+            return None
+
+        exog_pred = pd.DataFrame(
+            [historical_same_month.mean()],
+            index=[pred_date],
+            columns=exog_df.columns,
+        )
+
+        if log_callback and is_first_iteration:
+            log_callback("Usando promedios históricos para variables exógenas futuras")
+
+        return exog_pred
+
+
+    def _has_nan_values(self, train_data_trans: pd.Series,
+                    exog_train: pd.DataFrame | None) -> bool:
+        """Verificar si hay valores NaN en los datos."""
+        return train_data_trans.isna().any() or (
+            exog_train is not None and exog_train.isna().any().any()
+        )
+
+
+    def _fit_sarimax_model(self, train_data_trans: pd.Series,
+                            exog_train: pd.DataFrame | None,
                             order: tuple,
-                            seasonal_order: tuple,
-                            transformation: str,
-                            validation_months: int,
-                            progress_callback=None,
-                            log_callback=None) -> dict[str, Any]:
+                            seasonal_order: tuple):
+        """Ajustar modelo SARIMAX."""
+        model = SARIMAX(
+            train_data_trans,
+            exog=exog_train,
+            order=order,
+            seasonal_order=seasonal_order,
+            enforce_stationarity=False,
+            enforce_invertibility=False,
+        )
+
+        results = model.fit(
+            disp=False,
+            method="lbfgs",
+            maxiter=100,
+            low_memory=True,
+        )
+
+        return results
+
+
+    def _make_prediction(self, results, exog_pred: pd.DataFrame | None,
+                        transformation: str) -> float:
+        """Realizar predicción y aplicar transformación inversa."""
+        forecast = results.get_forecast(steps=1, exog=exog_pred)
+        pred_transformed = forecast.predicted_mean.iloc[0]
+
+        pred_original = self._inverse_transformation(
+            np.array([pred_transformed]), transformation,
+        )[0]
+
+        return pred_original
+
+
+    def _calculate_error(self, pred_original: float, actual_original: float) -> tuple[float, float]:
+        """Calcular error absoluto y porcentual."""
+        error = abs(pred_original - actual_original)
+        error_pct = (error / actual_original * 100) if actual_original > 0 else 0
+        return error, error_pct
+
+
+    def _should_log_iteration(self, i: int, n_validation: int, itera: int = 3) -> bool:
+        """Determinar si se debe registrar esta iteración."""
+        return i < itera or i >= n_validation - 2
+
+
+    def _process_single_forecast(self, i: int, config: ForecastConfig,
+                               data: ForecastData, log_callback) -> dict[str, Any] | None:
+        """Procesar una iteración del rolling forecast."""
+        train_end_idx = config.n_train_initial + i
+        train_data_trans = data.data_transformed.iloc[:train_end_idx]
+        train_data_orig = data.data_original.iloc[:train_end_idx]
+        pred_date = data.data_original.index[train_end_idx]
+
+        exog_train, exog_pred = self._prepare_exog_data(
+            data.exog_df, train_data_orig, pred_date, log_callback,
+            is_first_iteration=(i == 0),
+        )
+
+        if self._has_nan_values(train_data_trans, exog_train):
+            if log_callback:
+                log_callback(f" Iteración {i+1} contiene NaN - omitida")
+            return None
+
+        try:
+            results = self._fit_sarimax_model(
+                train_data_trans, exog_train, config.order, config.seasonal_order,
+            )
+            pred_original = self._make_prediction(results, exog_pred, config.transformation)
+            actual_original = data.data_original.iloc[train_end_idx]
+            error, error_pct = self._calculate_error(pred_original, actual_original)
+        except np.linalg.LinAlgError:
+            if log_callback:
+                log_callback(f" Iteración {i+1} falló (matriz singular) - omitida")
+            return None
+        except (ValueError, RuntimeError) as exc:
+            if log_callback:
+                log_callback(f" Error en iteración {i+1}: {exc!s} - omitida")
+            return None
+        else:
+            if log_callback and self._should_log_iteration(i, config.n_validation):
+                log_callback(f"  Mes {i+1}: Pred={pred_original:.2f}, Real={actual_original:.2f}, Error={error_pct:.1f}%")
+
+            return {
+                "prediction": pred_original,
+                "actual": actual_original,
+                "error": error,
+                "date": pred_date,
+            }
+
+
+    def _calculate_quality_metrics(self, monthly_actuals: list,
+                                    monthly_predictions: list) -> dict[str, Any]:
+        """Calcular métricas de calidad del modelo."""
+        rmse = np.sqrt(mean_squared_error(monthly_actuals, monthly_predictions))
+        mae = mean_absolute_error(monthly_actuals, monthly_predictions)
+
+        mape = np.mean([
+            abs(a - p) / a * 100
+            for a, p in zip(monthly_actuals, monthly_predictions, strict=True)
+            if a > 0
+        ])
+        precision = max(0, min(100, (1 - mape / 100) * 100))
+
+        return {
+            "rmse": rmse,
+            "mae": mae,
+            "mape": mape,
+            "precision": precision,
+        }
+
+
+    def _determine_quality_level(self, rmse: float, precision: float) -> str:
+        """Determinar nivel de calidad basado en RMSE y precisión."""
+        quality_thresholds = [
+            (3.0, 85, "EXCELENTE"),
+            (4.0, 78, "BUENA"),
+            (5.5, 70, "REGULAR"),
+        ]
+
+        for rmse_threshold, precision_threshold, quality_label in quality_thresholds:
+            if rmse < rmse_threshold and precision >= precision_threshold:
+                return quality_label
+
+        return "MALA"
+
+
+    def run_rolling_forecast(self,  # noqa: PLR0913
+                        data_original: pd.Series,
+                        data_transformed: pd.Series,
+                        exog_df: pd.DataFrame | None,
+                        order: tuple,
+                        seasonal_order: tuple,
+                        transformation: str,
+                        options: ValidationOptions) -> dict[str, Any]:
         """Implementar Rolling Forecast (Walk-Forward Validation)."""
-        if log_callback:
-            log_callback("\n ROLLING FORECAST - Walk-Forward Validation")
-            log_callback(f"Validando últimos {validation_months} meses")
+        if options.log_callback:
+            options.log_callback("\n ROLLING FORECAST - Walk-Forward Validation")
+            options.log_callback(f"Validando últimos {options.validation_months} meses")
 
         n_total = len(data_original)
-        n_validation = min(validation_months, int(n_total * 0.20))
+        n_validation = min(options.validation_months, int(n_total * 0.20))
         n_train_initial = n_total - n_validation
+        n_train_menor = 24
 
-        n_train_24 = 24
-        if n_train_initial < n_train_24:
+        if n_train_initial < n_train_menor:
             msg = "Insuficientes datos para training (mínimo 24 meses)"
             raise ValueError(msg)
+
+        config = ForecastConfig(
+            order=order,
+            seasonal_order=seasonal_order,
+            transformation=transformation,
+            n_train_initial=n_train_initial,
+            n_validation=n_validation,
+        )
+
+        data = ForecastData(
+            data_original=data_original,
+            data_transformed=data_transformed,
+            exog_df=exog_df,
+        )
 
         monthly_predictions = []
         monthly_actuals = []
@@ -489,127 +714,37 @@ class RollingValidationService:
         monthly_dates = []
 
         for i in range(n_validation):
-            if progress_callback:
+            if options.progress_callback:
                 progress = 10 + int((i / n_validation) * 30)
-                progress_callback(progress, f"Rolling forecast: mes {i+1}/{n_validation}")
+                options.progress_callback(progress, f"Rolling forecast: mes {i+1}/{n_validation}")
 
-            train_end_idx = n_train_initial + i
-            train_data_trans = data_transformed.iloc[:train_end_idx]
-            train_data_orig = data_original.iloc[:train_end_idx]
+            result = self._process_single_forecast(i, config, data, options.log_callback)
 
-            pred_date = data_original.index[train_end_idx]
+            if result is not None:
+                monthly_predictions.append(result["prediction"])
+                monthly_actuals.append(result["actual"])
+                monthly_errors.append(result["error"])
+                monthly_dates.append(result["date"])
 
-            exog_train = None
-            exog_pred = None
+        if len(monthly_predictions) == 0:
+            msg = "No se pudieron generar predicciones rolling"
+            raise RuntimeError(msg)
 
-            if exog_df is not None:
-                exog_train = exog_df.loc[train_data_orig.index]
+        metrics = self._calculate_quality_metrics(monthly_actuals, monthly_predictions)
+        quality = self._determine_quality_level(metrics["rmse"], metrics["precision"])
 
-                if pred_date in exog_df.index:
-                    exog_pred = exog_df.loc[[pred_date]]
-                else:
-                    pred_month = pred_date.month
-                    historical_same_month = exog_df[exog_df.index.month == pred_month]
-
-                    if len(historical_same_month) > 0:
-                        exog_pred = pd.DataFrame(
-                            [historical_same_month.mean()],
-                            index=[pred_date],
-                            columns=exog_df.columns,
-                        )
-                        if log_callback and i == 0:
-                            log_callback("i Usando promedios históricos para variables exógenas futuras")
-                    else:
-                        exog_pred = None
-
-            if train_data_trans.isna().any() or (exog_train is not None and exog_train.isna().any().any()):
-                if log_callback:
-                    log_callback(f" Iteración {i+1} contiene NaN - omitida")
-                continue
-
-            itera = 3
-            try:
-                model = SARIMAX(
-                    train_data_trans,
-                    exog=exog_train,
-                    order=order,
-                    seasonal_order=seasonal_order,
-                    enforce_stationarity=False,
-                    enforce_invertibility=False,
-                )
-
-                results = model.fit(
-                    disp=False,
-                    method="lbfgs",
-                    maxiter=100,
-                    low_memory=True,
-                )
-
-                forecast = results.get_forecast(steps=1, exog=exog_pred)
-                pred_transformed = forecast.predicted_mean.iloc[0]
-
-                pred_original = self._inverse_transformation(
-                    np.array([pred_transformed]), transformation,
-                )[0]
-
-                actual_original = data_original.iloc[train_end_idx]
-
-                error = abs(pred_original - actual_original)
-                error_pct = (error / actual_original * 100) if actual_original > 0 else 0
-
-                monthly_predictions.append(pred_original)
-                monthly_actuals.append(actual_original)
-                monthly_errors.append(error)
-                monthly_dates.append(pred_date)
-
-                if log_callback and (i < itera or i >= n_validation - 2):
-                    log_callback(f"  Mes {i+1}: Pred={pred_original:.2f}, Real={actual_original:.2f}, Error={error_pct:.1f}%")
-
-            except np.linalg.LinAlgError:
-                if log_callback:
-                    log_callback(f" Iteración {i+1} falló (matriz singular) - omitida")
-                continue
-            except (ValueError, RuntimeError) as exc:
-                if log_callback:
-                    log_callback(f" Error en iteración {i+1}: {exc!s} - omitida")
-                continue
-
-        rmse_mayor = 5.5
-        rmse_medio = 4.0
-        rmse_menor = 3.0
-        precision_mayor = 85
-        precision_medio = 78
-        precision_menor = 70
-        if len(monthly_predictions) > 0:
-            rmse = np.sqrt(mean_squared_error(monthly_actuals, monthly_predictions))
-            mae = mean_absolute_error(monthly_actuals, monthly_predictions)
-
-            mape = np.mean([abs(a - p) / a * 100 for a, p in zip(monthly_actuals, monthly_predictions, strict=True) if a > 0])
-            precision = max(0, min(100, (1 - mape / 100) * 100))
-
-            if rmse < rmse_menor and precision >= precision_mayor:
-                quality = "EXCELENTE"
-            elif rmse < rmse_medio and precision >= precision_medio:
-                quality = "BUENA"
-            elif rmse < rmse_mayor and precision >= precision_menor:
-                quality = "REGULAR"
-            else:
-                quality = "MALA"
-
-            return {
-                "rmse": rmse,
-                "mae": mae,
-                "precision": precision,
-                "mape": mape,
-                "monthly_errors": monthly_errors,
-                "monthly_predictions": monthly_predictions,
-                "monthly_actuals": monthly_actuals,
-                "monthly_dates": monthly_dates,
-                "prediction_quality": quality,
-                "n_predictions": len(monthly_predictions),
-            }
-        msg = "No se pudieron generar predicciones rolling"
-        raise RuntimeError(msg)
+        return {
+            "rmse": metrics["rmse"],
+            "mae": metrics["mae"],
+            "precision": metrics["precision"],
+            "mape": metrics["mape"],
+            "monthly_errors": monthly_errors,
+            "monthly_predictions": monthly_predictions,
+            "monthly_actuals": monthly_actuals,
+            "monthly_dates": monthly_dates,
+            "prediction_quality": quality,
+            "n_predictions": len(monthly_predictions),
+        }
 
     def run_time_series_cv(self,
                           data_original: pd.Series,
