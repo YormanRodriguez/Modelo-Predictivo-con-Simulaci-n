@@ -1830,10 +1830,10 @@ class RollingValidationService:
             return exog_df, exog_info if exog_info else None
 
     def _align_exog_to_saidi(self,
-                            exog_series: pd.DataFrame,
-                            df_saidi: pd.DataFrame,
-                            var_code: str,
-                            log_callback) -> pd.Series | None:
+                        exog_series: pd.DataFrame,
+                        df_saidi: pd.DataFrame,
+                        var_code: str,
+                        log_callback) -> pd.Series | None:
         """
         Alinear datos exógenos al índice de SAIDI.
 
@@ -1844,82 +1844,147 @@ class RollingValidationService:
         - Para fechas intermedias sin dato: interpolar linealmente
         """
         try:
-            # Obtener las fechas del clima
-            climate_dates = exog_series.index
-            saidi_dates = df_saidi.index
+            # Preparar índices datetime
+            climate_dates, saidi_dates = self._prepare_datetime_indices(
+                exog_series.index, df_saidi.index,
+            )
 
-            # Asegurar que ambos índices sean DatetimeIndex
-            if not isinstance(climate_dates, pd.DatetimeIndex):
-                climate_dates = pd.to_datetime(climate_dates)
-            if not isinstance(saidi_dates, pd.DatetimeIndex):
-                saidi_dates = pd.to_datetime(saidi_dates)
+            # Obtener valores límite y crear serie resultado
+            alignment_context = self._create_alignment_context(
+                exog_series, climate_dates, saidi_dates,
+            )
 
-            # Crear serie resultado
-            result = pd.Series(index=saidi_dates, dtype=float)
+            # Llenar valores según estrategia de alineación
+            result, stats = self._fill_alignment_values(
+                saidi_dates, alignment_context,
+            )
 
-            # Obtener límites de datos climáticos
-            min_climate_date = climate_dates.min()
-            max_climate_date = climate_dates.max()
-            first_known_value = exog_series.iloc[0].iloc[0]
-            last_known_value = exog_series.iloc[-1].iloc[0]
+            # Interpolar valores intermedios si es necesario
+            result = self._interpolate_if_needed(result, stats["n_interpolated"])
 
-            n_direct = 0
-            n_past = 0
-            n_future = 0
-            n_interpolated = 0
-
-            # Llenar valores según estrategia
-            for date in saidi_dates:
-                if date in climate_dates:
-                    #  Caso 1: Dato climático directo
-                    result[date] = exog_series.loc[date].iloc[0]
-                    n_direct += 1
-
-                elif date < min_climate_date:
-                    #  Caso 2: Fecha ANTES del primer dato → usar primer valor
-                    result[date] = first_known_value
-                    n_past += 1
-
-                elif date > max_climate_date:
-                    #  Caso 3: Fecha DESPUÉS del último dato → usar último valor
-                    result[date] = last_known_value
-                    n_future += 1
-
-                else:
-                    #  Caso 4: Fecha intermedia sin dato → marcar para interpolación
-                    result[date] = np.nan
-                    n_interpolated += 1
-
-            # Interpolar valores intermedios (si los hay)
-            if n_interpolated > 0:
-                result = result.interpolate(method="linear", limit_direction="both")
+            # Verificar y corregir NaN finales
+            result = self._verify_and_fix_nan(result, log_callback)
 
             # Logging detallado
-            if log_callback:
-                log_callback(f"- {var_code}: Alineación completada")
-                log_callback(f"{n_direct} valores directos del clima")
-                if n_past > 0:
-                    log_callback(f"← {n_past} valores pasados (usando primer valor: {first_known_value:.2f})")
-                if n_future > 0:
-                    log_callback(f"→ {n_future} valores futuros (usando último valor: {last_known_value:.2f})")
-                if n_interpolated > 0:
-                    log_callback(f"≈ {n_interpolated} valores interpolados linealmente")
+            self._log_alignment_details(var_code, stats, log_callback)
 
-            # Verificación final: NO debe haber NaN
-            if result.isna().any():
-                n_nan = result.isna().sum()
-                if log_callback:
-                    log_callback(f"ADVERTENCIA: {n_nan} NaN detectados después de alineación")
-                # Último recurso: rellenar con media
-                result = result.fillna(result.mean())
-
-        except (KeyError, IndexError, ValueError, TypeError) as e:
+        except (KeyError, IndexError, ValueError, TypeError) as exc:
             if log_callback:
-                log_callback(f"   Error alineando variable {var_code}: {e!s}")
+                log_callback(f"   Error alineando variable {var_code}: {exc!s}")
                 log_callback(traceback.format_exc())
             return None
         else:
             return result
+
+
+    def _prepare_datetime_indices(self,
+                                climate_index: pd.Index,
+                                saidi_index: pd.Index) -> tuple[pd.DatetimeIndex, pd.DatetimeIndex]:
+        """Asegurar que ambos índices sean DatetimeIndex."""
+        climate_dates = (
+            climate_index if isinstance(climate_index, pd.DatetimeIndex)
+            else pd.to_datetime(climate_index)
+        )
+
+        saidi_dates = (
+            saidi_index if isinstance(saidi_index, pd.DatetimeIndex)
+            else pd.to_datetime(saidi_index)
+        )
+
+        return climate_dates, saidi_dates
+
+
+    def _create_alignment_context(self,
+                                exog_series: pd.DataFrame,
+                                climate_dates: pd.DatetimeIndex,
+                                saidi_dates: pd.DatetimeIndex) -> dict:
+        """Crear contexto con información necesaria para alineación."""
+        return {
+            "climate_dates": climate_dates,
+            "min_climate_date": climate_dates.min(),
+            "max_climate_date": climate_dates.max(),
+            "first_known_value": exog_series.iloc[0].iloc[0],
+            "last_known_value": exog_series.iloc[-1].iloc[0],
+            "exog_series": exog_series,
+            "result": pd.Series(index=saidi_dates, dtype=float),
+        }
+
+
+    def _fill_alignment_values(self,
+                            saidi_dates: pd.DatetimeIndex,
+                            context: dict) -> tuple[pd.Series, dict]:
+        """Llenar valores según estrategia de alineación."""
+        result = context["result"]
+        stats = {"n_direct": 0, "n_past": 0, "n_future": 0, "n_interpolated": 0}
+
+        for date in saidi_dates:
+            value, stat_key = self._get_value_for_date(date, context)
+            result[date] = value
+            stats[stat_key] += 1
+
+        return result, stats
+
+
+    def _get_value_for_date(self, date: pd.Timestamp, context: dict) -> tuple[float, str]:
+        """Obtener valor apropiado para una fecha específica."""
+        # Caso 1: Dato climático directo
+        if date in context["climate_dates"]:
+            value = context["exog_series"].loc[date].iloc[0]
+            return value, "n_direct"
+
+        # Caso 2: Fecha ANTES del primer dato
+        if date < context["min_climate_date"]:
+            return context["first_known_value"], "n_past"
+
+        # Caso 3: Fecha DESPUÉS del último dato
+        if date > context["max_climate_date"]:
+            return context["last_known_value"], "n_future"
+
+        # Caso 4: Fecha intermedia sin dato (marcar para interpolación)
+        return np.nan, "n_interpolated"
+
+
+    def _interpolate_if_needed(self, result: pd.Series, n_interpolated: int) -> pd.Series:
+        """Interpolar valores intermedios si es necesario."""
+        if n_interpolated > 0:
+            return result.interpolate(method="linear", limit_direction="both")
+        return result
+
+
+    def _verify_and_fix_nan(self,
+                            result: pd.Series,
+                            log_callback) -> pd.Series:
+        """Verificar y corregir NaN finales."""
+        if not result.isna().any():
+            return result
+
+        n_nan = result.isna().sum()
+        if log_callback:
+            log_callback(f"ADVERTENCIA: {n_nan} NaN detectados después de alineación")
+
+        # Último recurso: rellenar con media
+        return result.fillna(result.mean())
+
+
+    def _log_alignment_details(self,
+                            var_code: str,
+                            stats: dict,
+                            log_callback) -> None:
+        """Loguear detalles de la alineación."""
+        if not log_callback:
+            return
+
+        log_callback(f"- {var_code}: Alineación completada")
+        log_callback(f"  {stats['n_direct']} valores directos del clima")
+
+        if stats["n_past"] > 0:
+            log_callback(f"  ← {stats['n_past']} valores pasados (primer valor conocido)")
+
+        if stats["n_future"] > 0:
+            log_callback(f"  → {stats['n_future']} valores futuros (último valor conocido)")
+
+        if stats["n_interpolated"] > 0:
+            log_callback(f"  ≈ {stats['n_interpolated']} valores interpolados linealmente")
 
     def _apply_transformation(self, data: np.ndarray, transformation_type: str) -> tuple[np.ndarray, str]:
         """Aplicar transformación a los datos."""
