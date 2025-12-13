@@ -18,12 +18,40 @@ from statsmodels.tsa.statespace.sarimax import SARIMAX
 
 warnings.filterwarnings("ignore")
 
+
+class ModelConfig(NamedTuple):
+    """Configuración del modelo SARIMAX."""
+
+    order: tuple
+    seasonal_order: tuple
+    transformation: str
+
+class BacktestContext(NamedTuple):
+    """Contexto para una evaluación de backtesting."""
+
+    train_trans: pd.Series
+    exog_train: pd.DataFrame | None
+    model_config: ModelConfig
+    horizon: int
+    exog_test: pd.DataFrame | None
+
 class ValidationOptions(NamedTuple):
     """Opciones para validación temporal."""
 
     validation_months: int
     progress_callback: Any = None
     log_callback: Any = None
+
+class HorizonEvaluationParams(NamedTuple):
+    """Parámetros para evaluar un horizonte específico de predicción."""
+
+    horizon: int
+    backtest_points: list
+    data_original: pd.Series
+    data_transformed: pd.Series
+    exog_df: pd.DataFrame | None
+    model_config: ModelConfig
+    options: ValidationOptions
 
 class ForecastConfig(NamedTuple):
     """Configuración para una iteración de rolling forecast."""
@@ -41,6 +69,28 @@ class ForecastData(NamedTuple):
     data_original: pd.Series
     data_transformed: pd.Series
     exog_df: pd.DataFrame | None
+
+class AllHorizonsParams(NamedTuple):
+    """Parámetros para evaluar todos los horizontes de predicción."""
+
+    horizons: list
+    backtest_points: list
+    data_original: pd.Series
+    data_transformed: pd.Series
+    exog_df: pd.DataFrame | None
+    model_config: ModelConfig
+    options: ValidationOptions
+
+class BacktestingParams(NamedTuple):
+    """Parámetros para ejecutar backtesting multi-horizonte."""
+
+    data_original: pd.Series
+    data_transformed: pd.Series
+    exog_df: pd.DataFrame | None
+    order: tuple
+    seasonal_order: tuple
+    transformation: str
+    options: ValidationOptions
 
 class RollingValidationService:
     """Servicio de validación temporal avanzada para modelos SAIDI."""
@@ -426,11 +476,23 @@ class RollingValidationService:
                 if progress_callback:
                     progress_callback(80, "Ejecutando backtesting...")
 
-                backtesting_results = self.run_backtesting(
-                    data_original, data_transformed_series, exog_df,
-                    order, seasonal_order, transformation,
-                    progress_callback, log_callback,
+                backtesting_options = ValidationOptions(
+                    validation_months=validation_months,  # No se usa pero se mantiene
+                    progress_callback=progress_callback,
+                    log_callback=log_callback,
                 )
+
+                backtesting_params = BacktestingParams(
+                    data_original=data_original,
+                    data_transformed=data_transformed_series,
+                    exog_df=exog_df,
+                    order=order,
+                    seasonal_order=seasonal_order,
+                    transformation=transformation,
+                    options=backtesting_options,
+                )
+
+                backtesting_results = self.run_backtesting(backtesting_params)
 
                 final_diagnosis = self._generate_final_diagnosis(
                     rolling_results, cv_results, param_stability, backtesting_results,
@@ -1112,24 +1174,57 @@ class RollingValidationService:
             },
         }
 
-    def run_backtesting(self,
-                   data_original: pd.Series,
-                   data_transformed: pd.Series,
-                   exog_df: pd.DataFrame | None,
-                   order: tuple,
-                   seasonal_order: tuple,
-                   transformation: str,
-                   progress_callback=None,
-                   log_callback=None) -> dict[str, Any]:
+    def run_backtesting(self, params: BacktestingParams) -> dict[str, Any]:
         """Backtesting multi-horizonte."""
-        if log_callback:
-            log_callback("\n BACKTESTING MULTI-HORIZONTE")
+        if params.options.log_callback:
+            params.options.log_callback("\n BACKTESTING MULTI-HORIZONTE")
 
         horizons = [1, 3, 6, 12]
-        n_total = len(data_original)
+        backtest_points = self._calculate_backtest_points(
+            len(params.data_original), horizons, params.options.log_callback,
+        )
 
+        # Crear configuración del modelo
+        model_config = ModelConfig(
+            order=params.order,
+            seasonal_order=params.seasonal_order,
+            transformation=params.transformation,
+        )
+
+        # Crear parámetros agrupados para evaluar todos los horizontes
+        all_horizons_params = AllHorizonsParams(
+            horizons=horizons,
+            backtest_points=backtest_points,
+            data_original=params.data_original,
+            data_transformed=params.data_transformed,
+            exog_df=params.exog_df,
+            model_config=model_config,
+            options=params.options,
+        )
+
+        metrics_by_horizon = self._evaluate_all_horizons(all_horizons_params)
+
+        degradation_rate = self._calculate_degradation_rate(metrics_by_horizon)
+        optimal_horizon = self._find_optimal_horizon(metrics_by_horizon)
+
+        self._log_backtesting_summary(
+            optimal_horizon, degradation_rate, metrics_by_horizon, params.options.log_callback,
+        )
+
+        return {
+            "horizons": list(metrics_by_horizon.keys()),
+            "metrics_by_horizon": metrics_by_horizon,
+            "degradation_rate": degradation_rate,
+            "optimal_horizon": optimal_horizon,
+            "backtest_points": len(backtest_points),
+        }
+
+
+    def _calculate_backtest_points(self, n_total: int, horizons: list, log_callback) -> list[int]:
+        """Calcular puntos de evaluación para backtesting."""
         backtest_points = []
         start_point = 24
+
         while start_point + max(horizons) < n_total:
             backtest_points.append(start_point)
             start_point += 6
@@ -1141,112 +1236,224 @@ class RollingValidationService:
             log_callback(f"Horizontes: {horizons}")
             log_callback(f"Puntos de evaluación: {len(backtest_points)}")
 
+        return backtest_points
+
+
+    def _evaluate_all_horizons(self, params: AllHorizonsParams) -> dict:
+        """Evaluar todos los horizontes de predicción."""
         metrics_by_horizon = {}
 
-        for horizon in horizons:
-            rmse_list = []
-            precision_list = []
-            mape_list = []
-            failed_count = 0
+        for horizon in params.horizons:
+            # Crear parámetros agrupados para cada horizonte
+            horizon_params = HorizonEvaluationParams(
+                horizon=horizon,
+                backtest_points=params.backtest_points,
+                data_original=params.data_original,
+                data_transformed=params.data_transformed,
+                exog_df=params.exog_df,
+                model_config=params.model_config,
+                options=params.options,
+            )
 
-            for idx, start_idx in enumerate(backtest_points):
-                if start_idx + horizon >= n_total:
-                    continue
+            horizon_metrics = self._evaluate_single_horizon(horizon_params)
 
-                if progress_callback:
-                    progress = 80 + int((idx / len(backtest_points)) * 15)
-                    progress_callback(progress, f"Backtesting h={horizon}, punto {idx+1}/{len(backtest_points)}")
+            if horizon_metrics:
+                metrics_by_horizon[horizon] = horizon_metrics
 
-                train_trans = data_transformed.iloc[:start_idx]
-                train_orig = data_original.iloc[:start_idx]
-                test_orig = data_original.iloc[start_idx:start_idx + horizon]
+        return metrics_by_horizon
 
-                exog_train = None
-                exog_test = None
-                if exog_df is not None:
-                    exog_train = exog_df.loc[train_orig.index]
-                    if test_orig.index[-1] <= exog_df.index.max():
-                        exog_test = exog_df.loc[test_orig.index]
 
-                if train_trans.isna().any() or (exog_train is not None and exog_train.isna().any().any()):
-                    failed_count += 1
-                    continue
+    def _evaluate_single_horizon(self, params: HorizonEvaluationParams) -> dict | None:
+        """Evaluar un horizonte específico de predicción."""
+        rmse_list = []
+        precision_list = []
+        mape_list = []
+        failed_count = 0
+        n_total = len(params.data_original)
 
-                try:
-                    model = SARIMAX(
-                        train_trans,
-                        exog=exog_train,
-                        order=order,
-                        seasonal_order=seasonal_order,
-                        enforce_stationarity=False,
-                        enforce_invertibility=False,
-                    )
+        for idx, start_idx in enumerate(params.backtest_points):
+            if start_idx + params.horizon >= n_total:
+                continue
 
-                    results = model.fit(
-                        disp=False,
-                        method="lbfgs",
-                        maxiter=100,
-                        low_memory=True,
-                    )
+            if params.options.progress_callback:
+                progress = 80 + int((idx / len(params.backtest_points)) * 15)
+                params.options.progress_callback(
+                    progress,
+                    f"Backtesting h={params.horizon}, punto {idx+1}/{len(params.backtest_points)}",
+                )
 
-                    forecast = results.get_forecast(steps=horizon, exog=exog_test)
-                    pred_trans = forecast.predicted_mean.to_numpy()
-                    pred_orig = self._inverse_transformation(pred_trans, transformation)
+            # Llamar con parámetros individuales (VERSIÓN ORIGINAL)
+            metrics = self._evaluate_backtest_point(
+                start_idx,
+                params.horizon,
+                params.data_original,
+                params.data_transformed,
+                params.exog_df,
+                params.model_config,
+            )
 
-                    rmse = np.sqrt(mean_squared_error(test_orig.to_numpy(), pred_orig))
-                    mape = np.mean(abs((test_orig.to_numpy() - pred_orig) / test_orig.to_numpy())) * 100
-                    precision = max(0, min(100, (1 - mape / 100) * 100))
+            if metrics:
+                rmse_list.append(metrics["rmse"])
+                precision_list.append(metrics["precision"])
+                mape_list.append(metrics["mape"])
+            else:
+                failed_count += 1
 
-                    rmse_list.append(rmse)
-                    precision_list.append(precision)
-                    mape_list.append(mape)
-
-                except (np.linalg.LinAlgError, ValueError, RuntimeError):
-                    failed_count += 1
-                    continue
-
-            if rmse_list:
-                metrics_by_horizon[horizon] = {
-                    "rmse": np.mean(rmse_list),
-                    "precision": np.mean(precision_list),
-                    "mape": np.mean(mape_list),
-                    "n_tests": len(rmse_list),
-                    "n_failed": failed_count,
-                }
-
-        if 1 in metrics_by_horizon and len(metrics_by_horizon) > 1:
-            baseline_precision = metrics_by_horizon[1]["precision"]
-            max_horizon = max(metrics_by_horizon.keys())
-            final_precision = metrics_by_horizon[max_horizon]["precision"]
-
-            degradation_rate = (final_precision - baseline_precision) / (max_horizon - 1)
-        else:
-            degradation_rate = 0
-
-        optimal_horizon = 1
-        best_score = 0
-        precision = 75
-        for h, m in metrics_by_horizon.items():
-            utility_factor = min(1.0, h / 6.0)
-            score = m["precision"] * (0.7 + 0.3 * utility_factor)
-            if score > best_score and m["precision"] >= precision:
-                best_score = score
-                optimal_horizon = h
-
-        if log_callback:
-            log_callback(f"  Horizonte óptimo: {optimal_horizon} meses")
-            log_callback(f"  Degradación: {degradation_rate:.2f}% por mes")
-            for h in sorted(metrics_by_horizon.keys()):
-                m = metrics_by_horizon[h]
-                log_callback(f"    H={h:2d}: Precisión={m['precision']:.1f}%, RMSE={m['rmse']:.3f}")
+        if not rmse_list:
+            return None
 
         return {
-            "horizons": list(metrics_by_horizon.keys()),
-            "metrics_by_horizon": metrics_by_horizon,
-            "degradation_rate": degradation_rate,
-            "optimal_horizon": optimal_horizon,
-            "backtest_points": len(backtest_points),
+            "rmse": np.mean(rmse_list),
+            "precision": np.mean(precision_list),
+            "mape": np.mean(mape_list),
+            "n_tests": len(rmse_list),
+            "n_failed": failed_count,
         }
+
+
+    def _evaluate_backtest_point(self,  # noqa: PLR0913
+                            start_idx: int,
+                            horizon: int,
+                            data_original: pd.Series,
+                            data_transformed: pd.Series,
+                            exog_df: pd.DataFrame | None,
+                            model_config: ModelConfig) -> dict | None:
+        """Evaluar un punto específico de backtesting."""
+        train_trans = data_transformed.iloc[:start_idx]
+        train_orig = data_original.iloc[:start_idx]
+        test_orig = data_original.iloc[start_idx:start_idx + horizon]
+
+        exog_train, exog_test = self._prepare_backtest_exog(
+            exog_df, train_orig, test_orig,
+        )
+
+        if self._has_invalid_data(train_trans, exog_train):
+            return None
+
+        try:
+            # Crear contexto para backtesting
+            context = BacktestContext(
+                train_trans=train_trans,
+                exog_train=exog_train,
+                model_config=model_config,
+                horizon=horizon,
+                exog_test=exog_test,
+            )
+
+            pred_orig = self._fit_and_predict_backtest(context)
+
+            return self._calculate_backtest_metrics(test_orig.to_numpy(), pred_orig)
+
+        except (np.linalg.LinAlgError, ValueError, RuntimeError):
+            return None
+
+
+    def _prepare_backtest_exog(self,
+                            exog_df: pd.DataFrame | None,
+                            train_orig: pd.Series,
+                            test_orig: pd.Series) -> tuple[pd.DataFrame | None, pd.DataFrame | None]:
+        """Preparar variables exógenas para backtesting."""
+        if exog_df is None:
+            return None, None
+
+        exog_train = exog_df.loc[train_orig.index]
+
+        if test_orig.index[-1] <= exog_df.index.max():
+            exog_test = exog_df.loc[test_orig.index]
+        else:
+            exog_test = None
+
+        return exog_train, exog_test
+
+
+    def _has_invalid_data(self, train_trans: pd.Series, exog_train: pd.DataFrame | None) -> bool:
+        """Verificar si hay datos inválidos."""
+        if train_trans.isna().any():
+            return True
+
+        return exog_train is not None and exog_train.isna().any().any()
+
+
+    def _fit_and_predict_backtest(self, context: BacktestContext) -> np.ndarray:
+        """Ajustar modelo y hacer predicción para backtesting."""
+        model = SARIMAX(
+            context.train_trans,
+            exog=context.exog_train,
+            order=context.model_config.order,
+            seasonal_order=context.model_config.seasonal_order,
+            enforce_stationarity=False,
+            enforce_invertibility=False,
+        )
+
+        results = model.fit(
+            disp=False,
+            method="lbfgs",
+            maxiter=100,
+            low_memory=True,
+        )
+
+        forecast = results.get_forecast(steps=context.horizon, exog=context.exog_test)
+        pred_trans = forecast.predicted_mean.to_numpy()
+
+        return self._inverse_transformation(pred_trans, context.model_config.transformation)
+
+    def _calculate_backtest_metrics(self, actual: np.ndarray, predicted: np.ndarray) -> dict:
+        """Calcular métricas de backtesting."""
+        rmse = np.sqrt(mean_squared_error(actual, predicted))
+        mape = np.mean(abs((actual - predicted) / actual)) * 100
+        precision = max(0, min(100, (1 - mape / 100) * 100))
+
+        return {
+            "rmse": rmse,
+            "mape": mape,
+            "precision": precision,
+        }
+
+
+    def _calculate_degradation_rate(self, metrics_by_horizon: dict) -> float:
+        """Calcular tasa de degradación entre horizontes."""
+        if 1 not in metrics_by_horizon or len(metrics_by_horizon) <= 1:
+            return 0.0
+
+        baseline_precision = metrics_by_horizon[1]["precision"]
+        max_horizon = max(metrics_by_horizon.keys())
+        final_precision = metrics_by_horizon[max_horizon]["precision"]
+
+        return (final_precision - baseline_precision) / (max_horizon - 1)
+
+
+    def _find_optimal_horizon(self, metrics_by_horizon: dict) -> int:
+        optimal_horizon = 1
+        best_score = 0.0
+        min_precision = 75.0  # ← RENOMBRADA a min_precision
+
+        for h, m in metrics_by_horizon.items():
+            if m["precision"] < min_precision:  # ← FILTRO AÑADIDO ANTES
+                continue  # ← Esto salta la iteración ANTES de calcular score
+
+            utility_factor = min(1.0, h / 6.0)
+            score = m["precision"] * (0.7 + 0.3 * utility_factor)
+
+            if score > best_score:
+                best_score = score
+                optimal_horizon = h  # noqa: F841
+
+
+    def _log_backtesting_summary(self,
+                                optimal_horizon: int,
+                                degradation_rate: float,
+                                metrics_by_horizon: dict,
+                                log_callback) -> None:
+        """Loguear resumen de backtesting."""
+        if not log_callback:
+            return
+
+        log_callback(f"  Horizonte óptimo: {optimal_horizon} meses")
+        log_callback(f"  Degradación: {degradation_rate:.2f}% por mes")
+
+        for h in sorted(metrics_by_horizon.keys()):
+            m = metrics_by_horizon[h]
+            log_callback(f"    H={h:2d}: Precisión={m['precision']:.1f}%, RMSE={m['rmse']:.3f}")
 
     def _generate_final_diagnosis(self,
                               rolling_results: dict,
